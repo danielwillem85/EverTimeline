@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}{{ year }} - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
+        <h1>{{ year }}</h1>
+    </div>
+</section>
+
+<section class="month-grid" aria-label="Months in {{ year }}">
+    {% for month_number, month_name in months %}
+        <a class="month-button" href="{{ url_for('month_view', year=year, month=month_number) }}">
+            {{ month_name }}
+        </a>
+    {% endfor %}
+</section>
+{% endblock %}

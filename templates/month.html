@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+
+{% block title %}{{ month_name }} {{ year }} - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('year_view', year=year) }}">{{ year }}</a>
+        <h1>{{ month_name }}</h1>
+    </div>
+</section>
+
+<section class="upload-panel">
+    <form method="post" enctype="multipart/form-data" class="upload-form">
+        <label class="file-field">
+            <span>Picture</span>
+            <input name="photo" type="file" accept="image/*" required>
+        </label>
+        <label>
+            <span>Date</span>
+            <input name="photo_date" type="date" min="{{ month_start }}" max="{{ month_end }}">
+        </label>
+        <button class="button primary" type="submit">Upload</button>
+    </form>
+</section>
+
+<section class="upload-panel text-entry-panel">
+    <form method="post" action="{{ url_for('create_text_entry', year=year, month=month) }}" class="text-entry-form">
+        <label class="text-entry-field">
+            <span>Text entry</span>
+            <textarea name="body" rows="5" required></textarea>
+        </label>
+        <label>
+            <span>Date</span>
+            <input name="entry_date" type="date" min="{{ month_start }}" max="{{ month_end }}">
+        </label>
+        <button class="button primary" type="submit">Save</button>
+    </form>
+</section>
+
+<section class="photo-section">
+    <div class="photo-grid">
+        {% for item in items %}
+            {% if item["kind"] == "photo" %}
+                <button
+                    class="entry-thumb photo-thumb"
+                    type="button"
+                    data-photo-id="{{ item['id'] }}"
+                    data-photo-date="{{ item['display_date'] or '' }}"
+                    data-full-src="{{ url_for('photo_image', photo_id=item['id']) }}"
+                >
+                    <img src="{{ url_for('photo_image', photo_id=item['id']) }}" alt="{{ item['original_filename'] or 'Uploaded picture' }}" loading="lazy">
+                    {% if item["display_date"] %}
+                        <span class="thumb-date">{{ item["display_date"] }}</span>
+                    {% endif %}
+                </button>
+            {% else %}
+                <button
+                    class="entry-thumb text-thumb"
+                    type="button"
+                    data-entry-id="{{ item['id'] }}"
+                >
+                    <div class="text-thumb-content">
+                        <p class="text-thumb-title">Text entry</p>
+                        <p class="text-thumb-preview">{{ item["body"] }}</p>
+                    </div>
+                    {% if item["display_date"] %}
+                        <span class="thumb-date">{{ item["display_date"] }}</span>
+                    {% endif %}
+                </button>
+            {% endif %}
+        {% else %}
+            <p class="empty-state">No entries yet.</p>
+        {% endfor %}
+    </div>
+</section>
+
+<div class="modal" id="text-modal" hidden>
+    <div class="modal-backdrop" data-close-text-modal></div>
+    <section class="modal-panel text-modal-panel" role="dialog" aria-modal="true" aria-labelledby="text-modal-title">
+        <header class="modal-header">
+            <div>
+                <h2 id="text-modal-title">Text entry</h2>
+                <p id="text-modal-date" class="muted"></p>
+            </div>
+            <div class="modal-actions">
+                <button class="button secondary small" id="edit-text-button" type="button">Edit</button>
+                <button class="button danger small" id="delete-text-button" type="button">Delete</button>
+                <button class="icon-button" type="button" data-close-text-modal aria-label="Close popup">x</button>
+            </div>
+        </header>
+        <div class="text-modal-body">
+            <div id="text-entry-view" class="text-entry-view"></div>
+            <form id="text-entry-edit-form" class="text-entry-edit-form" hidden>
+                <label>
+                    <span>Text entry</span>
+                    <textarea name="body" rows="8" required></textarea>
+                </label>
+                <label>
+                    <span>Date</span>
+                    <input name="entry_date" type="date" min="{{ month_start }}" max="{{ month_end }}">
+                </label>
+                <div class="form-actions">
+                    <button class="button primary" type="submit">Save</button>
+                    <button class="button secondary" id="cancel-text-edit-button" type="button">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </section>
+</div>
+
+<div class="modal" id="photo-modal" hidden>
+    <div class="modal-backdrop" data-close-modal></div>
+    <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <header class="modal-header">
+            <div>
+                <h2 id="modal-title">Picture</h2>
+                <p id="modal-date" class="muted"></p>
+            </div>
+            <div class="modal-actions">
+                <button class="button danger small" id="delete-photo-button" type="button">Delete picture</button>
+                <button class="icon-button" type="button" data-close-modal aria-label="Close popup">x</button>
+            </div>
+        </header>
+        <div class="modal-body">
+            <img id="modal-image" alt="Selected timeline picture">
+            <aside class="message-panel">
+                <h3>Messages</h3>
+                <div id="message-list" class="message-list"></div>
+                <form id="message-form" class="message-form">
+                    <label>
+                        <span>Message</span>
+                        <textarea name="body" rows="3" required></textarea>
+                    </label>
+                    <button class="button primary" type="submit">Add message</button>
+                </form>
+            </aside>
+        </div>
+    </section>
+</div>
+{% endblock %}

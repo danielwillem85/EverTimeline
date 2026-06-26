@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}Birthday - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="auth-panel">
+    <h1>Birthday</h1>
+    <form method="post" class="form-stack">
+        <label>
+            <span>Date of birth</span>
+            <input name="birthday" type="date" value="{{ g.user['birthday'] or '' }}" required>
+        </label>
+        <button class="button primary" type="submit">Initialize</button>
+    </form>
+</section>
+{% endblock %}

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block title %}Timeline - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <h1>Timeline</h1>
+    <a class="button secondary" href="{{ url_for('birthday') }}">Edit birthday</a>
+</section>
+
+<section class="timeline-frame" aria-label="Year timeline">
+    <div class="year-grid">
+        {% for year in years %}
+            <a class="timeline-button" href="{{ url_for('year_view', year=year) }}">{{ year }}</a>
+        {% endfor %}
+    </div>
+</section>
+{% endblock %}

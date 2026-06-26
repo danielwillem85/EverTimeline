@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 
-{% block title %}Register - EverTimeline{% endblock %}
+{% block title %}Profile - EverTimeline{% endblock %}
 
 {% block content %}
 <section class="auth-panel">
-    <h1>Create account</h1>
+    <h1>Profile</h1>
     <form method="post" class="form-stack">
         <label>
             <span>Username</span>
-            <input name="username" value="{{ form.get('username', '') }}" autocomplete="username" required>
+            <input class="readonly-input" value="{{ g.user['username'] }}" readonly>
         </label>
         <label>
             <span>First name</span>
@@ -22,12 +22,7 @@
             <span>Email address</span>
             <input name="email" type="email" value="{{ form.get('email', '') }}" autocomplete="email" required>
         </label>
-        <label>
-            <span>Password</span>
-            <input name="password" type="password" autocomplete="new-password" required>
-        </label>
-        <button class="button primary" type="submit">Create account</button>
+        <button class="button primary" type="submit">Save profile</button>
     </form>
-    <p class="muted">Already registered? <a href="{{ url_for('login') }}">Log in</a>.</p>
 </section>
 {% endblock %}

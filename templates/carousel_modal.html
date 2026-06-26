@@ -1,0 +1,42 @@
+<div class="modal" id="all-items-modal" data-items-url="{{ carousel_items_url|default(url_for('timeline_items')) }}" hidden>
+    <div class="modal-backdrop" data-close-all-items></div>
+    <section class="modal-panel all-items-panel" role="dialog" aria-modal="true" aria-labelledby="all-items-title">
+        <header class="modal-header all-items-header">
+            <div class="all-items-title-row">
+                <h2 id="all-items-title">View all</h2>
+                <p id="all-items-meta" class="muted"></p>
+            </div>
+            <div class="all-items-controls">
+                <div class="carousel-speed-control" aria-label="Carousel speed">
+                    <span class="carousel-speed-label">Speed</span>
+                    <button class="button secondary small speed-step-button" id="carousel-speed-down" type="button" aria-label="Decrease display time">-</button>
+                    <span class="carousel-speed-value" id="carousel-speed-value">1.50s</span>
+                    <button class="button secondary small speed-step-button" id="carousel-speed-up" type="button" aria-label="Increase display time">+</button>
+                </div>
+                <button class="button secondary small carousel-control-button" id="carousel-pause-button" type="button" hidden>Pause</button>
+                <button class="icon-button" type="button" data-close-all-items aria-label="Close popup">x</button>
+            </div>
+        </header>
+        <div class="carousel-filter-panel" id="carousel-filter-panel" hidden>
+            <form class="carousel-filter-form" id="carousel-filter-form">
+                <div>
+                    <h3>Choose tags</h3>
+                    <p class="muted">Only entries with selected tags will be displayed.</p>
+                </div>
+                <div class="tag-check-list">
+                    {% for tag in tag_choices %}
+                        <label class="tag-check">
+                            <input type="checkbox" name="carousel_tags" value="{{ tag }}" checked>
+                            <span>{{ tag }}</span>
+                        </label>
+                    {% endfor %}
+                </div>
+                <button class="button primary" type="submit">Start</button>
+            </form>
+        </div>
+        <div class="carousel-stage" id="carousel-stage" hidden>
+            <article class="carousel-card" id="carousel-card"></article>
+            <p class="empty-state carousel-empty" id="carousel-empty" hidden>No entries yet.</p>
+        </div>
+    </section>
+</div>

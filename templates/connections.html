@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Connections - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
+        <h1>Connections</h1>
+    </div>
+    <a class="button secondary" href="{{ url_for('search') }}">Find friends</a>
+</section>
+
+{% if incoming_requests %}
+    <section class="connection-section">
+        <h2>Requests</h2>
+        <div class="request-list">
+            {% for request in incoming_requests %}
+                <article class="request-card">
+                    <div class="person-summary">
+                        <strong>{{ request["username"] }}</strong>
+                        <span>{{ request["full_name"] or "No name entered" }}</span>
+                        <span>{{ request["email"] }}</span>
+                    </div>
+                    <span class="status-badge">{{ request["relation"] }}</span>
+                    <form class="inline-form" method="post" action="{{ url_for('accept_connection_request', request_id=request['id']) }}">
+                        <button class="button primary small" type="submit">Accept</button>
+                    </form>
+                    <form class="inline-form" method="post" action="{{ url_for('decline_connection_request', request_id=request['id']) }}">
+                        <button class="button secondary small" type="submit">Decline</button>
+                    </form>
+                </article>
+            {% endfor %}
+        </div>
+    </section>
+{% endif %}
+
+<section class="connection-section">
+    <h2>Connections</h2>
+    <div class="table-wrap">
+        <table class="connection-table">
+            <thead>
+                <tr>
+                    <th>Username</th>
+                    <th>Full name</th>
+                    <th>Email address</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if connections %}
+                    {% for connection in connections %}
+                        <tr>
+                            <td>{{ connection["username"] }}</td>
+                            <td>{{ connection["full_name"] or "No name entered" }}</td>
+                            <td>{{ connection["email"] }}</td>
+                        </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="3" class="empty-table-cell">No connections yet.</td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

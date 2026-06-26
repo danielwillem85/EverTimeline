@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}Notifications - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
+        <h1>Notifications</h1>
+    </div>
+    <a class="button secondary" href="{{ url_for('connections') }}">Connections</a>
+</section>
+
+<section class="connection-section">
+    <h2>Connection requests</h2>
+    {% if incoming_requests %}
+        <div class="request-list">
+            {% for request in incoming_requests %}
+                <article class="request-card">
+                    <div class="person-summary">
+                        <strong>{{ request["username"] }}</strong>
+                        <span>{{ request["full_name"] or "No name entered" }}</span>
+                        <span>{{ request["email"] }}</span>
+                    </div>
+                    <span class="status-badge">{{ request["relation"] }}</span>
+                    <form class="inline-form" method="post" action="{{ url_for('accept_connection_request', request_id=request['id']) }}">
+                        <input type="hidden" name="next" value="notifications">
+                        <button class="button primary small" type="submit">Accept</button>
+                    </form>
+                    <form class="inline-form" method="post" action="{{ url_for('decline_connection_request', request_id=request['id']) }}">
+                        <input type="hidden" name="next" value="notifications">
+                        <button class="button secondary small" type="submit">Decline</button>
+                    </form>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty-state">No connection requests.</p>
+    {% endif %}
+</section>
+{% endblock %}

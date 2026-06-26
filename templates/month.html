@@ -2,6 +2,20 @@
 
 {% block title %}{{ month_name }} {{ year }} - EverTimeline{% endblock %}
 
+{% macro tag_radio_group(selected=default_tag) %}
+<fieldset class="tag-radio-group">
+    <legend>Tag</legend>
+    <div class="tag-radio-list">
+        {% for tag in tag_choices %}
+            <label class="tag-radio">
+                <input type="radio" name="tags" value="{{ tag }}" {% if tag == selected %}checked{% endif %}>
+                <span>{{ tag }}</span>
+            </label>
+        {% endfor %}
+    </div>
+</fieldset>
+{% endmacro %}
+
 {% block content %}
 <section class="page-heading">
     <div>
@@ -20,6 +34,7 @@
             <span>Date</span>
             <input name="photo_date" type="date" min="{{ month_start }}" max="{{ month_end }}">
         </label>
+        {{ tag_radio_group() }}
         <button class="button primary" type="submit">Upload</button>
     </form>
 </section>
@@ -34,6 +49,7 @@
             <span>Date</span>
             <input name="entry_date" type="date" min="{{ month_start }}" max="{{ month_end }}">
         </label>
+        {{ tag_radio_group() }}
         <button class="button primary" type="submit">Save</button>
     </form>
 </section>
@@ -47,9 +63,13 @@
                     type="button"
                     data-photo-id="{{ item['id'] }}"
                     data-photo-date="{{ item['display_date'] or '' }}"
+                    data-photo-tags="{{ item['tags_text'] }}"
                     data-full-src="{{ url_for('photo_image', photo_id=item['id']) }}"
                 >
                     <img src="{{ url_for('photo_image', photo_id=item['id']) }}" alt="{{ item['original_filename'] or 'Uploaded picture' }}" loading="lazy">
+                    {% if item["tags"] %}
+                        <span class="thumb-tags">{{ item["tags_text"] }}</span>
+                    {% endif %}
                     {% if item["display_date"] %}
                         <span class="thumb-date">{{ item["display_date"] }}</span>
                     {% endif %}
@@ -59,10 +79,18 @@
                     class="entry-thumb text-thumb"
                     type="button"
                     data-entry-id="{{ item['id'] }}"
+                    data-entry-tags="{{ item['tags_text'] }}"
+                    aria-label="Text entry{% if item['display_date'] %} from {{ item['display_date'] }}{% endif %}"
                 >
                     <div class="text-thumb-content">
-                        <p class="text-thumb-title">Text entry</p>
-                        <p class="text-thumb-preview">{{ item["body"] }}</p>
+                        <div class="text-thumb-preview">{{ item["body"] }}</div>
+                        {% if item["tags"] %}
+                            <div class="tag-list thumb-tag-list">
+                                {% for tag in item["tags"] %}
+                                    <span class="tag-chip">{{ tag }}</span>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
                     </div>
                     {% if item["display_date"] %}
                         <span class="thumb-date">{{ item["display_date"] }}</span>
@@ -100,6 +128,7 @@
                     <span>Date</span>
                     <input name="entry_date" type="date" min="{{ month_start }}" max="{{ month_end }}">
                 </label>
+                {{ tag_radio_group() }}
                 <div class="form-actions">
                     <button class="button primary" type="submit">Save</button>
                     <button class="button secondary" id="cancel-text-edit-button" type="button">Cancel</button>
@@ -111,7 +140,7 @@
 
 <div class="modal" id="photo-modal" hidden>
     <div class="modal-backdrop" data-close-modal></div>
-    <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <section class="modal-panel photo-modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <header class="modal-header">
             <div>
                 <h2 id="modal-title">Picture</h2>
@@ -125,6 +154,10 @@
         <div class="modal-body">
             <img id="modal-image" alt="Selected timeline picture">
             <aside class="message-panel">
+                <form id="photo-tags-form" class="tags-form">
+                    {{ tag_radio_group() }}
+                    <button class="button secondary small" type="submit">Save tags</button>
+                </form>
                 <h3>Messages</h3>
                 <div id="message-list" class="message-list"></div>
                 <form id="message-form" class="message-form">

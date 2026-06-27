@@ -8,7 +8,30 @@
         <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
         <h1>Notifications</h1>
     </div>
-    <a class="button secondary" href="{{ url_for('connections') }}">Connections</a>
+    <div class="page-actions">
+        <a class="button secondary" href="{{ url_for('activity') }}">Activity feed</a>
+        <a class="button secondary" href="{{ url_for('connections') }}">Connections</a>
+    </div>
+</section>
+
+<section class="connection-section">
+    <h2>New messages</h2>
+    {% if message_notifications %}
+        <div class="activity-list">
+            {% for notification in message_notifications %}
+                <article class="activity-card is-unread">
+                    <div class="activity-main">
+                        <strong>{{ notification["actor_name"] }} left a message</strong>
+                        <span>{{ notification["item_label"] }} · {{ notification["item_date"] }}</span>
+                        <p>{{ notification["preview"] }}</p>
+                    </div>
+                    <a class="button primary small" href="{{ notification['url'] }}">Open</a>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty-state">No new messages.</p>
+    {% endif %}
 </section>
 
 <section class="connection-section">

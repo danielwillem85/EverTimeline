@@ -2,11 +2,31 @@
 
 {% block title %}{{ year }} - EverTimeline{% endblock %}
 
+{% macro tag_radio_group(selected=default_tag) %}
+<fieldset class="tag-radio-group">
+    <legend>Visibility</legend>
+    <div class="tag-radio-list">
+        {% for tag in tag_choices %}
+            <label class="tag-radio">
+                <input type="radio" name="tags" value="{{ tag }}" {% if tag == selected %}checked{% endif %}>
+                <span>
+                    <strong>{{ tag }}</strong>
+                    <small>{{ privacy_labels[tag] }}</small>
+                </span>
+            </label>
+        {% endfor %}
+    </div>
+</fieldset>
+{% endmacro %}
+
 {% block content %}
 <section class="page-heading">
     <div>
         <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
         <h1>{{ year }}</h1>
+    </div>
+    <div class="page-actions">
+        <a class="button secondary" href="{{ url_for('export_year_pdf', year=year) }}">Export year PDF</a>
     </div>
 </section>
 
@@ -15,6 +35,19 @@
     <button class="button primary view-all-button" id="view-all-button" type="button">View all</button>
     <button class="button secondary view-random-button" id="view-random-button" type="button">View random</button>
 </section>
+
+<details class="upload-panel privacy-panel privacy-toggle-panel">
+    <summary class="privacy-toggle-summary">
+        <span>
+            <strong>Bulk visibility</strong>
+            <small>Set who can see every item in {{ year }}.</small>
+        </span>
+    </summary>
+    <form method="post" action="{{ url_for('bulk_year_privacy', year=year) }}" class="privacy-bulk-form">
+        {{ tag_radio_group() }}
+        <button class="button secondary" type="submit">Apply to year</button>
+    </form>
+</details>
 
 <section class="month-grid" aria-label="Months in {{ year }}">
     {% for month_number, month_name in months %}

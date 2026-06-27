@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}{{ chapter["title"] }} - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('chapters') }}">Chapters</a>
+        <h1>{{ chapter["title"] }}</h1>
+        {% if chapter["description"] %}
+            <p class="muted">{{ chapter["description"] }}</p>
+        {% endif %}
+    </div>
+    <form class="inline-form" method="post" action="{{ url_for('delete_chapter', chapter_id=chapter['id']) }}">
+        <button class="button danger small" type="submit">Delete chapter</button>
+    </form>
+</section>
+
+{% set carousel_items_url = url_for('chapter_items', chapter_id=chapter['id']) %}
+{% set carousel_skip_tag_filter = true %}
+<section class="timeline-frame year-carousel-actions" aria-label="Chapter playback">
+    <button class="button primary view-all-button" id="view-all-button" type="button" data-carousel-title="{{ chapter['title'] }}">Play chapter</button>
+</section>
+
+<section class="connection-section">
+    <h2>Sequence</h2>
+    {% if items %}
+        <div class="chapter-sequence">
+            {% for item in items %}
+                <article class="chapter-sequence-item">
+                    <div class="chapter-position">{{ loop.index }}</div>
+                    <a class="chapter-preview" href="{{ item['url'] }}">
+                        {% if item["kind"] == "photo" %}
+                            <img src="{{ item['image_url'] }}" alt="{{ item['title'] }}" loading="lazy">
+                        {% else %}
+                            <div class="chapter-text-preview">{{ item["body"] }}</div>
+                        {% endif %}
+                    </a>
+                    <div class="chapter-item-main">
+                        <strong>{{ item["title"] }}</strong>
+                        <span>{{ item["date_label"] }} - {{ item["source_label"] }} - Visible: {{ item["privacy_label"] }}</span>
+                        {% if item["kind"] == "text" %}
+                            <p>{{ item["body"] }}</p>
+                        {% endif %}
+                    </div>
+                    <div class="chapter-item-actions">
+                        <form class="inline-form" method="post" action="{{ url_for('reorder_chapter_item', chapter_id=chapter['id'], chapter_item_id=item['chapter_item_id']) }}">
+                            <input type="hidden" name="direction" value="up">
+                            <button class="button secondary small" type="submit" {% if loop.first %}disabled{% endif %}>Up</button>
+                        </form>
+                        <form class="inline-form" method="post" action="{{ url_for('reorder_chapter_item', chapter_id=chapter['id'], chapter_item_id=item['chapter_item_id']) }}">
+                            <input type="hidden" name="direction" value="down">
+                            <button class="button secondary small" type="submit" {% if loop.last %}disabled{% endif %}>Down</button>
+                        </form>
+                        <form class="inline-form" method="post" action="{{ url_for('remove_chapter_item', chapter_id=chapter['id'], chapter_item_id=item['chapter_item_id']) }}">
+                            <button class="button danger small" type="submit">Remove</button>
+                        </form>
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty-state">Add photos or text entries from a month page to build this story.</p>
+    {% endif %}
+</section>
+
+{% include "carousel_modal.html" %}
+{% endblock %}

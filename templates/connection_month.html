@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}{{ month_name }} {{ year }} - {{ connection["username"] }} - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('connection_year_view', connection_id=connection['id'], year=year) }}">{{ year }}</a>
+        <h1>{{ month_name }}</h1>
+    </div>
+    <span class="status-badge">Read only</span>
+</section>
+
+<section class="photo-section">
+    <div class="photo-grid">
+        {% for item in items %}
+            {% if item["kind"] == "photo" %}
+                <button
+                    class="entry-thumb readonly-photo-thumb"
+                    type="button"
+                    data-entry-ref="photo-{{ item['id'] }}"
+                    data-photo-date="{{ item['display_date'] or '' }}"
+                    data-privacy-label="{{ item['privacy_label'] }}"
+                    data-privacy-help="{{ item['privacy_help'] }}"
+                    data-full-src="{{ item['image_url'] }}"
+                    data-messages-url="{{ url_for('connection_photo_messages', connection_id=connection['id'], photo_id=item['id']) }}"
+                >
+                    <img src="{{ item['image_url'] }}" alt="{{ item['original_filename'] or 'Timeline picture' }}" loading="lazy">
+                    <span class="privacy-badge" title="{{ item['privacy_help'] }}">Visible: {{ item["privacy_label"] }}</span>
+                    {% if item["display_date"] %}
+                        <span class="thumb-date">{{ item["display_date"] }}</span>
+                    {% endif %}
+                </button>
+            {% else %}
+                <button
+                    class="entry-thumb text-thumb readonly-text-thumb"
+                    type="button"
+                    data-entry-ref="text-{{ item['id'] }}"
+                    data-entry-date="{{ item['display_date'] or '' }}"
+                    data-entry-body="{{ item['body'] }}"
+                    data-privacy-label="{{ item['privacy_label'] }}"
+                    data-privacy-help="{{ item['privacy_help'] }}"
+                    aria-label="Text entry{% if item['display_date'] %} from {{ item['display_date'] }}{% endif %}"
+                >
+                    <div class="text-thumb-content">
+                        <div class="text-thumb-preview">{{ item["body"] }}</div>
+                        <span class="privacy-badge" title="{{ item['privacy_help'] }}">Visible: {{ item["privacy_label"] }}</span>
+                    </div>
+                    {% if item["display_date"] %}
+                        <span class="thumb-date">{{ item["display_date"] }}</span>
+                    {% endif %}
+                </button>
+            {% endif %}
+        {% else %}
+            <p class="empty-state">No entries yet.</p>
+        {% endfor %}
+    </div>
+</section>
+
+<div class="modal" id="readonly-text-modal" hidden>
+    <div class="modal-backdrop" data-close-readonly-text-modal></div>
+    <section class="modal-panel text-modal-panel" role="dialog" aria-modal="true" aria-labelledby="readonly-text-modal-title">
+        <header class="modal-header">
+            <div>
+                <h2 id="readonly-text-modal-title">Text entry</h2>
+                <p id="readonly-text-modal-date" class="muted"></p>
+                <p id="readonly-text-privacy-summary" class="privacy-summary"></p>
+            </div>
+            <button class="icon-button" type="button" data-close-readonly-text-modal aria-label="Close popup">x</button>
+        </header>
+        <div class="text-modal-body">
+            <div id="readonly-text-entry-view" class="text-entry-view"></div>
+        </div>
+    </section>
+</div>
+
+<div class="modal" id="readonly-photo-modal" hidden>
+    <div class="modal-backdrop" data-close-readonly-photo-modal></div>
+    <section class="modal-panel photo-modal-panel" role="dialog" aria-modal="true" aria-labelledby="readonly-photo-modal-title">
+        <header class="modal-header">
+            <div>
+                <h2 id="readonly-photo-modal-title">Picture</h2>
+                <p id="readonly-photo-modal-date" class="muted"></p>
+                <p id="readonly-photo-privacy-summary" class="privacy-summary"></p>
+            </div>
+            <button class="icon-button" type="button" data-close-readonly-photo-modal aria-label="Close popup">x</button>
+        </header>
+        <div class="modal-body">
+            <img id="readonly-modal-image" alt="Selected timeline picture">
+            <aside class="message-panel readonly-message-panel">
+                <h3>Messages</h3>
+                <div id="readonly-message-list" class="message-list"></div>
+            </aside>
+        </div>
+    </section>
+</div>
+{% endblock %}

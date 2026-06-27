@@ -4,16 +4,41 @@
 
 {% macro tag_radio_group(selected=default_tag) %}
 <fieldset class="tag-radio-group">
-    <legend>Tag</legend>
+    <legend>Visibility</legend>
     <div class="tag-radio-list">
         {% for tag in tag_choices %}
             <label class="tag-radio">
                 <input type="radio" name="tags" value="{{ tag }}" {% if tag == selected %}checked{% endif %}>
-                <span>{{ tag }}</span>
+                <span>
+                    <strong>{{ tag }}</strong>
+                    <small>{{ privacy_labels[tag] }}</small>
+                </span>
             </label>
         {% endfor %}
     </div>
 </fieldset>
+{% endmacro %}
+
+{% macro chapter_add_form(item) %}
+    {% if chapters %}
+        <form method="post" action="{{ url_for('add_chapter_item') }}" class="chapter-add-form">
+            <input type="hidden" name="item_kind" value="{{ item['kind'] }}">
+            <input type="hidden" name="item_id" value="{{ item['id'] }}">
+            <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
+            <label>
+                <span>Chapter</span>
+                <select name="chapter_id" required>
+                    <option value="">Add to chapter</option>
+                    {% for chapter in chapters %}
+                        <option value="{{ chapter['id'] }}">{{ chapter["title"] }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <button class="button secondary small" type="submit">Add</button>
+        </form>
+    {% else %}
+        <a class="button secondary small chapter-create-link" href="{{ url_for('chapters') }}">Create chapter</a>
+    {% endif %}
 {% endmacro %}
 
 {% block content %}
@@ -22,13 +47,29 @@
         <a class="back-link" href="{{ url_for('year_view', year=year) }}">{{ year }}</a>
         <h1>{{ month_name }}</h1>
     </div>
+    <div class="page-actions">
+        <a class="button secondary" href="{{ url_for('export_month_pdf', year=year, month=month) }}">Export month PDF</a>
+    </div>
 </section>
+
+<details class="upload-panel privacy-panel privacy-toggle-panel">
+    <summary class="privacy-toggle-summary">
+        <span>
+            <strong>Bulk visibility</strong>
+            <small>Set who can see every item in {{ month_name }} {{ year }}.</small>
+        </span>
+    </summary>
+    <form method="post" action="{{ url_for('bulk_month_privacy', year=year, month=month) }}" class="privacy-bulk-form">
+        {{ tag_radio_group() }}
+        <button class="button secondary" type="submit">Apply to month</button>
+    </form>
+</details>
 
 <section class="upload-panel">
     <form method="post" enctype="multipart/form-data" class="upload-form">
         <label class="file-field">
-            <span>Picture</span>
-            <input name="photo" type="file" accept="image/*" required>
+            <span>Pictures</span>
+            <input name="photo" type="file" accept="image/*" multiple required>
         </label>
         <label>
             <span>Date</span>
@@ -58,44 +99,48 @@
     <div class="photo-grid">
         {% for item in items %}
             {% if item["kind"] == "photo" %}
-                <button
-                    class="entry-thumb photo-thumb"
-                    type="button"
-                    data-photo-id="{{ item['id'] }}"
-                    data-photo-date="{{ item['display_date'] or '' }}"
-                    data-photo-tags="{{ item['tags_text'] }}"
-                    data-full-src="{{ url_for('photo_image', photo_id=item['id']) }}"
-                >
-                    <img src="{{ url_for('photo_image', photo_id=item['id']) }}" alt="{{ item['original_filename'] or 'Uploaded picture' }}" loading="lazy">
-                    {% if item["tags"] %}
-                        <span class="thumb-tags">{{ item["tags_text"] }}</span>
-                    {% endif %}
-                    {% if item["display_date"] %}
-                        <span class="thumb-date">{{ item["display_date"] }}</span>
-                    {% endif %}
-                </button>
-            {% else %}
-                <button
-                    class="entry-thumb text-thumb"
-                    type="button"
-                    data-entry-id="{{ item['id'] }}"
-                    data-entry-tags="{{ item['tags_text'] }}"
-                    aria-label="Text entry{% if item['display_date'] %} from {{ item['display_date'] }}{% endif %}"
-                >
-                    <div class="text-thumb-content">
-                        <div class="text-thumb-preview">{{ item["body"] }}</div>
-                        {% if item["tags"] %}
-                            <div class="tag-list thumb-tag-list">
-                                {% for tag in item["tags"] %}
-                                    <span class="tag-chip">{{ tag }}</span>
-                                {% endfor %}
-                            </div>
+                <article class="entry-card">
+                    <button
+                        class="entry-thumb photo-thumb"
+                        type="button"
+                        data-photo-id="{{ item['id'] }}"
+                        data-entry-ref="photo-{{ item['id'] }}"
+                        data-photo-date="{{ item['display_date'] or '' }}"
+                        data-photo-tags="{{ item['tags_text'] }}"
+                        data-privacy-label="{{ item['privacy_label'] }}"
+                        data-privacy-help="{{ item['privacy_help'] }}"
+                        data-full-src="{{ item['image_url'] }}"
+                    >
+                        <img src="{{ item['image_url'] }}" alt="{{ item['original_filename'] or 'Uploaded picture' }}" loading="lazy">
+                        <span class="privacy-badge" title="{{ item['privacy_help'] }}">Visible: {{ item["privacy_label"] }}</span>
+                        {% if item["display_date"] %}
+                            <span class="thumb-date">{{ item["display_date"] }}</span>
                         {% endif %}
-                    </div>
-                    {% if item["display_date"] %}
-                        <span class="thumb-date">{{ item["display_date"] }}</span>
-                    {% endif %}
-                </button>
+                    </button>
+                    {{ chapter_add_form(item) }}
+                </article>
+            {% else %}
+                <article class="entry-card">
+                    <button
+                        class="entry-thumb text-thumb"
+                        type="button"
+                        data-entry-id="{{ item['id'] }}"
+                        data-entry-ref="text-{{ item['id'] }}"
+                        data-entry-tags="{{ item['tags_text'] }}"
+                        data-privacy-label="{{ item['privacy_label'] }}"
+                        data-privacy-help="{{ item['privacy_help'] }}"
+                        aria-label="Text entry{% if item['display_date'] %} from {{ item['display_date'] }}{% endif %}"
+                    >
+                        <div class="text-thumb-content">
+                            <span class="privacy-badge" title="{{ item['privacy_help'] }}">Visible: {{ item["privacy_label"] }}</span>
+                            <div class="text-thumb-preview">{{ item["body"] }}</div>
+                        </div>
+                        {% if item["display_date"] %}
+                            <span class="thumb-date">{{ item["display_date"] }}</span>
+                        {% endif %}
+                    </button>
+                    {{ chapter_add_form(item) }}
+                </article>
             {% endif %}
         {% else %}
             <p class="empty-state">No entries yet.</p>
@@ -110,6 +155,7 @@
             <div>
                 <h2 id="text-modal-title">Text entry</h2>
                 <p id="text-modal-date" class="muted"></p>
+                <p id="text-privacy-summary" class="privacy-summary"></p>
             </div>
             <div class="modal-actions">
                 <button class="button secondary small" id="edit-text-button" type="button">Edit</button>
@@ -145,6 +191,7 @@
             <div>
                 <h2 id="modal-title">Picture</h2>
                 <p id="modal-date" class="muted"></p>
+                <p id="photo-privacy-summary" class="privacy-summary"></p>
             </div>
             <div class="modal-actions">
                 <button class="button danger small" id="delete-photo-button" type="button">Delete picture</button>
@@ -156,7 +203,7 @@
             <aside class="message-panel">
                 <form id="photo-tags-form" class="tags-form">
                     {{ tag_radio_group() }}
-                    <button class="button secondary small" type="submit">Save tags</button>
+                    <button class="button secondary small" type="submit">Save visibility</button>
                 </form>
                 <h3>Messages</h3>
                 <div id="message-list" class="message-list"></div>

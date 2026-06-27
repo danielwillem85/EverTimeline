@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}Home - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <h1>Home</h1>
+        <p class="muted">A random selection of public photos from EverTimeline.</p>
+    </div>
+</section>
+
+<section class="public-photo-section" aria-label="Public photos">
+    {% if photos %}
+        <div class="public-photo-grid">
+            {% for photo in photos %}
+                <figure class="public-photo-card" title="{{ photo['owner_name'] }}{% if photo['display_date'] %} - {{ photo['display_date'] }}{% endif %}">
+                    <img
+                        src="{{ photo['image_url'] }}"
+                        alt="{{ photo['title'] }}"
+                        loading="lazy"
+                    >
+                </figure>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty-state">No public photos yet.</p>
+    {% endif %}
+</section>
+{% endblock %}

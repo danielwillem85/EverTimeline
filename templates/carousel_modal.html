@@ -1,4 +1,10 @@
-<div class="modal" id="all-items-modal" data-items-url="{{ carousel_items_url|default(url_for('timeline_items')) }}" hidden>
+<div
+    class="modal"
+    id="all-items-modal"
+    data-items-url="{{ carousel_items_url|default(url_for('timeline_items')) }}"
+    data-skip-tag-filter="{{ 'true' if carousel_skip_tag_filter|default(false) else 'false' }}"
+    hidden
+>
     <div class="modal-backdrop" data-close-all-items></div>
     <section class="modal-panel all-items-panel" role="dialog" aria-modal="true" aria-labelledby="all-items-title">
         <header class="modal-header all-items-header">
@@ -14,20 +20,27 @@
                     <button class="button secondary small speed-step-button" id="carousel-speed-up" type="button" aria-label="Increase display time">+</button>
                 </div>
                 <button class="button secondary small carousel-control-button" id="carousel-pause-button" type="button" hidden>Pause</button>
+                <div class="carousel-step-controls" id="carousel-step-controls" aria-label="Manual carousel controls" hidden>
+                    <button class="button secondary small carousel-step-button" id="carousel-step-left" type="button" aria-label="Move carousel left">&lt;</button>
+                    <button class="button secondary small carousel-step-button" id="carousel-step-right" type="button" aria-label="Move carousel right">&gt;</button>
+                </div>
                 <button class="icon-button" type="button" data-close-all-items aria-label="Close popup">x</button>
             </div>
         </header>
         <div class="carousel-filter-panel" id="carousel-filter-panel" hidden>
             <form class="carousel-filter-form" id="carousel-filter-form">
                 <div>
-                    <h3>Choose tags</h3>
-                    <p class="muted">Only entries with selected tags will be displayed.</p>
+                    <h3>Choose visibility</h3>
+                    <p class="muted">Only entries with selected visibility levels will be displayed.</p>
                 </div>
                 <div class="tag-check-list">
                     {% for tag in tag_choices %}
                         <label class="tag-check">
                             <input type="checkbox" name="carousel_tags" value="{{ tag }}" checked>
-                            <span>{{ tag }}</span>
+                            <span>
+                                <strong>{{ tag }}</strong>
+                                <small>{{ privacy_labels[tag] }}</small>
+                            </span>
                         </label>
                     {% endfor %}
                 </div>

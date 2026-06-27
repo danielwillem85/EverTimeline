@@ -1,22 +1,24 @@
 {% extends "base.html" %}
 
-{% block title %}Timeline - EverTimeline{% endblock %}
+{% block title %}{{ connection["full_name"] or connection["username"] }} - EverTimeline{% endblock %}
 
 {% block content %}
 <section class="page-heading">
-    <h1>Timeline</h1>
-    <div class="page-actions">
-        <a class="button primary" href="{{ url_for('chapters') }}">Chapters</a>
-        <a class="button secondary" href="{{ url_for('birthday') }}">Edit birthday</a>
+    <div>
+        <a class="back-link" href="{{ url_for('connections') }}">Connections</a>
+        <h1>{{ connection["full_name"] or connection["username"] }}</h1>
     </div>
+    <span class="status-badge">Read only</span>
 </section>
 
-<section class="timeline-frame" aria-label="Year timeline">
+{% set carousel_items_url = url_for('connection_timeline_items', connection_id=connection['id']) %}
+{% set carousel_skip_tag_filter = true %}
+<section class="timeline-frame" aria-label="Connection year timeline">
     <button class="button primary view-all-button" id="view-all-button" type="button">View all</button>
     <button class="button secondary view-random-button" id="view-random-button" type="button">View random</button>
     <div class="year-grid">
         {% for year in years %}
-            <a class="timeline-button counted-button" href="{{ url_for('year_view', year=year) }}">
+            <a class="timeline-button counted-button" href="{{ url_for('connection_year_view', connection_id=connection['id'], year=year) }}">
                 <span>{{ year }}</span>
                 {% if year_counts.get(year, 0) %}
                     <span class="count-badge">{{ year_counts[year] }}</span>

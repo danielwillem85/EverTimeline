@@ -1,4 +1,47 @@
 document.addEventListener("DOMContentLoaded", () => {
+    const privacyLabels = {
+        private: "Only you",
+        family: "Family",
+        friends: "Friends",
+        public: "All connections",
+    };
+    const privacyHelp = {
+        private: "Only your account can see this item.",
+        family: "Family connections can see this item.",
+        friends: "Friend and family connections can see this item.",
+        public: "All accepted connections can see this item.",
+    };
+    const privacyLabelFromTag = (tag) => privacyLabels[tag] || privacyLabels.private;
+    const privacyHelpFromTag = (tag) => privacyHelp[tag] || privacyHelp.private;
+    const setPrivacySummary = (summary, label, help) => {
+        if (!summary) {
+            return;
+        }
+        summary.textContent = `Visible to: ${label || privacyLabels.private}`;
+        summary.title = help || "";
+    };
+    const setPrivacyBadge = (container, label, help) => {
+        if (!container) {
+            return;
+        }
+        const normalizedLabel = label || privacyLabels.private;
+        let badge = container.querySelector(".privacy-badge");
+        if (!badge) {
+            badge = document.createElement("span");
+            badge.className = "privacy-badge";
+            const content = container.querySelector(".text-thumb-content");
+            if (content) {
+                content.prepend(badge);
+            } else {
+                container.appendChild(badge);
+            }
+        }
+        badge.textContent = `Visible: ${normalizedLabel}`;
+        badge.title = help || "";
+        container.dataset.privacyLabel = normalizedLabel;
+        container.dataset.privacyHelp = help || "";
+    };
+
     const notificationBadge = document.querySelector("[data-notification-count]");
     if (notificationBadge) {
         const updateNotificationBadge = (count) => {
@@ -7,7 +50,7 @@ document.addEventListener("DOMContentLoaded", () => {
             notificationBadge.classList.toggle("is-empty", normalizedCount === 0);
             notificationBadge.setAttribute(
                 "aria-label",
-                `${normalizedCount} pending connection requests`
+                `${normalizedCount} unread notifications`
             );
         };
 
@@ -53,9 +96,15 @@ document.addEventListener("DOMContentLoaded", () => {
         const allItemsPanel = allItemsModal.querySelector(".all-items-panel");
         const carouselSpeedControl = allItemsModal.querySelector(".carousel-speed-control");
         const carouselPauseButton = document.getElementById("carousel-pause-button");
+        const carouselStepControls = document.getElementById("carousel-step-controls");
+        const carouselStepLeftButton = document.getElementById("carousel-step-left");
+        const carouselStepRightButton = document.getElementById("carousel-step-right");
         const carouselSpeedDownButton = document.getElementById("carousel-speed-down");
         const carouselSpeedUpButton = document.getElementById("carousel-speed-up");
         const carouselSpeedValue = document.getElementById("carousel-speed-value");
+        const skipCarouselTagFilter = allItemsModal.dataset.skipTagFilter === "true";
+        const viewAllTitle = viewAllButton.dataset.carouselTitle || "View all";
+        const viewRandomTitle = viewRandomButton ? viewRandomButton.dataset.carouselTitle || "View random" : "View random";
         const speedStepMs = 250;
         const minDisplayMs = 250;
         let allItems = [];
@@ -96,6 +145,9 @@ document.addEventListener("DOMContentLoaded", () => {
             if (carouselSpeedControl) {
                 carouselSpeedControl.hidden = shouldHide;
             }
+            if (carouselStepControls) {
+                carouselStepControls.hidden = shouldHide || !carouselPaused || allItems.length <= 1;
+            }
             if (carouselSpeedDownButton) {
                 carouselSpeedDownButton.disabled = carouselDisplayMs <= minDisplayMs;
             }
@@ -107,7 +159,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const closeAllItemsModal = () => {
             clearCarouselTimers();
             allItemsModal.hidden = true;
-            carouselCard.classList.remove("is-visible", "is-fading");
+            carouselCard.classList.remove("is-visible", "is-fading", "is-shifting");
             carouselPaused = false;
             carouselFilterActive = false;
             if (carouselStage) {
@@ -123,73 +175,188 @@ document.addEventListener("DOMContentLoaded", () => {
             document.body.classList.remove("modal-open");
         };
 
-        const renderCarouselItem = (item) => {
-            carouselCard.innerHTML = "";
-            carouselCard.classList.remove("is-visible", "is-fading");
+        const renderCarouselMessages = (list, messages) => {
+            list.innerHTML = "";
+            if (messages.length === 0) {
+                const empty = document.createElement("p");
+                empty.className = "empty-state compact";
+                empty.textContent = "No messages yet.";
+                list.appendChild(empty);
+                return;
+            }
+
+            messages.forEach((message) => {
+                const article = document.createElement("article");
+                article.className = "message-item";
+
+                if (message.author_name) {
+                    const author = document.createElement("strong");
+                    author.className = "message-author";
+                    author.textContent = message.author_name;
+                    article.appendChild(author);
+                }
+
+                const body = document.createElement("p");
+                body.textContent = message.body;
+
+                const stamp = document.createElement("time");
+                stamp.textContent = message.created_at;
+
+                article.append(body, stamp);
+                list.appendChild(article);
+            });
+        };
+
+        const renderCarouselMessagePanel = (item) => {
+            const messagePanel = document.createElement("aside");
+            messagePanel.className = "carousel-message-panel";
+
+            const heading = document.createElement("h3");
+            heading.textContent = "Messages";
+
+            const list = document.createElement("div");
+            list.className = "carousel-message-list";
+            renderCarouselMessages(list, item.messages || []);
+
+            const form = document.createElement("form");
+            form.className = "carousel-message-form";
+            form.dataset.canMessage = item.can_message && item.messages_url ? "true" : "false";
+            form.hidden = !(carouselPaused && item.can_message && item.messages_url);
+
+            const textarea = document.createElement("textarea");
+            textarea.name = "body";
+            textarea.rows = 3;
+            textarea.placeholder = "Add a message";
+            textarea.setAttribute("aria-label", "Message");
+
+            const error = document.createElement("p");
+            error.className = "form-error carousel-message-error";
+            error.hidden = true;
+
+            const submit = document.createElement("button");
+            submit.className = "button primary small";
+            submit.type = "submit";
+            submit.textContent = "Save";
+
+            form.append(textarea, submit, error);
+            form.addEventListener("submit", async (event) => {
+                event.preventDefault();
+                error.hidden = true;
+
+                const body = textarea.value.trim();
+                if (!carouselPaused || !item.can_message || !item.messages_url || !body) {
+                    return;
+                }
+
+                submit.disabled = true;
+                const response = await fetch(item.messages_url, {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({body}),
+                });
+                submit.disabled = false;
+
+                if (!response.ok) {
+                    error.textContent = "Message could not be saved.";
+                    error.hidden = false;
+                    return;
+                }
+
+                const message = await response.json();
+                item.messages = [...(item.messages || []), message];
+                textarea.value = "";
+                renderCarouselMessages(list, item.messages);
+            });
+
+            messagePanel.append(heading, list, form);
+            return messagePanel;
+        };
+
+        const updateCarouselMessageForm = () => {
+            carouselCard.querySelectorAll(".carousel-message-form").forEach((form) => {
+                const canMessage = form.dataset.canMessage === "true";
+                form.hidden = !(carouselPaused && canMessage);
+                form.querySelectorAll("textarea, button").forEach((control) => {
+                    control.disabled = !(carouselPaused && canMessage);
+                });
+            });
+        };
+
+        const visibleCarouselEntries = () => {
+            const visibleCount = Math.min(3, allItems.length);
+            return Array.from({length: visibleCount}, (_, slotIndex) => {
+                const itemIndex = (carouselIndex + slotIndex) % allItems.length;
+                return {
+                    item: allItems[itemIndex],
+                    itemIndex,
+                    slotIndex,
+                };
+            });
+        };
+
+        const renderCarouselPanel = ({item, itemIndex, slotIndex}) => {
+            const article = document.createElement("article");
+            article.className = "carousel-window-item";
+            if (slotIndex === 0) {
+                article.classList.add("is-current");
+            }
+
+            const meta = document.createElement("div");
+            meta.className = "carousel-item-meta";
 
             const counter = document.createElement("span");
-            counter.className = "carousel-counter";
-            counter.textContent = `${carouselIndex + 1} of ${allItems.length}`;
+            counter.className = "carousel-item-counter";
+            counter.textContent = `${itemIndex + 1} of ${allItems.length}`;
 
             const dateLabel = document.createElement("span");
-            dateLabel.className = "carousel-date-label";
+            dateLabel.className = "carousel-item-date";
             dateLabel.textContent = item.date_label;
 
-            allItemsMeta.replaceChildren(counter, dateLabel);
+            meta.append(counter, dateLabel);
+            if (item.privacy_label) {
+                const privacy = document.createElement("span");
+                privacy.className = "carousel-item-privacy";
+                privacy.textContent = item.privacy_label;
+                privacy.title = item.privacy_help || "";
+                meta.appendChild(privacy);
+            }
+
+            const media = document.createElement("div");
+            media.className = "carousel-window-media";
 
             if (item.kind === "photo") {
-                const layout = document.createElement("div");
-                layout.className = "carousel-photo-layout";
-
-                const media = document.createElement("div");
-                media.className = "carousel-photo-media";
-
                 const image = document.createElement("img");
                 image.className = "carousel-image";
                 image.src = item.image_url;
                 image.alt = item.title || "Timeline photo";
                 media.appendChild(image);
-
-                const messagePanel = document.createElement("aside");
-                messagePanel.className = "carousel-message-panel";
-
-                const heading = document.createElement("h3");
-                heading.textContent = "Messages";
-                messagePanel.appendChild(heading);
-
-                const messages = item.messages || [];
-                if (messages.length === 0) {
-                    const empty = document.createElement("p");
-                    empty.className = "empty-state compact";
-                    empty.textContent = "No messages yet.";
-                    messagePanel.appendChild(empty);
-                } else {
-                    const list = document.createElement("div");
-                    list.className = "carousel-message-list";
-                    messages.forEach((message) => {
-                        const article = document.createElement("article");
-                        article.className = "message-item";
-
-                        const body = document.createElement("p");
-                        body.textContent = message.body;
-
-                        const stamp = document.createElement("time");
-                        stamp.textContent = message.created_at;
-
-                        article.append(body, stamp);
-                        list.appendChild(article);
-                    });
-                    messagePanel.appendChild(list);
-                }
-
-                layout.append(media, messagePanel);
-                carouselCard.appendChild(layout);
             } else {
                 const text = document.createElement("div");
                 text.className = "carousel-text";
                 text.textContent = item.body;
-                carouselCard.appendChild(text);
+                media.appendChild(text);
             }
+
+            article.append(meta, media, renderCarouselMessagePanel(item));
+            return article;
+        };
+
+        const renderCarouselWindow = () => {
+            carouselCard.innerHTML = "";
+            carouselCard.classList.remove("is-visible", "is-fading", "is-shifting");
+
+            const visibleEntries = visibleCarouselEntries();
+            const counter = document.createElement("span");
+            counter.className = "carousel-counter";
+            counter.textContent = `${visibleEntries.map((entry) => entry.itemIndex + 1).join(", ")} of ${allItems.length}`;
+            allItemsMeta.replaceChildren(counter);
+
+            const window = document.createElement("div");
+            window.className = "carousel-window";
+            visibleEntries.forEach((entry) => {
+                window.appendChild(renderCarouselPanel(entry));
+            });
+            carouselCard.appendChild(window);
         };
 
         const scheduleCarouselAdvance = (visibleDelay = carouselDisplayMs) => {
@@ -197,8 +364,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (carouselPaused || allItemsModal.hidden) {
                     return;
                 }
-                carouselCard.classList.add("is-fading");
-                carouselCard.classList.remove("is-visible");
+                carouselCard.classList.add("is-shifting");
             }, visibleDelay);
 
             setCarouselTimer(() => {
@@ -207,7 +373,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
                 carouselIndex = (carouselIndex + 1) % allItems.length;
                 showCarouselItem();
-            }, visibleDelay + 1700);
+            }, visibleDelay + 450);
         };
 
         const showCarouselItem = () => {
@@ -215,8 +381,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 return;
             }
 
-            const item = allItems[carouselIndex];
-            renderCarouselItem(item);
+            renderCarouselWindow();
 
             setCarouselTimer(() => {
                 carouselCard.classList.add("is-visible");
@@ -232,7 +397,8 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             clearCarouselTimers();
-            carouselCard.classList.remove("is-fading");
+            carouselCard.classList.remove("is-fading", "is-shifting");
+            renderCarouselWindow();
             carouselCard.classList.add("is-visible");
             updateCarouselControl();
             scheduleCarouselAdvance();
@@ -255,34 +421,37 @@ document.addEventListener("DOMContentLoaded", () => {
             clearCarouselTimers();
             carouselIndex = 0;
             carouselPaused = false;
-            carouselFilterActive = true;
+            carouselFilterActive = !skipCarouselTagFilter;
             pendingRandomize = randomize;
             allItems = [];
             allItemsModal.hidden = false;
             document.body.classList.add("modal-open");
             carouselCard.innerHTML = "";
-            carouselCard.classList.remove("is-visible", "is-fading");
+            carouselCard.classList.remove("is-visible", "is-fading", "is-shifting");
             if (carouselStage) {
                 carouselStage.hidden = true;
             }
             carouselEmpty.hidden = true;
-            allItemsTitle.textContent = randomize ? "View random" : "View all";
+            allItemsTitle.textContent = randomize ? viewRandomTitle : viewAllTitle;
             allItemsMeta.textContent = "";
             if (carouselFilterPanel) {
-                carouselFilterPanel.hidden = false;
+                carouselFilterPanel.hidden = skipCarouselTagFilter;
             }
             if (allItemsPanel) {
-                allItemsPanel.classList.add("is-filtering");
+                allItemsPanel.classList.toggle("is-filtering", !skipCarouselTagFilter);
             }
             updateCarouselControl();
+            if (skipCarouselTagFilter) {
+                startFilteredCarousel({skipTagFilter: true});
+            }
         };
 
-        const startFilteredCarousel = async () => {
+        const startFilteredCarousel = async ({skipTagFilter = skipCarouselTagFilter} = {}) => {
             clearCarouselTimers();
             carouselIndex = 0;
             carouselPaused = false;
             carouselFilterActive = false;
-            const selectedTags = getSelectedCarouselTags();
+            const selectedTags = skipTagFilter ? null : getSelectedCarouselTags();
             if (carouselFilterPanel) {
                 carouselFilterPanel.hidden = true;
             }
@@ -301,7 +470,9 @@ document.addEventListener("DOMContentLoaded", () => {
             const itemsUrl = allItemsModal.dataset.itemsUrl || "/api/timeline-items";
             const response = await fetch(itemsUrl);
             const fetchedItems = response.ok ? await response.json() : [];
-            const filteredItems = fetchedItems.filter((item) => itemMatchesSelectedTags(item, selectedTags));
+            const filteredItems = skipTagFilter
+                ? fetchedItems
+                : fetchedItems.filter((item) => itemMatchesSelectedTags(item, selectedTags));
             allItems = pendingRandomize ? shuffleItems(filteredItems) : filteredItems;
 
             if (allItems.length === 0) {
@@ -319,22 +490,37 @@ document.addEventListener("DOMContentLoaded", () => {
         const pauseCarousel = () => {
             clearCarouselTimers();
             carouselPaused = true;
-            carouselCard.classList.remove("is-fading");
+            carouselCard.classList.remove("is-fading", "is-shifting");
             carouselCard.classList.add("is-visible");
             updateCarouselControl();
+            updateCarouselMessageForm();
         };
 
         const resumeCarousel = () => {
             carouselPaused = false;
-            carouselCard.classList.remove("is-fading");
+            carouselCard.classList.remove("is-fading", "is-shifting");
             carouselCard.classList.add("is-visible");
             updateCarouselControl();
+            updateCarouselMessageForm();
             scheduleCarouselAdvance();
         };
 
         const changeCarouselSpeed = (deltaMs) => {
             carouselDisplayMs = Math.max(minDisplayMs, carouselDisplayMs + deltaMs);
             rescheduleCarouselIfPlaying();
+        };
+
+        const stepPausedCarousel = (delta) => {
+            if (!carouselPaused || allItemsModal.hidden || allItems.length <= 1) {
+                return;
+            }
+
+            clearCarouselTimers();
+            carouselIndex = (carouselIndex + delta + allItems.length) % allItems.length;
+            renderCarouselWindow();
+            carouselCard.classList.add("is-visible");
+            updateCarouselControl();
+            updateCarouselMessageForm();
         };
 
         viewAllButton.addEventListener("click", () => openAllItemsModal());
@@ -361,6 +547,12 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (carouselSpeedUpButton) {
             carouselSpeedUpButton.addEventListener("click", () => changeCarouselSpeed(speedStepMs));
+        }
+        if (carouselStepLeftButton) {
+            carouselStepLeftButton.addEventListener("click", () => stepPausedCarousel(-1));
+        }
+        if (carouselStepRightButton) {
+            carouselStepRightButton.addEventListener("click", () => stepPausedCarousel(1));
         }
 
         allItemsModal.querySelectorAll("[data-close-all-items]").forEach((button) => {
@@ -408,14 +600,149 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    const readonlyPhotoModal = document.getElementById("readonly-photo-modal");
+    const readonlyTextModal = document.getElementById("readonly-text-modal");
+    if (readonlyPhotoModal && readonlyTextModal) {
+        const readonlyModalImage = document.getElementById("readonly-modal-image");
+        const readonlyPhotoDate = document.getElementById("readonly-photo-modal-date");
+        const readonlyMessageList = document.getElementById("readonly-message-list");
+        const readonlyTextDate = document.getElementById("readonly-text-modal-date");
+        const readonlyPhotoPrivacySummary = document.getElementById("readonly-photo-privacy-summary");
+        const readonlyTextPrivacySummary = document.getElementById("readonly-text-privacy-summary");
+        const readonlyTextEntryView = document.getElementById("readonly-text-entry-view");
+
+        const setReadonlyModalOpenState = () => {
+            const isOpen = !readonlyPhotoModal.hidden || !readonlyTextModal.hidden;
+            document.body.classList.toggle("modal-open", isOpen);
+        };
+
+        const renderReadonlyMessages = (messages) => {
+            readonlyMessageList.innerHTML = "";
+            if (messages.length === 0) {
+                const empty = document.createElement("p");
+                empty.className = "empty-state compact";
+                empty.textContent = "No messages yet.";
+                readonlyMessageList.appendChild(empty);
+                return;
+            }
+
+            messages.forEach((message) => {
+                const item = document.createElement("article");
+                item.className = "message-item";
+
+                if (message.author_name) {
+                    const author = document.createElement("strong");
+                    author.className = "message-author";
+                    author.textContent = message.author_name;
+                    item.appendChild(author);
+                }
+
+                const body = document.createElement("p");
+                body.textContent = message.body;
+
+                const stamp = document.createElement("time");
+                stamp.textContent = message.created_at;
+
+                item.append(body, stamp);
+                readonlyMessageList.appendChild(item);
+            });
+        };
+
+        const openReadonlyPhotoModal = async (button) => {
+            readonlyModalImage.src = button.dataset.fullSrc;
+            readonlyPhotoDate.textContent = button.dataset.photoDate || "";
+            setPrivacySummary(
+                readonlyPhotoPrivacySummary,
+                button.dataset.privacyLabel,
+                button.dataset.privacyHelp
+            );
+            readonlyPhotoModal.hidden = false;
+            setReadonlyModalOpenState();
+
+            try {
+                const response = await fetch(button.dataset.messagesUrl);
+                renderReadonlyMessages(response.ok ? await response.json() : []);
+            } catch (error) {
+                renderReadonlyMessages([]);
+            }
+        };
+
+        const closeReadonlyPhotoModal = () => {
+            readonlyPhotoModal.hidden = true;
+            readonlyModalImage.removeAttribute("src");
+            setReadonlyModalOpenState();
+        };
+
+        const openReadonlyTextModal = (button) => {
+            readonlyTextDate.textContent = button.dataset.entryDate || "";
+            setPrivacySummary(
+                readonlyTextPrivacySummary,
+                button.dataset.privacyLabel,
+                button.dataset.privacyHelp
+            );
+            readonlyTextEntryView.textContent = button.dataset.entryBody || "";
+            readonlyTextModal.hidden = false;
+            setReadonlyModalOpenState();
+        };
+
+        const closeReadonlyTextModal = () => {
+            readonlyTextModal.hidden = true;
+            setReadonlyModalOpenState();
+        };
+
+        document.querySelectorAll(".readonly-photo-thumb").forEach((button) => {
+            button.addEventListener("click", () => openReadonlyPhotoModal(button));
+        });
+
+        document.querySelectorAll(".readonly-text-thumb").forEach((button) => {
+            button.addEventListener("click", () => openReadonlyTextModal(button));
+        });
+
+        readonlyPhotoModal.querySelectorAll("[data-close-readonly-photo-modal]").forEach((button) => {
+            button.addEventListener("click", closeReadonlyPhotoModal);
+        });
+
+        readonlyTextModal.querySelectorAll("[data-close-readonly-text-modal]").forEach((button) => {
+            button.addEventListener("click", closeReadonlyTextModal);
+        });
+
+        document.addEventListener("keydown", (event) => {
+            if (event.key !== "Escape") {
+                return;
+            }
+            if (!readonlyPhotoModal.hidden) {
+                closeReadonlyPhotoModal();
+            }
+            if (!readonlyTextModal.hidden) {
+                closeReadonlyTextModal();
+            }
+        });
+    }
+
+    const focusEntryFromUrl = () => {
+        const focus = new URLSearchParams(window.location.search).get("focus");
+        if (!focus) {
+            return;
+        }
+        const target = Array.from(document.querySelectorAll("[data-entry-ref]")).find((entry) => {
+            return entry.dataset.entryRef === focus;
+        });
+        if (target) {
+            target.scrollIntoView({block: "center"});
+            window.setTimeout(() => target.click(), 100);
+        }
+    };
+
     const photoModal = document.getElementById("photo-modal");
     const textModal = document.getElementById("text-modal");
     if (!photoModal || !textModal) {
+        focusEntryFromUrl();
         return;
     }
 
     const modalImage = document.getElementById("modal-image");
     const modalDate = document.getElementById("modal-date");
+    const photoPrivacySummary = document.getElementById("photo-privacy-summary");
     const messageList = document.getElementById("message-list");
     const messageForm = document.getElementById("message-form");
     const messageInput = messageForm.querySelector("textarea");
@@ -424,6 +751,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const photoTagInputs = Array.from(photoTagsForm.querySelectorAll("input[name='tags']"));
 
     const textModalDate = document.getElementById("text-modal-date");
+    const textPrivacySummary = document.getElementById("text-privacy-summary");
     const textEntryView = document.getElementById("text-entry-view");
     const textEntryEditForm = document.getElementById("text-entry-edit-form");
     const textEntryEditBody = textEntryEditForm.querySelector("textarea");
@@ -461,7 +789,12 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         const photoGrid = thumbnail.closest(".photo-grid");
-        thumbnail.remove();
+        const card = thumbnail.closest(".entry-card");
+        if (card) {
+            card.remove();
+        } else {
+            thumbnail.remove();
+        }
         showEmptyStateIfNeeded(photoGrid);
     };
 
@@ -494,42 +827,30 @@ document.addEventListener("DOMContentLoaded", () => {
         return list;
     };
 
-    const updatePhotoThumbnailTags = (tags, tagsText) => {
+    const updatePhotoThumbnailTags = (tags, tagsText, privacyLabel, privacyHelpText) => {
         if (!activePhotoThumbnail) {
             return;
         }
 
         activePhotoThumbnail.dataset.photoTags = tagsText;
-        const existing = activePhotoThumbnail.querySelector(".thumb-tags");
-        if (!tagsText) {
-            if (existing) {
-                existing.remove();
-            }
-            return;
-        }
-
-        const tagBadge = existing || document.createElement("span");
-        tagBadge.className = "thumb-tags";
-        tagBadge.textContent = tagsText;
-        if (!existing) {
-            activePhotoThumbnail.appendChild(tagBadge);
-        }
+        setPrivacyBadge(
+            activePhotoThumbnail,
+            privacyLabel || privacyLabelFromTag(tagsText),
+            privacyHelpText || privacyHelpFromTag(tagsText)
+        );
     };
 
-    const updateTextThumbnailTags = (tags, tagsText) => {
+    const updateTextThumbnailTags = (tags, tagsText, privacyLabel, privacyHelpText) => {
         if (!activeTextThumbnail) {
             return;
         }
 
         activeTextThumbnail.dataset.entryTags = tagsText;
-        const content = activeTextThumbnail.querySelector(".text-thumb-content");
-        const existing = activeTextThumbnail.querySelector(".thumb-tag-list");
-        if (existing) {
-            existing.remove();
-        }
-        if (content && tags.length > 0) {
-            content.appendChild(renderTagChips(tags));
-        }
+        setPrivacyBadge(
+            activeTextThumbnail,
+            privacyLabel || privacyLabelFromTag(tagsText),
+            privacyHelpText || privacyHelpFromTag(tagsText)
+        );
     };
 
     const renderMessages = (messages) => {
@@ -545,6 +866,13 @@ document.addEventListener("DOMContentLoaded", () => {
         messages.forEach((message) => {
             const item = document.createElement("article");
             item.className = "message-item";
+
+            if (message.author_name) {
+                const author = document.createElement("strong");
+                author.className = "message-author";
+                author.textContent = message.author_name;
+                item.appendChild(author);
+            }
 
             const body = document.createElement("p");
             body.textContent = message.body;
@@ -571,6 +899,11 @@ document.addEventListener("DOMContentLoaded", () => {
         activePhotoThumbnail = button;
         modalImage.src = button.dataset.fullSrc;
         modalDate.textContent = button.dataset.photoDate || "";
+        setPrivacySummary(
+            photoPrivacySummary,
+            button.dataset.privacyLabel || privacyLabelFromTag(button.dataset.photoTags || "private"),
+            button.dataset.privacyHelp || privacyHelpFromTag(button.dataset.photoTags || "private")
+        );
         setSelectedTagValue(photoTagInputs, button.dataset.photoTags || "private");
         messageInput.value = "";
         photoModal.hidden = false;
@@ -592,6 +925,11 @@ document.addEventListener("DOMContentLoaded", () => {
         textEntryView.textContent = entry.body;
         textEntryEditBody.value = entry.body;
         textEntryEditDate.value = entry.entry_date || "";
+        setPrivacySummary(
+            textPrivacySummary,
+            entry.privacy_label || privacyLabelFromTag(entry.tags_text || "private"),
+            entry.privacy_help || privacyHelpFromTag(entry.tags_text || "private")
+        );
         setSelectedTagValue(textEntryEditTagInputs, entry.tags_text || "private");
     };
 
@@ -619,7 +957,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const label = entry.entry_date ? `Text entry from ${entry.entry_date}` : "Text entry";
         activeTextThumbnail.setAttribute("aria-label", label);
-        updateTextThumbnailTags(entry.tags || [], entry.tags_text || "");
+        updateTextThumbnailTags(
+            entry.tags || [],
+            entry.tags_text || "",
+            entry.privacy_label,
+            entry.privacy_help
+        );
     };
 
     const showTextView = () => {
@@ -720,7 +1063,17 @@ document.addEventListener("DOMContentLoaded", () => {
         if (response.ok) {
             const payload = await response.json();
             setSelectedTagValue(photoTagInputs, payload.tags_text);
-            updatePhotoThumbnailTags(payload.tags, payload.tags_text);
+            setPrivacySummary(
+                photoPrivacySummary,
+                payload.privacy_label || privacyLabelFromTag(payload.tags_text),
+                payload.privacy_help || privacyHelpFromTag(payload.tags_text)
+            );
+            updatePhotoThumbnailTags(
+                payload.tags,
+                payload.tags_text,
+                payload.privacy_label,
+                payload.privacy_help
+            );
         }
     });
 
@@ -802,4 +1155,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
         deleteTextButton.disabled = false;
     });
+
+    focusEntryFromUrl();
 });

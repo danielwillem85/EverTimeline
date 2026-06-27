@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Chapters - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
+        <h1>Chapters</h1>
+    </div>
+</section>
+
+<section class="connection-section">
+    <h2>Create chapter</h2>
+    <form class="chapter-form" method="post">
+        <label>
+            <span>Title</span>
+            <input name="title" placeholder="College, First job, Family trip" required>
+        </label>
+        <label>
+            <span>Description</span>
+            <textarea name="description" rows="3" placeholder="A short note about this story"></textarea>
+        </label>
+        <button class="button primary" type="submit">Create</button>
+    </form>
+</section>
+
+<section class="connection-section">
+    <h2>Your chapters</h2>
+    {% if chapters %}
+        <div class="chapter-grid">
+            {% for chapter in chapters %}
+                <article class="chapter-card">
+                    <div class="chapter-card-main">
+                        <h3>{{ chapter["title"] }}</h3>
+                        {% if chapter["description"] %}
+                            <p>{{ chapter["description"] }}</p>
+                        {% endif %}
+                        <span>{{ chapter["item_count"] }} items</span>
+                    </div>
+                    <div class="chapter-card-actions">
+                        <a class="button primary small" href="{{ url_for('chapter_detail', chapter_id=chapter['id']) }}">Open</a>
+                        <form class="inline-form" method="post" action="{{ url_for('delete_chapter', chapter_id=chapter['id']) }}">
+                            <button class="button danger small" type="submit">Delete</button>
+                        </form>
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty-state">No chapters yet.</p>
+    {% endif %}
+</section>
+{% endblock %}

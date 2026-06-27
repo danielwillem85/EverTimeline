@@ -13,10 +13,25 @@
         {% if g.user %}
             <div class="topbar-actions">
                 <a
+                    class="topbar-link{% if request.endpoint == 'home' %} is-active{% endif %}"
+                    href="{{ url_for('home') }}"
+                    {% if request.endpoint == 'home' %}aria-current="page"{% endif %}
+                >Home</a>
+                <a
                     class="topbar-link{% if request.endpoint == 'search' %} is-active{% endif %}"
                     href="{{ url_for('search') }}"
                     {% if request.endpoint == 'search' %}aria-current="page"{% endif %}
                 >Search</a>
+                <a
+                    class="topbar-link{% if request.endpoint == 'activity' %} is-active{% endif %}"
+                    href="{{ url_for('activity') }}"
+                    {% if request.endpoint == 'activity' %}aria-current="page"{% endif %}
+                >Activity</a>
+                <a
+                    class="topbar-link{% if request.endpoint in ('chapters', 'chapter_detail') %} is-active{% endif %}"
+                    href="{{ url_for('chapters') }}"
+                    {% if request.endpoint in ('chapters', 'chapter_detail') %}aria-current="page"{% endif %}
+                >Chapters</a>
                 <a
                     class="topbar-link notification-link{% if request.endpoint == 'notifications' %} is-active{% endif %}"
                     href="{{ url_for('notifications') }}"
@@ -26,7 +41,7 @@
                     <span
                         class="notification-badge{% if notification_count == 0 %} is-empty{% endif %}"
                         data-notification-count
-                        aria-label="{{ notification_count }} pending connection requests"
+                        aria-label="{{ notification_count }} unread notifications"
                     >{{ notification_count }}</span>
                 </a>
                 <a

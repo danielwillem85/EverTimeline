@@ -41,23 +41,27 @@
         <table class="connection-table">
             <thead>
                 <tr>
-                    <th>Username</th>
-                    <th>Full name</th>
-                    <th>Email address</th>
-                </tr>
-            </thead>
-            <tbody>
+                        <th>Username</th>
+                        <th>Full name</th>
+                        <th>Email address</th>
+                        <th>Visit</th>
+                    </tr>
+                </thead>
+                <tbody>
                 {% if connections %}
                     {% for connection in connections %}
                         <tr>
                             <td>{{ connection["username"] }}</td>
                             <td>{{ connection["full_name"] or "No name entered" }}</td>
                             <td>{{ connection["email"] }}</td>
+                            <td>
+                                <a class="button secondary small" href="{{ url_for('connection_timeline', connection_id=connection['id']) }}">Visit</a>
+                            </td>
                         </tr>
                     {% endfor %}
                 {% else %}
                     <tr>
-                        <td colspan="3" class="empty-table-cell">No connections yet.</td>
+                        <td colspan="4" class="empty-table-cell">No connections yet.</td>
                     </tr>
                 {% endif %}
             </tbody>

@@ -2,11 +2,13 @@ from datetime import date, datetime, timedelta, timezone
 from functools import wraps
 import calendar
 import hashlib
+import io
 import os
 from pathlib import Path
 import re
 import secrets
 import sqlite3
+from xml.sax.saxutils import escape
 
 from flask import (
     Flask,
@@ -23,14 +25,32 @@ from flask import (
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
+from PIL import Image
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DATABASE = BASE_DIR / "evertimeline.sqlite3"
 ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+EXIF_DATE_TAGS = (36867, 36868, 306)
 TAG_CHOICES = ("private", "family", "friends", "public")
 DEFAULT_TAG = "private"
+PRIVACY_AUDIENCE_LABELS = {
+    "private": "Only you",
+    "family": "Family",
+    "friends": "Friends",
+    "public": "All connections",
+}
+PRIVACY_AUDIENCE_HELP = {
+    "private": "Only your account can see this item.",
+    "family": "Family connections can see this item.",
+    "friends": "Friend and family connections can see this item.",
+    "public": "All accepted connections can see this item.",
+}
 CONNECTION_RELATIONS = ("friend", "family")
+CONNECTION_VISIBLE_TAGS = {
+    "friend": ("friends", "public"),
+    "family": ("family", "friends", "public"),
+}
 PASSWORD_RESET_TTL = timedelta(hours=1)
 MONTH_NAMES = [
     "January",
@@ -51,7 +71,7 @@ MONTH_NAMES = [
 app = Flask(__name__)
 app.config.update(
     SECRET_KEY=os.environ.get("SECRET_KEY", "dev-change-me"),
-    MAX_CONTENT_LENGTH=16 * 1024 * 1024,
+    MAX_CONTENT_LENGTH=128 * 1024 * 1024,
 )
 
 
@@ -78,6 +98,8 @@ def inject_tag_choices():
     return {
         "tag_choices": TAG_CHOICES,
         "default_tag": DEFAULT_TAG,
+        "privacy_labels": PRIVACY_AUDIENCE_LABELS,
+        "privacy_help": PRIVACY_AUDIENCE_HELP,
         "notification_count": notification_count,
     }
 
@@ -133,6 +155,25 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS text_entry_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entry_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (entry_id) REFERENCES text_entries (id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS message_notification_reads (
+                user_id INTEGER NOT NULL,
+                message_kind TEXT NOT NULL CHECK (message_kind IN ('photo', 'text')),
+                message_id INTEGER NOT NULL,
+                read_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, message_kind, message_id),
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS tags (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
@@ -180,6 +221,27 @@ def init_db():
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS chapters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS chapter_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chapter_id INTEGER NOT NULL,
+                item_kind TEXT NOT NULL CHECK (item_kind IN ('photo', 'text')),
+                item_id INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (chapter_id, item_kind, item_id),
+                FOREIGN KEY (chapter_id) REFERENCES chapters (id) ON DELETE CASCADE
+            );
             """
         )
         ensure_user_profile_columns(db)
@@ -206,6 +268,30 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS password_reset_tokens_user_used
             ON password_reset_tokens (user_id, used_at)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS text_entry_messages_entry_created
+            ON text_entry_messages (entry_id, created_at)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS message_notification_reads_user_kind
+            ON message_notification_reads (user_id, message_kind)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS chapters_user_created
+            ON chapters (user_id, created_at)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS chapter_items_chapter_position
+            ON chapter_items (chapter_id, position, id)
             """
         )
 
@@ -264,17 +350,25 @@ def parse_iso_date(value, field_name):
         raise ValueError(f"{field_name} must be a valid date.")
 
 
-def user_years():
-    birthday = parse_iso_date(g.user["birthday"], "Birthday")
+def timeline_years_for_user(user):
+    birthday = parse_iso_date(user["birthday"], "Birthday")
     return range(birthday.year, date.today().year + 1)
 
 
-def validate_year_month(year, month):
-    years = user_years()
+def user_years():
+    return timeline_years_for_user(g.user)
+
+
+def validate_year_month_for_user(user, year, month):
+    years = timeline_years_for_user(user)
     if year not in years:
         abort(404)
     if month < 1 or month > 12:
         abort(404)
+
+
+def validate_year_month(year, month):
+    validate_year_month_for_user(g.user, year, month)
 
 
 def normalize_email(value):
@@ -365,6 +459,100 @@ def normalize_month_date(value, field_name, year, month):
     return parsed_date.isoformat()
 
 
+def parse_exif_date_value(value):
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="ignore")
+    normalized_value = str(value or "").strip()
+    match = re.match(r"^(\d{4}):(\d{2}):(\d{2})", normalized_value)
+    if not match:
+        return None
+
+    try:
+        return date(
+            int(match.group(1)),
+            int(match.group(2)),
+            int(match.group(3)),
+        )
+    except ValueError:
+        return None
+
+
+def detect_photo_taken_date(image_data):
+    try:
+        with Image.open(io.BytesIO(image_data)) as image:
+            exif = image.getexif()
+    except Exception:
+        return None
+
+    if not exif:
+        return None
+
+    for tag in EXIF_DATE_TAGS:
+        parsed_date = parse_exif_date_value(exif.get(tag))
+        if parsed_date:
+            return parsed_date
+    return None
+
+
+def photo_date_from_upload(image_data, year, month, manual_date=None):
+    if manual_date:
+        return manual_date, False, False
+
+    detected_date = detect_photo_taken_date(image_data)
+    if detected_date is None:
+        return None, False, False
+    if detected_date.year == year and detected_date.month == month:
+        return detected_date.isoformat(), True, False
+    return None, False, True
+
+
+def uploaded_photo_files():
+    return [
+        image
+        for image in request.files.getlist("photo")
+        if image is not None and image.filename
+    ]
+
+
+def insert_uploaded_photo(db, image, image_data, year, month, photo_date, tags):
+    cursor = db.execute(
+        """
+        INSERT INTO photos (
+            user_id, year, month, original_filename, mime_type, image_data, photo_date
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            g.user["id"],
+            year,
+            month,
+            secure_filename(image.filename),
+            image.mimetype,
+            image_data,
+            photo_date,
+        ),
+    )
+    set_tags_for_item(db, "photo", cursor.lastrowid, tags)
+    return cursor.lastrowid
+
+
+def photo_upload_summary(uploaded_count, auto_dated_count, manual_date_used, skipped_count, ignored_exif_count):
+    noun = "photo" if uploaded_count == 1 else "photos"
+    parts = [f"Uploaded {uploaded_count} {noun}."]
+    if auto_dated_count:
+        auto_noun = "photo" if auto_dated_count == 1 else "photos"
+        parts.append(f"Auto-dated {auto_dated_count} {auto_noun} from image metadata.")
+    elif manual_date_used:
+        parts.append("Applied the selected date to every uploaded photo.")
+    if ignored_exif_count:
+        ignored_noun = "date" if ignored_exif_count == 1 else "dates"
+        parts.append(f"Ignored {ignored_exif_count} detected {ignored_noun} outside this month.")
+    if skipped_count:
+        skipped_noun = "file" if skipped_count == 1 else "files"
+        parts.append(f"Skipped {skipped_count} {skipped_noun}.")
+    return " ".join(parts)
+
+
 def get_owned_photo(photo_id):
     photo = get_db().execute(
         """
@@ -389,6 +577,92 @@ def get_owned_text_entry(entry_id):
     if entry is None:
         abort(404)
     return entry
+
+
+def get_owned_timeline_item(item_kind, item_id):
+    if item_kind == "photo":
+        return get_owned_photo(item_id)
+    if item_kind == "text":
+        return get_owned_text_entry(item_id)
+    abort(404)
+
+
+def message_author_name(row):
+    return user_full_name(row) or row["username"]
+
+
+def message_payload(row):
+    return {
+        "id": row["id"],
+        "body": row["body"],
+        "created_at": row["created_at"],
+        "author_name": message_author_name(row),
+    }
+
+
+def load_messages_for_timeline_item(db, item_kind, item_id):
+    if item_kind == "photo":
+        rows = db.execute(
+            """
+            SELECT m.id, m.body, m.created_at, u.username, u.first_name, u.last_name
+            FROM messages m
+            JOIN users u ON u.id = m.user_id
+            WHERE m.photo_id = ?
+            ORDER BY m.created_at ASC, m.id ASC
+            """,
+            (item_id,),
+        ).fetchall()
+    elif item_kind == "text":
+        rows = db.execute(
+            """
+            SELECT tem.id, tem.body, tem.created_at, u.username, u.first_name, u.last_name
+            FROM text_entry_messages tem
+            JOIN users u ON u.id = tem.user_id
+            WHERE tem.entry_id = ?
+            ORDER BY tem.created_at ASC, tem.id ASC
+            """,
+            (item_id,),
+        ).fetchall()
+    else:
+        abort(404)
+    return [message_payload(row) for row in rows]
+
+
+def create_timeline_item_message(db, item_kind, item_id, body):
+    if item_kind == "photo":
+        cursor = db.execute(
+            """
+            INSERT INTO messages (photo_id, user_id, body)
+            VALUES (?, ?, ?)
+            """,
+            (item_id, g.user["id"], body),
+        )
+        select_message = """
+            SELECT m.id, m.body, m.created_at, u.username, u.first_name, u.last_name
+            FROM messages m
+            JOIN users u ON u.id = m.user_id
+            WHERE m.id = ?
+        """
+    elif item_kind == "text":
+        cursor = db.execute(
+            """
+            INSERT INTO text_entry_messages (entry_id, user_id, body)
+            VALUES (?, ?, ?)
+            """,
+            (item_id, g.user["id"], body),
+        )
+        select_message = """
+            SELECT tem.id, tem.body, tem.created_at, u.username, u.first_name, u.last_name
+            FROM text_entry_messages tem
+            JOIN users u ON u.id = tem.user_id
+            WHERE tem.id = ?
+        """
+    else:
+        abort(404)
+
+    db.commit()
+    row = db.execute(select_message, (cursor.lastrowid,)).fetchone()
+    return message_payload(row)
 
 
 def timeline_item_sort_key(item):
@@ -436,6 +710,21 @@ def tags_to_text(tags):
     return parse_tags(tags)[0]
 
 
+def privacy_label_for_tags(tags):
+    return PRIVACY_AUDIENCE_LABELS.get(tags_to_text(tags), PRIVACY_AUDIENCE_LABELS[DEFAULT_TAG])
+
+
+def privacy_help_for_tags(tags):
+    return PRIVACY_AUDIENCE_HELP.get(tags_to_text(tags), PRIVACY_AUDIENCE_HELP[DEFAULT_TAG])
+
+
+def privacy_payload_for_tags(tags):
+    return {
+        "privacy_label": privacy_label_for_tags(tags),
+        "privacy_help": privacy_help_for_tags(tags),
+    }
+
+
 def get_or_create_tag(db, name):
     db.execute(
         "INSERT OR IGNORE INTO tags (user_id, name) VALUES (?, ?)",
@@ -466,10 +755,30 @@ def set_tags_for_item(db, kind, item_id, tags):
         )
 
 
-def load_tags_for_items(db, kind, item_ids):
+def bulk_set_privacy(db, year, tag, month=None):
+    normalized_tag = normalize_tag_choice(tag)
+    if not normalized_tag:
+        raise ValueError("Choose a valid visibility option.")
+
+    total = 0
+    for table, kind in (("photos", "photo"), ("text_entries", "text")):
+        query = f"SELECT id FROM {table} WHERE user_id = ? AND year = ?"
+        params = [g.user["id"], year]
+        if month is not None:
+            query += " AND month = ?"
+            params.append(month)
+        rows = db.execute(query, tuple(params)).fetchall()
+        for row in rows:
+            set_tags_for_item(db, kind, row["id"], [normalized_tag])
+            total += 1
+    return total
+
+
+def load_tags_for_items(db, kind, item_ids, owner_id=None):
     if not item_ids:
         return {}
 
+    tag_owner_id = owner_id if owner_id is not None else g.user["id"]
     join_table, id_column = tag_join_for_kind(kind)
     placeholders = ",".join(["?"] * len(item_ids))
     rows = db.execute(
@@ -480,7 +789,7 @@ def load_tags_for_items(db, kind, item_ids):
         WHERE t.user_id = ? AND jt.{id_column} IN ({placeholders})
         ORDER BY t.name ASC
         """,
-        (g.user["id"], *item_ids),
+        (tag_owner_id, *item_ids),
     ).fetchall()
     tags_by_item = {item_id: [] for item_id in item_ids}
     for row in rows:
@@ -490,16 +799,55 @@ def load_tags_for_items(db, kind, item_ids):
     return {item_id: parse_tags(tags) for item_id, tags in tags_by_item.items()}
 
 
-def get_tags_for_item(db, kind, item_id):
-    return load_tags_for_items(db, kind, [item_id]).get(item_id, [])
+def get_tags_for_item(db, kind, item_id, owner_id=None):
+    return load_tags_for_items(db, kind, [item_id], owner_id).get(item_id, [])
 
 
 def get_all_tags(db):
     return list(TAG_CHOICES)
 
 
-def get_year_counts(db):
+def tags_visible_to_connection(tags, allowed_tags):
+    if allowed_tags is None:
+        return True
+    return bool(set(parse_tags(tags)) & set(allowed_tags))
+
+
+def visible_tags_for_connection(connected_user):
+    return CONNECTION_VISIBLE_TAGS.get(connected_user["connection_relation"], ("public",))
+
+
+def get_year_counts(db, user_id=None, allowed_tags=None):
+    owner_id = user_id if user_id is not None else g.user["id"]
     counts = {}
+    if allowed_tags is not None:
+        photo_rows = db.execute(
+            """
+            SELECT id, year
+            FROM photos
+            WHERE user_id = ?
+            """,
+            (owner_id,),
+        ).fetchall()
+        photo_tags = load_tags_for_items(db, "photo", [row["id"] for row in photo_rows], owner_id)
+        for row in photo_rows:
+            if tags_visible_to_connection(photo_tags.get(row["id"], []), allowed_tags):
+                counts[row["year"]] = counts.get(row["year"], 0) + 1
+
+        text_rows = db.execute(
+            """
+            SELECT id, year
+            FROM text_entries
+            WHERE user_id = ?
+            """,
+            (owner_id,),
+        ).fetchall()
+        text_tags = load_tags_for_items(db, "text", [row["id"] for row in text_rows], owner_id)
+        for row in text_rows:
+            if tags_visible_to_connection(text_tags.get(row["id"], []), allowed_tags):
+                counts[row["year"]] = counts.get(row["year"], 0) + 1
+        return counts
+
     for table in ("photos", "text_entries"):
         rows = db.execute(
             f"""
@@ -508,15 +856,44 @@ def get_year_counts(db):
             WHERE user_id = ?
             GROUP BY year
             """,
-            (g.user["id"],),
+            (owner_id,),
         ).fetchall()
         for row in rows:
             counts[row["year"]] = counts.get(row["year"], 0) + row["item_count"]
     return counts
 
 
-def get_month_counts(db, year):
+def get_month_counts(db, year, user_id=None, allowed_tags=None):
+    owner_id = user_id if user_id is not None else g.user["id"]
     counts = {}
+    if allowed_tags is not None:
+        photo_rows = db.execute(
+            """
+            SELECT id, month
+            FROM photos
+            WHERE user_id = ? AND year = ?
+            """,
+            (owner_id, year),
+        ).fetchall()
+        photo_tags = load_tags_for_items(db, "photo", [row["id"] for row in photo_rows], owner_id)
+        for row in photo_rows:
+            if tags_visible_to_connection(photo_tags.get(row["id"], []), allowed_tags):
+                counts[row["month"]] = counts.get(row["month"], 0) + 1
+
+        text_rows = db.execute(
+            """
+            SELECT id, month
+            FROM text_entries
+            WHERE user_id = ? AND year = ?
+            """,
+            (owner_id, year),
+        ).fetchall()
+        text_tags = load_tags_for_items(db, "text", [row["id"] for row in text_rows], owner_id)
+        for row in text_rows:
+            if tags_visible_to_connection(text_tags.get(row["id"], []), allowed_tags):
+                counts[row["month"]] = counts.get(row["month"], 0) + 1
+        return counts
+
     for table in ("photos", "text_entries"):
         rows = db.execute(
             f"""
@@ -525,7 +902,7 @@ def get_month_counts(db, year):
             WHERE user_id = ? AND year = ?
             GROUP BY month
             """,
-            (g.user["id"], year),
+            (owner_id, year),
         ).fetchall()
         for row in rows:
             counts[row["month"]] = counts.get(row["month"], 0) + row["item_count"]
@@ -549,6 +926,711 @@ def public_user_payload(user):
     }
 
 
+def short_preview(value, length=110):
+    text = " ".join((value or "").split())
+    if len(text) <= length:
+        return text
+    return f"{text[: length - 1].rstrip()}..."
+
+
+def get_public_photo(photo_id):
+    photo = get_db().execute(
+        """
+        SELECT p.*
+        FROM photos p
+        JOIN photo_tags pt ON pt.photo_id = p.id
+        JOIN tags t ON t.id = pt.tag_id
+                   AND t.user_id = p.user_id
+                   AND t.name = 'public'
+        WHERE p.id = ?
+        """,
+        (photo_id,),
+    ).fetchone()
+    if photo is None:
+        abort(404)
+    return photo
+
+
+def random_public_photos(db, limit=48):
+    rows = db.execute(
+        """
+        SELECT
+            p.id,
+            p.original_filename,
+            p.photo_date,
+            p.created_at,
+            u.username,
+            u.first_name,
+            u.last_name
+        FROM photos p
+        JOIN photo_tags pt ON pt.photo_id = p.id
+        JOIN tags t ON t.id = pt.tag_id
+                   AND t.user_id = p.user_id
+                   AND t.name = 'public'
+        JOIN users u ON u.id = p.user_id
+        ORDER BY RANDOM()
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "image_url": url_for("public_photo_image", photo_id=row["id"]),
+            "title": row["original_filename"] or "Public photo",
+            "owner_name": user_full_name(row) or row["username"],
+            "display_date": row["photo_date"],
+        }
+        for row in rows
+    ]
+
+
+def timeline_item_focus(kind, item_id):
+    return f"{kind}-{item_id}"
+
+
+def timeline_item_link(owner_id, year, month, kind, item_id):
+    focus = timeline_item_focus(kind, item_id)
+    if owner_id == g.user["id"]:
+        return url_for("month_view", year=year, month=month, focus=focus)
+    return url_for(
+        "connection_month_view",
+        connection_id=owner_id,
+        year=year,
+        month=month,
+        focus=focus,
+    )
+
+
+def redirect_back(default_endpoint="timeline", **kwargs):
+    target = request.form.get("next") or request.args.get("next")
+    if target and target.startswith("/") and not target.startswith("//"):
+        return redirect(target)
+    return redirect(url_for(default_endpoint, **kwargs))
+
+
+def get_chapter_options(db):
+    return db.execute(
+        """
+        SELECT id, title
+        FROM chapters
+        WHERE user_id = ?
+        ORDER BY lower(title) ASC, id ASC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+
+
+def get_chapters_with_counts(db):
+    return db.execute(
+        """
+        SELECT
+            c.*,
+            COUNT(ci.id) AS item_count
+        FROM chapters c
+        LEFT JOIN chapter_items ci ON ci.chapter_id = c.id
+        WHERE c.user_id = ?
+        GROUP BY c.id
+        ORDER BY c.created_at DESC, c.id DESC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+
+
+def get_owned_chapter(chapter_id):
+    chapter = get_db().execute(
+        """
+        SELECT *
+        FROM chapters
+        WHERE id = ? AND user_id = ?
+        """,
+        (chapter_id, g.user["id"]),
+    ).fetchone()
+    if chapter is None:
+        abort(404)
+    return chapter
+
+
+def get_owned_chapter_item(db, chapter_id, chapter_item_id):
+    item = db.execute(
+        """
+        SELECT ci.*
+        FROM chapter_items ci
+        JOIN chapters c ON c.id = ci.chapter_id
+        WHERE ci.id = ? AND ci.chapter_id = ? AND c.user_id = ?
+        """,
+        (chapter_item_id, chapter_id, g.user["id"]),
+    ).fetchone()
+    if item is None:
+        abort(404)
+    return item
+
+
+def next_chapter_position(db, chapter_id):
+    row = db.execute(
+        """
+        SELECT COALESCE(MAX(position), 0) + 1 AS next_position
+        FROM chapter_items
+        WHERE chapter_id = ?
+        """,
+        (chapter_id,),
+    ).fetchone()
+    return row["next_position"]
+
+
+def compact_chapter_positions(db, chapter_id):
+    rows = db.execute(
+        """
+        SELECT id
+        FROM chapter_items
+        WHERE chapter_id = ?
+        ORDER BY position ASC, id ASC
+        """,
+        (chapter_id,),
+    ).fetchall()
+    for index, row in enumerate(rows, start=1):
+        db.execute(
+            "UPDATE chapter_items SET position = ? WHERE id = ?",
+            (index, row["id"]),
+        )
+
+
+def move_chapter_item(db, chapter_id, chapter_item_id, direction):
+    rows = db.execute(
+        """
+        SELECT id, position
+        FROM chapter_items
+        WHERE chapter_id = ?
+        ORDER BY position ASC, id ASC
+        """,
+        (chapter_id,),
+    ).fetchall()
+    item_ids = [row["id"] for row in rows]
+    if chapter_item_id not in item_ids:
+        abort(404)
+
+    current_index = item_ids.index(chapter_item_id)
+    if direction == "up":
+        target_index = current_index - 1
+    elif direction == "down":
+        target_index = current_index + 1
+    else:
+        abort(400)
+
+    if target_index < 0 or target_index >= len(rows):
+        return False
+
+    current = rows[current_index]
+    target = rows[target_index]
+    db.execute(
+        "UPDATE chapter_items SET position = ? WHERE id = ?",
+        (target["position"], current["id"]),
+    )
+    db.execute(
+        "UPDATE chapter_items SET position = ? WHERE id = ?",
+        (current["position"], target["id"]),
+    )
+    return True
+
+
+def item_source_label(year, month):
+    return f"{MONTH_NAMES[month - 1]} {year}"
+
+
+def build_chapter_items(db, chapter_id, image_url_builder, message_url_builder=None, can_message=False):
+    refs = db.execute(
+        """
+        SELECT id, item_kind, item_id, position
+        FROM chapter_items
+        WHERE chapter_id = ?
+        ORDER BY position ASC, id ASC
+        """,
+        (chapter_id,),
+    ).fetchall()
+    if not refs:
+        return []
+
+    photo_ids = [row["item_id"] for row in refs if row["item_kind"] == "photo"]
+    text_ids = [row["item_id"] for row in refs if row["item_kind"] == "text"]
+
+    photo_map = {}
+    if photo_ids:
+        placeholders = ",".join(["?"] * len(photo_ids))
+        rows = db.execute(
+            f"""
+            SELECT id, year, month, original_filename, photo_date, created_at
+            FROM photos
+            WHERE user_id = ? AND id IN ({placeholders})
+            """,
+            (g.user["id"], *photo_ids),
+        ).fetchall()
+        photo_map = {row["id"]: row for row in rows}
+
+    text_map = {}
+    if text_ids:
+        placeholders = ",".join(["?"] * len(text_ids))
+        rows = db.execute(
+            f"""
+            SELECT id, year, month, body, entry_date, created_at, updated_at
+            FROM text_entries
+            WHERE user_id = ? AND id IN ({placeholders})
+            """,
+            (g.user["id"], *text_ids),
+        ).fetchall()
+        text_map = {row["id"]: row for row in rows}
+
+    photo_tags = load_tags_for_items(db, "photo", photo_ids, g.user["id"])
+    text_tags = load_tags_for_items(db, "text", text_ids, g.user["id"])
+    items = []
+    for ref in refs:
+        if ref["item_kind"] == "photo":
+            photo = photo_map.get(ref["item_id"])
+            if photo is None:
+                continue
+            tags = photo_tags.get(photo["id"], [])
+            messages_url = message_url_builder("photo", photo["id"]) if message_url_builder else ""
+            items.append(
+                {
+                    "kind": "photo",
+                    "id": photo["id"],
+                    "chapter_item_id": ref["id"],
+                    "position": ref["position"],
+                    "year": photo["year"],
+                    "month": photo["month"],
+                    "display_date": photo["photo_date"],
+                    "date_label": format_timeline_date_label(photo["year"], photo["month"], photo["photo_date"]),
+                    "created_at": photo["created_at"],
+                    "source_label": item_source_label(photo["year"], photo["month"]),
+                    "url": timeline_item_link(g.user["id"], photo["year"], photo["month"], "photo", photo["id"]),
+                    "image_url": image_url_builder(photo["id"]),
+                    "messages": load_messages_for_timeline_item(db, "photo", photo["id"]) if message_url_builder else [],
+                    "messages_url": messages_url,
+                    "can_message": can_message and bool(messages_url),
+                    "tags": tags,
+                    "tags_text": tags_to_text(tags),
+                    **privacy_payload_for_tags(tags),
+                    "title": photo["original_filename"] or "Photo",
+                }
+            )
+        else:
+            entry = text_map.get(ref["item_id"])
+            if entry is None:
+                continue
+            tags = text_tags.get(entry["id"], [])
+            messages_url = message_url_builder("text", entry["id"]) if message_url_builder else ""
+            items.append(
+                {
+                    "kind": "text",
+                    "id": entry["id"],
+                    "chapter_item_id": ref["id"],
+                    "position": ref["position"],
+                    "year": entry["year"],
+                    "month": entry["month"],
+                    "display_date": entry["entry_date"],
+                    "date_label": format_timeline_date_label(entry["year"], entry["month"], entry["entry_date"]),
+                    "created_at": entry["created_at"],
+                    "source_label": item_source_label(entry["year"], entry["month"]),
+                    "url": timeline_item_link(g.user["id"], entry["year"], entry["month"], "text", entry["id"]),
+                    "body": entry["body"],
+                    "messages": load_messages_for_timeline_item(db, "text", entry["id"]) if message_url_builder else [],
+                    "messages_url": messages_url,
+                    "can_message": can_message and bool(messages_url),
+                    "tags": tags,
+                    "tags_text": tags_to_text(tags),
+                    **privacy_payload_for_tags(tags),
+                    "title": "Text entry",
+                }
+            )
+    return items
+
+
+def get_unread_message_notifications(db):
+    photo_rows = db.execute(
+        """
+        SELECT
+            'photo' AS item_kind,
+            m.id AS message_id,
+            m.body,
+            m.created_at,
+            p.id AS item_id,
+            p.year,
+            p.month,
+            p.photo_date AS item_date,
+            p.original_filename AS item_title,
+            p.user_id AS owner_id,
+            u.username,
+            u.first_name,
+            u.last_name
+        FROM messages m
+        JOIN photos p ON p.id = m.photo_id
+        JOIN users u ON u.id = m.user_id
+        LEFT JOIN message_notification_reads mnr
+          ON mnr.user_id = ?
+         AND mnr.message_kind = 'photo'
+         AND mnr.message_id = m.id
+        WHERE p.user_id = ?
+          AND m.user_id <> ?
+          AND mnr.message_id IS NULL
+        """,
+        (g.user["id"], g.user["id"], g.user["id"]),
+    ).fetchall()
+    text_rows = db.execute(
+        """
+        SELECT
+            'text' AS item_kind,
+            tem.id AS message_id,
+            tem.body,
+            tem.created_at,
+            te.id AS item_id,
+            te.year,
+            te.month,
+            te.entry_date AS item_date,
+            'Text entry' AS item_title,
+            te.user_id AS owner_id,
+            u.username,
+            u.first_name,
+            u.last_name
+        FROM text_entry_messages tem
+        JOIN text_entries te ON te.id = tem.entry_id
+        JOIN users u ON u.id = tem.user_id
+        LEFT JOIN message_notification_reads mnr
+          ON mnr.user_id = ?
+         AND mnr.message_kind = 'text'
+         AND mnr.message_id = tem.id
+        WHERE te.user_id = ?
+          AND tem.user_id <> ?
+          AND mnr.message_id IS NULL
+        """,
+        (g.user["id"], g.user["id"], g.user["id"]),
+    ).fetchall()
+
+    notifications = []
+    for row in [*photo_rows, *text_rows]:
+        actor_name = message_author_name(row)
+        item_label = row["item_title"] or "Photo"
+        notifications.append(
+            {
+                "kind": row["item_kind"],
+                "message_id": row["message_id"],
+                "actor_name": actor_name,
+                "body": row["body"],
+                "preview": short_preview(row["body"]),
+                "created_at": row["created_at"],
+                "item_label": item_label,
+                "item_date": row["item_date"] or format_timeline_date_label(row["year"], row["month"], None),
+                "url": timeline_item_link(
+                    row["owner_id"],
+                    row["year"],
+                    row["month"],
+                    row["item_kind"],
+                    row["item_id"],
+                ),
+            }
+        )
+    notifications.sort(key=lambda item: item["created_at"], reverse=True)
+    return notifications
+
+
+def get_unread_message_notification_count(db):
+    photo_row = db.execute(
+        """
+        SELECT COUNT(*) AS unread_count
+        FROM messages m
+        JOIN photos p ON p.id = m.photo_id
+        LEFT JOIN message_notification_reads mnr
+          ON mnr.user_id = ?
+         AND mnr.message_kind = 'photo'
+         AND mnr.message_id = m.id
+        WHERE p.user_id = ?
+          AND m.user_id <> ?
+          AND mnr.message_id IS NULL
+        """,
+        (g.user["id"], g.user["id"], g.user["id"]),
+    ).fetchone()
+    text_row = db.execute(
+        """
+        SELECT COUNT(*) AS unread_count
+        FROM text_entry_messages tem
+        JOIN text_entries te ON te.id = tem.entry_id
+        LEFT JOIN message_notification_reads mnr
+          ON mnr.user_id = ?
+         AND mnr.message_kind = 'text'
+         AND mnr.message_id = tem.id
+        WHERE te.user_id = ?
+          AND tem.user_id <> ?
+          AND mnr.message_id IS NULL
+        """,
+        (g.user["id"], g.user["id"], g.user["id"]),
+    ).fetchone()
+    return (photo_row["unread_count"] if photo_row else 0) + (text_row["unread_count"] if text_row else 0)
+
+
+def mark_message_notifications_read(db, notifications):
+    for notification in notifications:
+        db.execute(
+            """
+            INSERT OR IGNORE INTO message_notification_reads (user_id, message_kind, message_id)
+            VALUES (?, ?, ?)
+            """,
+            (g.user["id"], notification["kind"], notification["message_id"]),
+        )
+    if notifications:
+        db.commit()
+
+
+def get_accepted_connections(db):
+    rows = db.execute(
+        """
+        SELECT
+            u.id AS user_id,
+            cr.relation,
+            u.username,
+            u.first_name,
+            u.last_name,
+            u.email
+        FROM connection_requests cr
+        JOIN users u ON u.id = cr.recipient_id
+        WHERE cr.requester_id = ? AND cr.status = 'accepted'
+        UNION ALL
+        SELECT
+            u.id AS user_id,
+            cr.relation,
+            u.username,
+            u.first_name,
+            u.last_name,
+            u.email
+        FROM connection_requests cr
+        JOIN users u ON u.id = cr.requester_id
+        WHERE cr.recipient_id = ? AND cr.status = 'accepted'
+        ORDER BY username ASC
+        """,
+        (g.user["id"], g.user["id"]),
+    ).fetchall()
+    return [
+        {
+            "id": row["user_id"],
+            "username": row["username"],
+            "full_name": user_full_name(row),
+            "email": row["email"] or "",
+            "relation": row["relation"],
+            "allowed_tags": CONNECTION_VISIBLE_TAGS.get(row["relation"], ("public",)),
+        }
+        for row in rows
+    ]
+
+
+def actor_label(user_id, name):
+    return "You" if user_id == g.user["id"] else name
+
+
+def owner_label(owner_id, name):
+    return "your" if owner_id == g.user["id"] else f"{name}'s"
+
+
+def add_activity_item(feed_items, *, created_at, actor_id, actor_name, owner_id, owner_name, action, item_kind, item_id, year, month, display_date=None, body=None):
+    if item_kind == "photo":
+        target_label = "photo"
+    else:
+        target_label = "text entry"
+    feed_items.append(
+        {
+            "created_at": created_at,
+            "actor_name": actor_label(actor_id, actor_name),
+            "owner_name": owner_name,
+            "summary": action.format(
+                actor=actor_label(actor_id, actor_name),
+                owner=owner_label(owner_id, owner_name),
+                item=target_label,
+            ),
+            "item_kind": item_kind,
+            "item_date": display_date or format_timeline_date_label(year, month, None),
+            "preview": short_preview(body or ""),
+            "url": timeline_item_link(owner_id, year, month, item_kind, item_id),
+        }
+    )
+
+
+def get_activity_feed(db, limit=60):
+    connections = get_accepted_connections(db)
+    connection_by_id = {connection["id"]: connection for connection in connections}
+    visible_owner_ids = [g.user["id"], *connection_by_id.keys()]
+    if not visible_owner_ids:
+        return []
+
+    placeholders = ",".join(["?"] * len(visible_owner_ids))
+    user_rows = db.execute(
+        f"""
+        SELECT id, username, first_name, last_name
+        FROM users
+        WHERE id IN ({placeholders})
+        """,
+        tuple(visible_owner_ids),
+    ).fetchall()
+    user_names = {row["id"]: (user_full_name(row) or row["username"]) for row in user_rows}
+    user_names[g.user["id"]] = user_full_name(g.user) or g.user["username"]
+
+    feed_items = []
+
+    for owner_id in visible_owner_ids:
+        allowed_tags = None if owner_id == g.user["id"] else connection_by_id[owner_id]["allowed_tags"]
+        photo_rows = db.execute(
+            """
+            SELECT id, year, month, original_filename, photo_date, created_at
+            FROM photos
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 40
+            """,
+            (owner_id,),
+        ).fetchall()
+        photo_tags = load_tags_for_items(db, "photo", [row["id"] for row in photo_rows], owner_id)
+        for row in photo_rows:
+            if not tags_visible_to_connection(photo_tags.get(row["id"], []), allowed_tags):
+                continue
+            add_activity_item(
+                feed_items,
+                created_at=row["created_at"],
+                actor_id=owner_id,
+                actor_name=user_names[owner_id],
+                owner_id=owner_id,
+                owner_name=user_names[owner_id],
+                action="{actor} added a {item}",
+                item_kind="photo",
+                item_id=row["id"],
+                year=row["year"],
+                month=row["month"],
+                display_date=row["photo_date"],
+                body=row["original_filename"] or "Photo",
+            )
+
+        text_rows = db.execute(
+            """
+            SELECT id, year, month, body, entry_date, created_at
+            FROM text_entries
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT 40
+            """,
+            (owner_id,),
+        ).fetchall()
+        text_tags = load_tags_for_items(db, "text", [row["id"] for row in text_rows], owner_id)
+        for row in text_rows:
+            if not tags_visible_to_connection(text_tags.get(row["id"], []), allowed_tags):
+                continue
+            add_activity_item(
+                feed_items,
+                created_at=row["created_at"],
+                actor_id=owner_id,
+                actor_name=user_names[owner_id],
+                owner_id=owner_id,
+                owner_name=user_names[owner_id],
+                action="{actor} added a {item}",
+                item_kind="text",
+                item_id=row["id"],
+                year=row["year"],
+                month=row["month"],
+                display_date=row["entry_date"],
+                body=row["body"],
+            )
+
+    message_photo_rows = db.execute(
+        f"""
+        SELECT
+            m.id AS message_id,
+            m.body,
+            m.created_at,
+            m.user_id AS actor_id,
+            p.id AS item_id,
+            p.user_id AS owner_id,
+            p.year,
+            p.month,
+            p.photo_date AS item_date,
+            u.username,
+            u.first_name,
+            u.last_name
+        FROM messages m
+        JOIN photos p ON p.id = m.photo_id
+        JOIN users u ON u.id = m.user_id
+        WHERE p.user_id IN ({placeholders})
+        ORDER BY m.created_at DESC
+        LIMIT 80
+        """,
+        tuple(visible_owner_ids),
+    ).fetchall()
+    for row in message_photo_rows:
+        owner_id = row["owner_id"]
+        allowed_tags = None if owner_id == g.user["id"] else connection_by_id[owner_id]["allowed_tags"]
+        tags = get_tags_for_item(db, "photo", row["item_id"], owner_id)
+        if not tags_visible_to_connection(tags, allowed_tags):
+            continue
+        actor_name = user_full_name(row) or row["username"]
+        add_activity_item(
+            feed_items,
+            created_at=row["created_at"],
+            actor_id=row["actor_id"],
+            actor_name=actor_name,
+            owner_id=owner_id,
+            owner_name=user_names.get(owner_id, "Someone"),
+            action="{actor} commented on {owner} {item}",
+            item_kind="photo",
+            item_id=row["item_id"],
+            year=row["year"],
+            month=row["month"],
+            display_date=row["item_date"],
+            body=row["body"],
+        )
+
+    message_text_rows = db.execute(
+        f"""
+        SELECT
+            tem.id AS message_id,
+            tem.body,
+            tem.created_at,
+            tem.user_id AS actor_id,
+            te.id AS item_id,
+            te.user_id AS owner_id,
+            te.year,
+            te.month,
+            te.entry_date AS item_date,
+            u.username,
+            u.first_name,
+            u.last_name
+        FROM text_entry_messages tem
+        JOIN text_entries te ON te.id = tem.entry_id
+        JOIN users u ON u.id = tem.user_id
+        WHERE te.user_id IN ({placeholders})
+        ORDER BY tem.created_at DESC
+        LIMIT 80
+        """,
+        tuple(visible_owner_ids),
+    ).fetchall()
+    for row in message_text_rows:
+        owner_id = row["owner_id"]
+        allowed_tags = None if owner_id == g.user["id"] else connection_by_id[owner_id]["allowed_tags"]
+        tags = get_tags_for_item(db, "text", row["item_id"], owner_id)
+        if not tags_visible_to_connection(tags, allowed_tags):
+            continue
+        actor_name = user_full_name(row) or row["username"]
+        add_activity_item(
+            feed_items,
+            created_at=row["created_at"],
+            actor_id=row["actor_id"],
+            actor_name=actor_name,
+            owner_id=owner_id,
+            owner_name=user_names.get(owner_id, "Someone"),
+            action="{actor} commented on {owner} {item}",
+            item_kind="text",
+            item_id=row["item_id"],
+            year=row["year"],
+            month=row["month"],
+            display_date=row["item_date"],
+            body=row["body"],
+        )
+
+    feed_items.sort(key=lambda item: item["created_at"], reverse=True)
+    return feed_items[:limit]
+
+
 def get_notification_count(db):
     row = db.execute(
         """
@@ -558,7 +1640,8 @@ def get_notification_count(db):
         """,
         (g.user["id"],),
     ).fetchone()
-    return row["notification_count"] if row is not None else 0
+    connection_count = row["notification_count"] if row is not None else 0
+    return connection_count + get_unread_message_notification_count(db)
 
 
 def get_incoming_connection_requests(db):
@@ -661,6 +1744,504 @@ def current_profile_form_values():
     }
 
 
+def get_connected_user(connection_id):
+    connected_user = get_db().execute(
+        """
+        SELECT u.*, cr.relation AS connection_relation
+        FROM users u
+        JOIN connection_requests cr ON (
+            (cr.requester_id = ? AND cr.recipient_id = u.id)
+            OR (cr.recipient_id = ? AND cr.requester_id = u.id)
+        )
+        WHERE u.id = ?
+          AND cr.status = 'accepted'
+        ORDER BY cr.responded_at DESC, cr.created_at DESC, cr.id DESC
+        LIMIT 1
+        """,
+        (g.user["id"], g.user["id"], connection_id),
+    ).fetchone()
+    if connected_user is None:
+        abort(404)
+    return connected_user
+
+
+def get_connection_photo(connection_id, photo_id):
+    return get_connection_timeline_item(connection_id, "photo", photo_id)
+
+
+def get_connection_timeline_item(connection_id, item_kind, item_id):
+    db = get_db()
+    connected_user = get_connected_user(connection_id)
+    if item_kind == "photo":
+        table = "photos"
+        tag_kind = "photo"
+    elif item_kind == "text":
+        table = "text_entries"
+        tag_kind = "text"
+    else:
+        abort(404)
+
+    item = db.execute(
+        f"""
+        SELECT *
+        FROM {table}
+        WHERE id = ? AND user_id = ?
+        """,
+        (item_id, connected_user["id"]),
+    ).fetchone()
+    if item is None:
+        abort(404)
+
+    tags = get_tags_for_item(db, tag_kind, item_id, connected_user["id"])
+    if not tags_visible_to_connection(tags, visible_tags_for_connection(connected_user)):
+        abort(404)
+    return item
+
+
+def build_month_items(db, owner_id, year, month, image_url_builder, allowed_tags=None):
+    photo_rows = db.execute(
+        """
+        SELECT id, original_filename, photo_date, created_at
+        FROM photos
+        WHERE user_id = ? AND year = ? AND month = ?
+        ORDER BY COALESCE(photo_date, created_at) DESC, id DESC
+        """,
+        (owner_id, year, month),
+    ).fetchall()
+    text_rows = db.execute(
+        """
+        SELECT id, body, entry_date, created_at, updated_at
+        FROM text_entries
+        WHERE user_id = ? AND year = ? AND month = ?
+        ORDER BY COALESCE(entry_date, created_at) DESC, id DESC
+        """,
+        (owner_id, year, month),
+    ).fetchall()
+    photo_tags = load_tags_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
+    text_tags = load_tags_for_items(db, "text", [entry["id"] for entry in text_rows], owner_id)
+    items = []
+    for photo in photo_rows:
+        tags = photo_tags.get(photo["id"], [])
+        if not tags_visible_to_connection(tags, allowed_tags):
+            continue
+        items.append(
+            {
+                "kind": "photo",
+                "id": photo["id"],
+                "year": year,
+                "month": month,
+                "original_filename": photo["original_filename"],
+                "display_date": photo["photo_date"],
+                "created_at": photo["created_at"],
+                "image_url": image_url_builder(photo["id"]),
+                "tags": tags,
+                "tags_text": tags_to_text(tags),
+                **privacy_payload_for_tags(tags),
+            }
+        )
+    for entry in text_rows:
+        tags = text_tags.get(entry["id"], [])
+        if not tags_visible_to_connection(tags, allowed_tags):
+            continue
+        items.append(
+            {
+                "kind": "text",
+                "id": entry["id"],
+                "year": year,
+                "month": month,
+                "body": entry["body"],
+                "display_date": entry["entry_date"],
+                "created_at": entry["created_at"],
+                "tags": tags,
+                "tags_text": tags_to_text(tags),
+                **privacy_payload_for_tags(tags),
+            }
+        )
+    items.sort(key=timeline_item_sort_key)
+    return items
+
+
+def build_timeline_api_items(
+    db,
+    owner_id,
+    image_url_builder,
+    selected_year=None,
+    allowed_tags=None,
+    message_url_builder=None,
+    can_message=False,
+):
+    query_suffix = ""
+    query_params = [owner_id]
+    if selected_year is not None:
+        query_suffix = " AND year = ?"
+        query_params.append(selected_year)
+
+    photo_rows = db.execute(
+        f"""
+        SELECT id, year, month, original_filename, photo_date, created_at
+        FROM photos
+        WHERE user_id = ?{query_suffix}
+        """,
+        query_params,
+    ).fetchall()
+    text_rows = db.execute(
+        f"""
+        SELECT id, year, month, body, entry_date, created_at, updated_at
+        FROM text_entries
+        WHERE user_id = ?{query_suffix}
+        """,
+        query_params,
+    ).fetchall()
+    photo_tags = load_tags_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
+    text_tags = load_tags_for_items(db, "text", [entry["id"] for entry in text_rows], owner_id)
+    visible_photo_rows = [
+        photo
+        for photo in photo_rows
+        if tags_visible_to_connection(photo_tags.get(photo["id"], []), allowed_tags)
+    ]
+    visible_text_rows = [
+        entry
+        for entry in text_rows
+        if tags_visible_to_connection(text_tags.get(entry["id"], []), allowed_tags)
+    ]
+    messages_by_photo = {}
+    photo_ids = [photo["id"] for photo in visible_photo_rows]
+    if photo_ids:
+        placeholders = ",".join(["?"] * len(photo_ids))
+        message_rows = db.execute(
+            f"""
+            SELECT m.photo_id, m.id, m.body, m.created_at, u.username, u.first_name, u.last_name
+            FROM messages m
+            JOIN users u ON u.id = m.user_id
+            WHERE m.photo_id IN ({placeholders})
+            ORDER BY m.created_at ASC, m.id ASC
+            """,
+            tuple(photo_ids),
+        ).fetchall()
+        for message in message_rows:
+            messages_by_photo.setdefault(message["photo_id"], []).append(message_payload(message))
+
+    messages_by_text = {}
+    text_ids = [entry["id"] for entry in visible_text_rows]
+    if text_ids:
+        placeholders = ",".join(["?"] * len(text_ids))
+        message_rows = db.execute(
+            f"""
+            SELECT tem.entry_id, tem.id, tem.body, tem.created_at, u.username, u.first_name, u.last_name
+            FROM text_entry_messages tem
+            JOIN users u ON u.id = tem.user_id
+            WHERE tem.entry_id IN ({placeholders})
+            ORDER BY tem.created_at ASC, tem.id ASC
+            """,
+            tuple(text_ids),
+        ).fetchall()
+        for message in message_rows:
+            messages_by_text.setdefault(message["entry_id"], []).append(message_payload(message))
+
+    items = []
+    for photo in visible_photo_rows:
+        display_date = photo["photo_date"]
+        tags = photo_tags.get(photo["id"], [])
+        messages_url = message_url_builder("photo", photo["id"]) if message_url_builder else ""
+        items.append(
+            {
+                "kind": "photo",
+                "id": photo["id"],
+                "year": photo["year"],
+                "month": photo["month"],
+                "display_date": display_date,
+                "date_label": format_timeline_date_label(photo["year"], photo["month"], display_date),
+                "created_at": photo["created_at"],
+                "image_url": image_url_builder(photo["id"]),
+                "messages": messages_by_photo.get(photo["id"], []),
+                "messages_url": messages_url,
+                "can_message": can_message and bool(messages_url),
+                "tags": tags,
+                "tags_text": tags_to_text(tags),
+                **privacy_payload_for_tags(tags),
+                "title": photo["original_filename"] or "Photo",
+            }
+        )
+
+    for entry in visible_text_rows:
+        display_date = entry["entry_date"]
+        tags = text_tags.get(entry["id"], [])
+        messages_url = message_url_builder("text", entry["id"]) if message_url_builder else ""
+        items.append(
+            {
+                "kind": "text",
+                "id": entry["id"],
+                "year": entry["year"],
+                "month": entry["month"],
+                "display_date": display_date,
+                "date_label": format_timeline_date_label(entry["year"], entry["month"], display_date),
+                "created_at": entry["created_at"],
+                "body": entry["body"],
+                "messages": messages_by_text.get(entry["id"], []),
+                "messages_url": messages_url,
+                "can_message": can_message and bool(messages_url),
+                "tags": tags,
+                "tags_text": tags_to_text(tags),
+                **privacy_payload_for_tags(tags),
+                "title": "Text entry",
+            }
+        )
+
+    items.sort(key=timeline_item_sort_key)
+    return items
+
+
+def build_pdf_export_items(db, owner_id, year, month=None):
+    photo_query = """
+        SELECT id, year, month, original_filename, mime_type, image_data, photo_date, created_at
+        FROM photos
+        WHERE user_id = ? AND year = ?
+    """
+    text_query = """
+        SELECT id, year, month, body, entry_date, created_at, updated_at
+        FROM text_entries
+        WHERE user_id = ? AND year = ?
+    """
+    params = [owner_id, year]
+    if month is not None:
+        photo_query += " AND month = ?"
+        text_query += " AND month = ?"
+        params.append(month)
+
+    photo_rows = db.execute(photo_query, tuple(params)).fetchall()
+    text_rows = db.execute(text_query, tuple(params)).fetchall()
+    photo_tags = load_tags_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
+    text_tags = load_tags_for_items(db, "text", [entry["id"] for entry in text_rows], owner_id)
+
+    items = []
+    for photo in photo_rows:
+        tags = photo_tags.get(photo["id"], [])
+        items.append(
+            {
+                "kind": "photo",
+                "id": photo["id"],
+                "year": photo["year"],
+                "month": photo["month"],
+                "title": photo["original_filename"] or "Photo",
+                "display_date": photo["photo_date"],
+                "date_label": format_timeline_date_label(photo["year"], photo["month"], photo["photo_date"]),
+                "created_at": photo["created_at"],
+                "mime_type": photo["mime_type"],
+                "image_data": photo["image_data"],
+                "messages": load_messages_for_timeline_item(db, "photo", photo["id"]),
+                "tags": tags,
+                "tags_text": tags_to_text(tags),
+                **privacy_payload_for_tags(tags),
+            }
+        )
+
+    for entry in text_rows:
+        tags = text_tags.get(entry["id"], [])
+        items.append(
+            {
+                "kind": "text",
+                "id": entry["id"],
+                "year": entry["year"],
+                "month": entry["month"],
+                "title": "Text entry",
+                "display_date": entry["entry_date"],
+                "date_label": format_timeline_date_label(entry["year"], entry["month"], entry["entry_date"]),
+                "created_at": entry["created_at"],
+                "body": entry["body"],
+                "messages": load_messages_for_timeline_item(db, "text", entry["id"]),
+                "tags": tags,
+                "tags_text": tags_to_text(tags),
+                **privacy_payload_for_tags(tags),
+            }
+        )
+
+    items.sort(key=timeline_item_sort_key)
+    return items
+
+
+def pdf_paragraph(text):
+    return escape(str(text or "")).replace("\n", "<br/>")
+
+
+def pdf_image_flowable(image_data, max_width, max_height):
+    from reportlab.lib.utils import ImageReader
+    from reportlab.platypus import Image
+
+    image_buffer = io.BytesIO(image_data)
+    reader = ImageReader(image_buffer)
+    width, height = reader.getSize()
+    if width <= 0 or height <= 0:
+        raise ValueError("Invalid image dimensions.")
+
+    scale = min(max_width / width, max_height / height)
+    image_buffer.seek(0)
+    image = Image(image_buffer)
+    image.drawWidth = width * scale
+    image.drawHeight = height * scale
+    return image
+
+
+def render_timeline_pdf(title, subtitle, items):
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import inch
+    from reportlab.platypus import (
+        HRFlowable,
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+    )
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        rightMargin=0.62 * inch,
+        leftMargin=0.62 * inch,
+        topMargin=0.72 * inch,
+        bottomMargin=0.68 * inch,
+        title=title,
+        author="EverTimeline",
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "EverTitle",
+        parent=styles["Title"],
+        fontName="Helvetica-Bold",
+        fontSize=24,
+        leading=29,
+        textColor=colors.HexColor("#202522"),
+        spaceAfter=8,
+    )
+    subtitle_style = ParagraphStyle(
+        "EverSubtitle",
+        parent=styles["Normal"],
+        fontSize=10,
+        leading=14,
+        textColor=colors.HexColor("#68706a"),
+        spaceAfter=16,
+    )
+    month_style = ParagraphStyle(
+        "EverMonth",
+        parent=styles["Heading2"],
+        fontName="Helvetica-Bold",
+        fontSize=15,
+        leading=19,
+        textColor=colors.HexColor("#166d67"),
+        spaceBefore=12,
+        spaceAfter=8,
+    )
+    item_title_style = ParagraphStyle(
+        "EverItemTitle",
+        parent=styles["Heading3"],
+        fontName="Helvetica-Bold",
+        fontSize=12,
+        leading=15,
+        textColor=colors.HexColor("#202522"),
+        spaceBefore=8,
+        spaceAfter=3,
+    )
+    meta_style = ParagraphStyle(
+        "EverMeta",
+        parent=styles["Normal"],
+        fontSize=8.5,
+        leading=11,
+        textColor=colors.HexColor("#68706a"),
+        spaceAfter=7,
+    )
+    body_style = ParagraphStyle(
+        "EverBody",
+        parent=styles["BodyText"],
+        fontSize=10.2,
+        leading=14.5,
+        textColor=colors.HexColor("#202522"),
+        spaceAfter=8,
+    )
+    message_style = ParagraphStyle(
+        "EverMessage",
+        parent=styles["BodyText"],
+        leftIndent=12,
+        fontSize=8.8,
+        leading=12,
+        textColor=colors.HexColor("#202522"),
+        spaceAfter=4,
+    )
+    empty_style = ParagraphStyle(
+        "EverEmpty",
+        parent=styles["BodyText"],
+        fontSize=11,
+        leading=15,
+        textColor=colors.HexColor("#68706a"),
+    )
+
+    story = [
+        Paragraph(pdf_paragraph(title), title_style),
+        Paragraph(pdf_paragraph(subtitle), subtitle_style),
+    ]
+
+    if not items:
+        story.append(Paragraph("No timeline items found for this export.", empty_style))
+
+    current_month = None
+    max_image_width = 5.5 * inch
+    max_image_height = 3.45 * inch
+    for item in items:
+        month_key = (item["year"], item["month"])
+        if month_key != current_month:
+            if current_month is not None:
+                story.append(Spacer(1, 6))
+            current_month = month_key
+            story.append(Paragraph(f"{MONTH_NAMES[item['month'] - 1]} {item['year']}", month_style))
+
+        item_title = item["title"] if item["kind"] == "photo" else "Text entry"
+        meta = f"{item['date_label']} | Visible: {item['privacy_label']}"
+        story.append(Paragraph(pdf_paragraph(item_title), item_title_style))
+        story.append(Paragraph(pdf_paragraph(meta), meta_style))
+
+        if item["kind"] == "photo":
+            try:
+                story.append(pdf_image_flowable(item["image_data"], max_image_width, max_image_height))
+                story.append(Spacer(1, 8))
+            except Exception:
+                story.append(Paragraph("Photo could not be rendered in this PDF.", body_style))
+        else:
+            story.append(Paragraph(pdf_paragraph(item["body"]), body_style))
+
+        if item["messages"]:
+            story.append(Paragraph("Messages", meta_style))
+            for message in item["messages"]:
+                message_text = f"{message['author_name']} ({message['created_at']}): {message['body']}"
+                story.append(Paragraph(pdf_paragraph(message_text), message_style))
+
+        story.append(HRFlowable(width="100%", thickness=0.45, color=colors.HexColor("#d9ded8")))
+        story.append(Spacer(1, 8))
+
+    def draw_footer(canvas, document):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 8)
+        canvas.setFillColor(colors.HexColor("#68706a"))
+        canvas.drawString(document.leftMargin, 0.38 * inch, "EverTimeline")
+        canvas.drawRightString(
+            letter[0] - document.rightMargin,
+            0.38 * inch,
+            f"Page {document.page}",
+        )
+        canvas.restoreState()
+
+    doc.build(story, onFirstPage=draw_footer, onLaterPages=draw_footer)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def pdf_export_response(title, subtitle, filename, items):
+    pdf_bytes = render_timeline_pdf(title, subtitle, items)
+    response = Response(pdf_bytes, mimetype="application/pdf")
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response.headers["Content-Length"] = str(len(pdf_bytes))
+    return response
+
+
 @app.route("/")
 def index():
     if g.user is None:
@@ -668,6 +2249,12 @@ def index():
     if not g.user["birthday"]:
         return redirect(url_for("birthday"))
     return redirect(url_for("timeline"))
+
+
+@app.route("/home")
+@birthday_required
+def home():
+    return render_template("home.html", photos=random_public_photos(get_db()))
 
 
 @app.route("/register", methods=("GET", "POST"))
@@ -922,6 +2509,43 @@ def year_view(year):
     )
 
 
+@app.route("/year/<int:year>/export.pdf")
+@birthday_required
+def export_year_pdf(year):
+    validate_year_month(year, 1)
+    db = get_db()
+    title = f"EverTimeline {year}"
+    owner = user_full_name(g.user) or g.user["username"]
+    subtitle = f"Owner: {owner} | Exported: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    items = build_pdf_export_items(db, g.user["id"], year)
+    return pdf_export_response(
+        title,
+        subtitle,
+        f"evertimeline-{year}.pdf",
+        items,
+    )
+
+
+@app.route("/year/<int:year>/privacy", methods=("POST",))
+@birthday_required
+def bulk_year_privacy(year):
+    validate_year_month(year, 1)
+    tag = request.form.get("tags", "")
+    db = get_db()
+    try:
+        total = bulk_set_privacy(db, year, tag)
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("year_view", year=year))
+
+    db.commit()
+    if total:
+        flash(f"Updated visibility for {total} items in {year}.", "success")
+    else:
+        flash(f"No items found in {year}.", "error")
+    return redirect(url_for("year_view", year=year))
+
+
 @app.route("/year/<int:year>/<int:month>", methods=("GET", "POST"))
 @birthday_required
 def month_view(year, month):
@@ -931,20 +2555,16 @@ def month_view(year, month):
     month_end = date(year, month, calendar.monthrange(year, month)[1])
 
     if request.method == "POST":
-        image = request.files.get("photo")
+        images = uploaded_photo_files()
         photo_date = request.form.get("photo_date", "")
         tags = parse_tags(request.form.get("tags", ""))
 
-        if image is None or image.filename == "":
-            flash("Choose an image to upload.", "error")
-            return redirect(url_for("month_view", year=year, month=month))
-
-        if image.mimetype not in ALLOWED_IMAGE_MIMES:
-            flash("Upload a JPG, PNG, GIF, or WebP image.", "error")
+        if not images:
+            flash("Choose at least one image to upload.", "error")
             return redirect(url_for("month_view", year=year, month=month))
 
         try:
-            normalized_photo_date = normalize_month_date(
+            manual_photo_date = normalize_month_date(
                 photo_date,
                 "Photo date",
                 year,
@@ -954,85 +2574,67 @@ def month_view(year, month):
             flash(str(exc), "error")
             return redirect(url_for("month_view", year=year, month=month))
 
-        image_data = image.read()
-        if not image_data:
-            flash("The selected image is empty.", "error")
-            return redirect(url_for("month_view", year=year, month=month))
+        uploaded_count = 0
+        auto_dated_count = 0
+        ignored_exif_count = 0
+        skipped_count = 0
 
-        cursor = db.execute(
-            """
-            INSERT INTO photos (
-                user_id, year, month, original_filename, mime_type, image_data, photo_date
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                g.user["id"],
+        for image in images:
+            if image.mimetype not in ALLOWED_IMAGE_MIMES:
+                skipped_count += 1
+                continue
+
+            image_data = image.read()
+            if not image_data:
+                skipped_count += 1
+                continue
+
+            normalized_photo_date, used_auto_date, ignored_exif_date = photo_date_from_upload(
+                image_data,
                 year,
                 month,
-                secure_filename(image.filename),
-                image.mimetype,
+                manual_photo_date,
+            )
+            insert_uploaded_photo(
+                db,
+                image,
                 image_data,
+                year,
+                month,
                 normalized_photo_date,
-            ),
-        )
-        set_tags_for_item(db, "photo", cursor.lastrowid, tags)
+                tags,
+            )
+            uploaded_count += 1
+            if used_auto_date:
+                auto_dated_count += 1
+            if ignored_exif_date:
+                ignored_exif_count += 1
+
+        if uploaded_count == 0:
+            db.rollback()
+            flash("No photos uploaded. Choose JPG, PNG, GIF, or WebP images.", "error")
+            return redirect(url_for("month_view", year=year, month=month))
+
         db.commit()
-        flash("Photo uploaded.", "success")
+        flash(
+            photo_upload_summary(
+                uploaded_count,
+                auto_dated_count,
+                bool(manual_photo_date),
+                skipped_count,
+                ignored_exif_count,
+            ),
+            "success",
+        )
         return redirect(url_for("month_view", year=year, month=month))
 
-    photo_rows = db.execute(
-        """
-        SELECT id, original_filename, photo_date, created_at
-        FROM photos
-        WHERE user_id = ? AND year = ? AND month = ?
-        ORDER BY COALESCE(photo_date, created_at) DESC, id DESC
-        """,
-        (g.user["id"], year, month),
-    ).fetchall()
-    text_rows = db.execute(
-        """
-        SELECT id, body, entry_date, created_at, updated_at
-        FROM text_entries
-        WHERE user_id = ? AND year = ? AND month = ?
-        ORDER BY COALESCE(entry_date, created_at) DESC, id DESC
-        """,
-        (g.user["id"], year, month),
-    ).fetchall()
-    photo_tags = load_tags_for_items(db, "photo", [photo["id"] for photo in photo_rows])
-    text_tags = load_tags_for_items(db, "text", [entry["id"] for entry in text_rows])
-    items = []
-    for photo in photo_rows:
-        tags = photo_tags.get(photo["id"], [])
-        items.append(
-            {
-                "kind": "photo",
-                "id": photo["id"],
-                "year": year,
-                "month": month,
-                "original_filename": photo["original_filename"],
-                "display_date": photo["photo_date"],
-                "created_at": photo["created_at"],
-                "tags": tags,
-                "tags_text": tags_to_text(tags),
-            }
-        )
-    for entry in text_rows:
-        tags = text_tags.get(entry["id"], [])
-        items.append(
-            {
-                "kind": "text",
-                "id": entry["id"],
-                "year": year,
-                "month": month,
-                "body": entry["body"],
-                "display_date": entry["entry_date"],
-                "created_at": entry["created_at"],
-                "tags": tags,
-                "tags_text": tags_to_text(tags),
-            }
-        )
-    items.sort(key=timeline_item_sort_key)
+    items = build_month_items(
+        db,
+        g.user["id"],
+        year,
+        month,
+        lambda photo_id: url_for("photo_image", photo_id=photo_id),
+    )
     return render_template(
         "month.html",
         year=year,
@@ -1041,7 +2643,47 @@ def month_view(year, month):
         month_start=month_start.isoformat(),
         month_end=month_end.isoformat(),
         items=items,
+        chapters=get_chapter_options(db),
     )
+
+
+@app.route("/year/<int:year>/<int:month>/export.pdf")
+@birthday_required
+def export_month_pdf(year, month):
+    validate_year_month(year, month)
+    db = get_db()
+    month_name = MONTH_NAMES[month - 1]
+    title = f"EverTimeline {month_name} {year}"
+    owner = user_full_name(g.user) or g.user["username"]
+    subtitle = f"Owner: {owner} | Exported: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    items = build_pdf_export_items(db, g.user["id"], year, month)
+    return pdf_export_response(
+        title,
+        subtitle,
+        f"evertimeline-{year}-{month:02d}.pdf",
+        items,
+    )
+
+
+@app.route("/year/<int:year>/<int:month>/privacy", methods=("POST",))
+@birthday_required
+def bulk_month_privacy(year, month):
+    validate_year_month(year, month)
+    tag = request.form.get("tags", "")
+    db = get_db()
+    try:
+        total = bulk_set_privacy(db, year, tag, month)
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("month_view", year=year, month=month))
+
+    db.commit()
+    month_name = MONTH_NAMES[month - 1]
+    if total:
+        flash(f"Updated visibility for {total} items in {month_name} {year}.", "success")
+    else:
+        flash(f"No items found in {month_name} {year}.", "error")
+    return redirect(url_for("month_view", year=year, month=month))
 
 
 @app.route("/year/<int:year>/<int:month>/text", methods=("POST",))
@@ -1086,103 +2728,303 @@ def create_text_entry(year, month):
 def timeline_items():
     db = get_db()
     selected_year = request.args.get("year", type=int)
-    query_suffix = ""
-    query_params = [g.user["id"]]
     if selected_year is not None:
         if selected_year not in user_years():
             abort(404)
-        query_suffix = " AND year = ?"
-        query_params.append(selected_year)
+    return jsonify(
+        build_timeline_api_items(
+            db,
+            g.user["id"],
+            lambda photo_id: url_for("photo_image", photo_id=photo_id),
+            selected_year,
+            message_url_builder=lambda item_kind, item_id: url_for(
+                "timeline_item_messages",
+                item_kind=item_kind,
+                item_id=item_id,
+            ),
+            can_message=True,
+        )
+    )
 
-    photo_rows = db.execute(
-        f"""
-        SELECT id, year, month, original_filename, photo_date, created_at
-        FROM photos
-        WHERE user_id = ?{query_suffix}
-        """,
-        query_params,
-    ).fetchall()
-    text_rows = db.execute(
-        f"""
-        SELECT id, year, month, body, entry_date, created_at, updated_at
-        FROM text_entries
-        WHERE user_id = ?{query_suffix}
-        """,
-        query_params,
-    ).fetchall()
-    photo_tags = load_tags_for_items(db, "photo", [photo["id"] for photo in photo_rows])
-    text_tags = load_tags_for_items(db, "text", [entry["id"] for entry in text_rows])
-    messages_by_photo = {}
-    photo_ids = [photo["id"] for photo in photo_rows]
-    if photo_ids:
-        placeholders = ",".join(["?"] * len(photo_ids))
-        message_rows = db.execute(
-            f"""
-            SELECT photo_id, body, created_at
-            FROM messages
-            WHERE user_id = ? AND photo_id IN ({placeholders})
-            ORDER BY created_at ASC, id ASC
+
+@app.route("/chapters", methods=("GET", "POST"))
+@birthday_required
+def chapters():
+    db = get_db()
+    if request.method == "POST":
+        title = request.form.get("title", "").strip()
+        description = request.form.get("description", "").strip()
+        if not title:
+            flash("Chapter title is required.", "error")
+            return redirect(url_for("chapters"))
+
+        cursor = db.execute(
+            """
+            INSERT INTO chapters (user_id, title, description)
+            VALUES (?, ?, ?)
             """,
-            (g.user["id"], *photo_ids),
-        ).fetchall()
-        for message in message_rows:
-            messages_by_photo.setdefault(message["photo_id"], []).append(
-                {
-                    "body": message["body"],
-                    "created_at": message["created_at"],
-                }
-            )
-
-    items = []
-    for photo in photo_rows:
-        display_date = photo["photo_date"]
-        tags = photo_tags.get(photo["id"], [])
-        items.append(
-            {
-                "kind": "photo",
-                "id": photo["id"],
-                "year": photo["year"],
-                "month": photo["month"],
-                "display_date": display_date,
-                "date_label": format_timeline_date_label(
-                    photo["year"],
-                    photo["month"],
-                    display_date,
-                ),
-                "created_at": photo["created_at"],
-                "image_url": url_for("photo_image", photo_id=photo["id"]),
-                "messages": messages_by_photo.get(photo["id"], []),
-                "tags": tags,
-                "tags_text": tags_to_text(tags),
-                "title": photo["original_filename"] or "Photo",
-            }
+            (g.user["id"], title, description or None),
         )
+        db.commit()
+        flash("Chapter created.", "success")
+        return redirect(url_for("chapter_detail", chapter_id=cursor.lastrowid))
 
-    for entry in text_rows:
-        display_date = entry["entry_date"]
-        tags = text_tags.get(entry["id"], [])
-        items.append(
-            {
-                "kind": "text",
-                "id": entry["id"],
-                "year": entry["year"],
-                "month": entry["month"],
-                "display_date": display_date,
-                "date_label": format_timeline_date_label(
-                    entry["year"],
-                    entry["month"],
-                    display_date,
-                ),
-                "created_at": entry["created_at"],
-                "body": entry["body"],
-                "tags": tags,
-                "tags_text": tags_to_text(tags),
-                "title": "Text entry",
-            }
+    return render_template("chapters.html", chapters=get_chapters_with_counts(db))
+
+
+@app.route("/chapters/<int:chapter_id>")
+@birthday_required
+def chapter_detail(chapter_id):
+    db = get_db()
+    chapter = get_owned_chapter(chapter_id)
+    items = build_chapter_items(
+        db,
+        chapter_id,
+        lambda photo_id: url_for("photo_image", photo_id=photo_id),
+    )
+    return render_template("chapter.html", chapter=chapter, items=items)
+
+
+@app.route("/chapters/<int:chapter_id>/delete", methods=("POST",))
+@birthday_required
+def delete_chapter(chapter_id):
+    get_owned_chapter(chapter_id)
+    db = get_db()
+    db.execute(
+        "DELETE FROM chapters WHERE id = ? AND user_id = ?",
+        (chapter_id, g.user["id"]),
+    )
+    db.commit()
+    flash("Chapter deleted.", "success")
+    return redirect(url_for("chapters"))
+
+
+@app.route("/chapters/items", methods=("POST",))
+@birthday_required
+def add_chapter_item():
+    db = get_db()
+    chapter_id = request.form.get("chapter_id", type=int)
+    item_kind = request.form.get("item_kind", "")
+    item_id = request.form.get("item_id", type=int)
+    if chapter_id is None or item_id is None or item_kind not in ("photo", "text"):
+        flash("Choose a chapter and item.", "error")
+        return redirect_back()
+
+    get_owned_chapter(chapter_id)
+    item = get_owned_timeline_item(item_kind, item_id)
+    existing = db.execute(
+        """
+        SELECT id
+        FROM chapter_items
+        WHERE chapter_id = ? AND item_kind = ? AND item_id = ?
+        """,
+        (chapter_id, item_kind, item_id),
+    ).fetchone()
+    if existing is not None:
+        flash("That item is already in this chapter.", "error")
+        return redirect_back("chapter_detail", chapter_id=chapter_id)
+
+    db.execute(
+        """
+        INSERT INTO chapter_items (chapter_id, item_kind, item_id, position)
+        VALUES (?, ?, ?, ?)
+        """,
+        (chapter_id, item_kind, item["id"], next_chapter_position(db, chapter_id)),
+    )
+    db.execute(
+        "UPDATE chapters SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (chapter_id,),
+    )
+    db.commit()
+    flash("Added item to chapter.", "success")
+    return redirect_back("chapter_detail", chapter_id=chapter_id)
+
+
+@app.route("/chapters/<int:chapter_id>/items/<int:chapter_item_id>/remove", methods=("POST",))
+@birthday_required
+def remove_chapter_item(chapter_id, chapter_item_id):
+    db = get_db()
+    get_owned_chapter(chapter_id)
+    get_owned_chapter_item(db, chapter_id, chapter_item_id)
+    db.execute(
+        "DELETE FROM chapter_items WHERE id = ? AND chapter_id = ?",
+        (chapter_item_id, chapter_id),
+    )
+    compact_chapter_positions(db, chapter_id)
+    db.execute(
+        "UPDATE chapters SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (chapter_id,),
+    )
+    db.commit()
+    flash("Removed item from chapter.", "success")
+    return redirect(url_for("chapter_detail", chapter_id=chapter_id))
+
+
+@app.route("/chapters/<int:chapter_id>/items/<int:chapter_item_id>/move", methods=("POST",))
+@birthday_required
+def reorder_chapter_item(chapter_id, chapter_item_id):
+    db = get_db()
+    get_owned_chapter(chapter_id)
+    get_owned_chapter_item(db, chapter_id, chapter_item_id)
+    direction = request.form.get("direction", "")
+    if move_chapter_item(db, chapter_id, chapter_item_id, direction):
+        db.execute(
+            "UPDATE chapters SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (chapter_id,),
         )
+        db.commit()
+    return redirect(url_for("chapter_detail", chapter_id=chapter_id))
 
-    items.sort(key=timeline_item_sort_key)
-    return jsonify(items)
+
+@app.route("/api/chapters/<int:chapter_id>/items")
+@birthday_required
+def chapter_items(chapter_id):
+    db = get_db()
+    get_owned_chapter(chapter_id)
+    return jsonify(
+        build_chapter_items(
+            db,
+            chapter_id,
+            lambda photo_id: url_for("photo_image", photo_id=photo_id),
+            message_url_builder=lambda item_kind, item_id: url_for(
+                "timeline_item_messages",
+                item_kind=item_kind,
+                item_id=item_id,
+            ),
+            can_message=True,
+        )
+    )
+
+
+@app.route("/connections/<int:connection_id>/timeline")
+@login_required
+def connection_timeline(connection_id):
+    db = get_db()
+    connected_user = get_connected_user(connection_id)
+    allowed_tags = visible_tags_for_connection(connected_user)
+    years = list(timeline_years_for_user(connected_user))
+    year_counts = get_year_counts(db, connected_user["id"], allowed_tags)
+    return render_template(
+        "connection_timeline.html",
+        connection=public_user_payload(connected_user),
+        years=years,
+        year_counts=year_counts,
+    )
+
+
+@app.route("/connections/<int:connection_id>/year/<int:year>")
+@login_required
+def connection_year_view(connection_id, year):
+    db = get_db()
+    connected_user = get_connected_user(connection_id)
+    allowed_tags = visible_tags_for_connection(connected_user)
+    validate_year_month_for_user(connected_user, year, 1)
+    month_counts = get_month_counts(db, year, connected_user["id"], allowed_tags)
+    months = [(index + 1, month) for index, month in enumerate(MONTH_NAMES)]
+    return render_template(
+        "connection_months.html",
+        connection=public_user_payload(connected_user),
+        year=year,
+        months=months,
+        month_counts=month_counts,
+    )
+
+
+@app.route("/connections/<int:connection_id>/year/<int:year>/<int:month>")
+@login_required
+def connection_month_view(connection_id, year, month):
+    db = get_db()
+    connected_user = get_connected_user(connection_id)
+    allowed_tags = visible_tags_for_connection(connected_user)
+    validate_year_month_for_user(connected_user, year, month)
+    month_start = date(year, month, 1)
+    month_end = date(year, month, calendar.monthrange(year, month)[1])
+    items = build_month_items(
+        db,
+        connected_user["id"],
+        year,
+        month,
+        lambda photo_id: url_for(
+            "connection_photo_image",
+            connection_id=connected_user["id"],
+            photo_id=photo_id,
+        ),
+        allowed_tags,
+    )
+    return render_template(
+        "connection_month.html",
+        connection=public_user_payload(connected_user),
+        year=year,
+        month=month,
+        month_name=MONTH_NAMES[month - 1],
+        month_start=month_start.isoformat(),
+        month_end=month_end.isoformat(),
+        items=items,
+    )
+
+
+@app.route("/connections/<int:connection_id>/api/timeline-items")
+@login_required
+def connection_timeline_items(connection_id):
+    db = get_db()
+    connected_user = get_connected_user(connection_id)
+    allowed_tags = visible_tags_for_connection(connected_user)
+    selected_year = request.args.get("year", type=int)
+    if selected_year is not None:
+        if selected_year not in timeline_years_for_user(connected_user):
+            abort(404)
+    return jsonify(
+        build_timeline_api_items(
+            db,
+            connected_user["id"],
+            lambda photo_id: url_for(
+                "connection_photo_image",
+                connection_id=connected_user["id"],
+                photo_id=photo_id,
+            ),
+            selected_year,
+            allowed_tags,
+            message_url_builder=lambda item_kind, item_id: url_for(
+                "connection_timeline_item_messages",
+                connection_id=connected_user["id"],
+                item_kind=item_kind,
+                item_id=item_id,
+            ),
+            can_message=True,
+        )
+    )
+
+
+@app.route("/connections/<int:connection_id>/photo/<int:photo_id>/image")
+@login_required
+def connection_photo_image(connection_id, photo_id):
+    photo = get_connection_photo(connection_id, photo_id)
+    return Response(photo["image_data"], mimetype=photo["mime_type"])
+
+
+@app.route("/connections/<int:connection_id>/api/photo/<int:photo_id>/messages")
+@login_required
+def connection_photo_messages(connection_id, photo_id):
+    get_connection_photo(connection_id, photo_id)
+    return jsonify(load_messages_for_timeline_item(get_db(), "photo", photo_id))
+
+
+@app.route("/connections/<int:connection_id>/api/timeline-item/<item_kind>/<int:item_id>/messages", methods=("GET", "POST"))
+@login_required
+def connection_timeline_item_messages(connection_id, item_kind, item_id):
+    get_connection_timeline_item(connection_id, item_kind, item_id)
+    db = get_db()
+
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or request.form
+        body = (payload.get("body") or "").strip()
+        if not body:
+            return jsonify({"error": "Message cannot be empty."}), 400
+
+        message = create_timeline_item_message(db, item_kind, item_id, body)
+        return jsonify(message), 201
+
+    return jsonify(load_messages_for_timeline_item(db, item_kind, item_id))
 
 
 @app.route("/search")
@@ -1202,42 +3044,10 @@ def search():
 @login_required
 def connections():
     db = get_db()
-    connections_rows = db.execute(
-        """
-        SELECT
-            cr.relation,
-            u.username,
-            u.first_name,
-            u.last_name,
-            u.email
-        FROM connection_requests cr
-        JOIN users u ON u.id = cr.recipient_id
-        WHERE cr.requester_id = ? AND cr.status = 'accepted'
-        UNION ALL
-        SELECT
-            cr.relation,
-            u.username,
-            u.first_name,
-            u.last_name,
-            u.email
-        FROM connection_requests cr
-        JOIN users u ON u.id = cr.requester_id
-        WHERE cr.recipient_id = ? AND cr.status = 'accepted'
-        ORDER BY username ASC
-        """,
-        (g.user["id"], g.user["id"]),
-    ).fetchall()
     return render_template(
         "connections.html",
         incoming_requests=get_incoming_connection_requests(db),
-        connections=[
-            {
-                "username": row["username"],
-                "full_name": user_full_name(row),
-                "email": row["email"] or "",
-            }
-            for row in connections_rows
-        ],
+        connections=get_accepted_connections(db),
     )
 
 
@@ -1245,9 +3055,12 @@ def connections():
 @login_required
 def notifications():
     db = get_db()
+    message_notifications = get_unread_message_notifications(db)
+    mark_message_notifications_read(db, message_notifications)
     return render_template(
         "notifications.html",
         incoming_requests=get_incoming_connection_requests(db),
+        message_notifications=message_notifications,
     )
 
 
@@ -1255,6 +3068,12 @@ def notifications():
 @login_required
 def notification_count():
     return jsonify({"count": get_notification_count(get_db())})
+
+
+@app.route("/activity")
+@login_required
+def activity():
+    return render_template("activity.html", feed_items=get_activity_feed(get_db()))
 
 
 @app.route("/connections/request", methods=("POST",))
@@ -1372,11 +3191,27 @@ def photo_image(photo_id):
     return Response(photo["image_data"], mimetype=photo["mime_type"])
 
 
+@app.route("/public/photo/<int:photo_id>/image")
+@birthday_required
+def public_photo_image(photo_id):
+    photo = get_public_photo(photo_id)
+    return Response(photo["image_data"], mimetype=photo["mime_type"])
+
+
 @app.route("/api/photo/<int:photo_id>", methods=("DELETE",))
 @birthday_required
 def delete_photo(photo_id):
     get_owned_photo(photo_id)
     db = get_db()
+    db.execute(
+        """
+        DELETE FROM chapter_items
+        WHERE item_kind = 'photo'
+          AND item_id = ?
+          AND chapter_id IN (SELECT id FROM chapters WHERE user_id = ?)
+        """,
+        (photo_id, g.user["id"]),
+    )
     db.execute(
         "DELETE FROM photos WHERE id = ? AND user_id = ?",
         (photo_id, g.user["id"]),
@@ -1398,7 +3233,7 @@ def photo_tags(photo_id):
         db.commit()
 
     tags = get_tags_for_item(db, "photo", photo_id)
-    return jsonify({"tags": tags, "tags_text": tags_to_text(tags)})
+    return jsonify({"tags": tags, "tags_text": tags_to_text(tags), **privacy_payload_for_tags(tags)})
 
 
 @app.route("/api/text-entry/<int:entry_id>", methods=("GET", "PATCH", "DELETE"))
@@ -1408,6 +3243,15 @@ def text_entry(entry_id):
     db = get_db()
 
     if request.method == "DELETE":
+        db.execute(
+            """
+            DELETE FROM chapter_items
+            WHERE item_kind = 'text'
+              AND item_id = ?
+              AND chapter_id IN (SELECT id FROM chapters WHERE user_id = ?)
+            """,
+            (entry_id, g.user["id"]),
+        )
         db.execute(
             "DELETE FROM text_entries WHERE id = ? AND user_id = ?",
             (entry_id, g.user["id"]),
@@ -1456,8 +3300,27 @@ def text_entry(entry_id):
             "updated_at": entry["updated_at"],
             "tags": tags,
             "tags_text": tags_to_text(tags),
+            **privacy_payload_for_tags(tags),
         }
     )
+
+
+@app.route("/api/timeline-item/<item_kind>/<int:item_id>/messages", methods=("GET", "POST"))
+@birthday_required
+def timeline_item_messages(item_kind, item_id):
+    get_owned_timeline_item(item_kind, item_id)
+    db = get_db()
+
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or request.form
+        body = (payload.get("body") or "").strip()
+        if not body:
+            return jsonify({"error": "Message cannot be empty."}), 400
+
+        message = create_timeline_item_message(db, item_kind, item_id, body)
+        return jsonify(message), 201
+
+    return jsonify(load_messages_for_timeline_item(db, item_kind, item_id))
 
 
 @app.route("/api/photo/<int:photo_id>/messages", methods=("GET", "POST"))
@@ -1472,34 +3335,10 @@ def photo_messages(photo_id):
         if not body:
             return jsonify({"error": "Message cannot be empty."}), 400
 
-        cursor = db.execute(
-            """
-            INSERT INTO messages (photo_id, user_id, body)
-            VALUES (?, ?, ?)
-            """,
-            (photo_id, g.user["id"], body),
-        )
-        db.commit()
-        message = db.execute(
-            """
-            SELECT id, body, created_at
-            FROM messages
-            WHERE id = ?
-            """,
-            (cursor.lastrowid,),
-        ).fetchone()
-        return jsonify(dict(message)), 201
+        message = create_timeline_item_message(db, "photo", photo_id, body)
+        return jsonify(message), 201
 
-    messages = db.execute(
-        """
-        SELECT id, body, created_at
-        FROM messages
-        WHERE photo_id = ? AND user_id = ?
-        ORDER BY created_at ASC, id ASC
-        """,
-        (photo_id, g.user["id"]),
-    ).fetchall()
-    return jsonify([dict(message) for message in messages])
+    return jsonify(load_messages_for_timeline_item(db, "photo", photo_id))
 
 
 init_db()

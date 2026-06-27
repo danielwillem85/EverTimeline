@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}{{ year }} - {{ connection["username"] }} - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('connection_timeline', connection_id=connection['id']) }}">{{ connection["full_name"] or connection["username"] }}</a>
+        <h1>{{ year }}</h1>
+    </div>
+    <span class="status-badge">Read only</span>
+</section>
+
+{% set carousel_items_url = url_for('connection_timeline_items', connection_id=connection['id'], year=year) %}
+{% set carousel_skip_tag_filter = true %}
+<section class="timeline-frame year-carousel-actions" aria-label="Connection year carousel">
+    <button class="button primary view-all-button" id="view-all-button" type="button">View all</button>
+    <button class="button secondary view-random-button" id="view-random-button" type="button">View random</button>
+</section>
+
+<section class="month-grid" aria-label="Months in {{ year }}">
+    {% for month_number, month_name in months %}
+        <a class="month-button counted-button" href="{{ url_for('connection_month_view', connection_id=connection['id'], year=year, month=month_number) }}">
+            <span>{{ month_name }}</span>
+            {% if month_counts.get(month_number, 0) %}
+                <span class="count-badge">{{ month_counts[month_number] }}</span>
+            {% endif %}
+        </a>
+    {% endfor %}
+</section>
+
+{% include "carousel_modal.html" %}
+{% endblock %}

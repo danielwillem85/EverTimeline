@@ -3,14 +3,73 @@
 {% block title %}Birthday - EverTimeline{% endblock %}
 
 {% block content %}
-<section class="auth-panel">
-    <h1>Birthday</h1>
-    <form method="post" class="form-stack">
-        <label>
-            <span>Date of birth</span>
-            <input name="birthday" type="date" value="{{ g.user['birthday'] or '' }}" required>
-        </label>
-        <button class="button primary" type="submit">Initialize</button>
-    </form>
+<section class="auth-panel birthday-panel">
+    <a class="icon-button birthday-close" href="{{ url_for('timeline') }}" aria-label="Close birthday editor">x</a>
+    {% if confirmation_required %}
+        <h1>Confirm Birthday Change</h1>
+        <p class="muted">Changing your birthday to {{ pending_birthday }} can permanently delete timeline data before that date.</p>
+
+        <div class="danger-note">
+            {% if deletion_summary.total_count %}
+                <strong>{{ deletion_summary.total_count }} items will be deleted.</strong>
+                <p>
+                    This includes {{ deletion_summary.photo_count }}
+                    {{ "photo" if deletion_summary.photo_count == 1 else "photos" }} and
+                    {{ deletion_summary.text_count }}
+                    {{ "text entry" if deletion_summary.text_count == 1 else "text entries" }}.
+                    Related messages, chapter placements,
+                    tags, likes, loves, and notification records for those items will also be removed.
+                </p>
+                {% if deletion_summary.affected_periods %}
+                    <p>Affected months:</p>
+                    <ul>
+                        {% for period in deletion_summary.affected_periods %}
+                            <li>{{ period.label }}: {{ period.count }} items</li>
+                        {% endfor %}
+                    </ul>
+                {% endif %}
+            {% else %}
+                <strong>No existing timeline items are before this birthday.</strong>
+                <p>The birthday can be changed without deleting photos or text entries.</p>
+            {% endif %}
+        </div>
+
+        <form method="post" class="form-stack">
+            <input type="hidden" name="birthday" value="{{ pending_birthday }}">
+            <input type="hidden" name="action" value="confirm">
+            <label>
+                <span>Type 'proceed' to confirm</span>
+                <input
+                    name="confirmation_text"
+                    type="text"
+                    autocomplete="off"
+                    data-birthday-confirm-input
+                    required
+                >
+            </label>
+            <div class="form-actions">
+                <a class="button secondary" href="{{ url_for('birthday') }}">Cancel</a>
+                <button class="button danger" type="submit" data-birthday-confirm-button disabled>Confirm</button>
+            </div>
+        </form>
+    {% else %}
+        <h1>Birthday</h1>
+        <form method="post" class="form-stack">
+            <label>
+                <span>Date of birth</span>
+                <input
+                    name="birthday"
+                    type="date"
+                    value="{{ g.user['birthday'] or '' }}"
+                    data-birthday-review-input
+                    data-current-birthday="{{ g.user['birthday'] or '' }}"
+                    required
+                >
+            </label>
+            <button class="button primary" type="submit" data-birthday-review-button>
+                {{ "Review birthday change" if g.user["birthday"] else "Initialize" }}
+            </button>
+        </form>
+    {% endif %}
 </section>
 {% endblock %}

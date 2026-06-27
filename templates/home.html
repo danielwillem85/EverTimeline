@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_reactions.html" import reaction_bar %}
 
 {% block title %}Home - EverTimeline{% endblock %}
 
@@ -14,12 +15,24 @@
     {% if photos %}
         <div class="public-photo-grid">
             {% for photo in photos %}
-                <figure class="public-photo-card" title="{{ photo['owner_name'] }}{% if photo['display_date'] %} - {{ photo['display_date'] }}{% endif %}">
-                    <img
-                        src="{{ photo['image_url'] }}"
-                        alt="{{ photo['title'] }}"
-                        loading="lazy"
+                <figure class="public-photo-item">
+                    <button
+                        class="public-photo-card"
+                        type="button"
+                        title="{{ photo['owner_name'] }}{% if photo['display_date'] %} - {{ photo['display_date'] }}{% endif %}"
+                        data-full-src="{{ photo['image_url'] }}"
+                        data-photo-title="{{ photo['title'] }}"
+                        data-photo-owner="{{ photo['owner_name'] }}"
+                        data-photo-date="{{ photo['display_date'] or '' }}"
+                        data-messages-url="{{ photo['messages_url'] }}"
                     >
+                        <img
+                            src="{{ photo['image_url'] }}"
+                            alt="{{ photo['title'] }}"
+                            loading="lazy"
+                        >
+                    </button>
+                    {{ reaction_bar(photo) }}
                 </figure>
             {% endfor %}
         </div>
@@ -27,4 +40,25 @@
         <p class="empty-state">No public photos yet.</p>
     {% endif %}
 </section>
+
+<div class="modal" id="home-photo-modal" hidden>
+    <div class="modal-backdrop" data-close-home-photo-modal></div>
+    <section class="modal-panel photo-modal-panel" role="dialog" aria-modal="true" aria-labelledby="home-photo-modal-title">
+        <header class="modal-header">
+            <div>
+                <h2 id="home-photo-modal-title">Public photo</h2>
+                <p id="home-photo-modal-owner" class="muted"></p>
+                <p id="home-photo-modal-date" class="privacy-summary"></p>
+            </div>
+            <button class="icon-button" type="button" data-close-home-photo-modal aria-label="Close popup">x</button>
+        </header>
+        <div class="modal-body">
+            <img id="home-photo-modal-image" class="modal-image" alt="Selected public photo">
+            <aside class="message-panel readonly-message-panel">
+                <h3>Messages</h3>
+                <div id="home-photo-message-list" class="message-list"></div>
+            </aside>
+        </div>
+    </section>
+</div>
 {% endblock %}

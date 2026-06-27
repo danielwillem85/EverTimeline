@@ -46,8 +46,8 @@ body.modal-open {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    min-height: 64px;
-    padding: 0 28px;
+    min-height: 58px;
+    padding: 0 20px;
     background: rgba(255, 255, 255, 0.94);
     border-bottom: 1px solid var(--border);
     backdrop-filter: blur(12px);
@@ -55,7 +55,7 @@ body.modal-open {
 
 .brand {
     color: var(--ink);
-    font-size: 1.05rem;
+    font-size: 0.98rem;
     font-weight: 800;
     text-decoration: none;
 }
@@ -63,17 +63,17 @@ body.modal-open {
 .topbar-actions {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 8px;
 }
 
 .topbar-link {
     display: inline-flex;
     align-items: center;
-    min-height: 34px;
+    min-height: 30px;
     border-radius: 6px;
-    padding: 0 10px;
+    padding: 0 7px;
     color: var(--ink);
-    font-size: 0.95rem;
+    font-size: 0.86rem;
     font-weight: 800;
     text-decoration: none;
 }
@@ -91,13 +91,13 @@ body.modal-open {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 24px;
-    height: 22px;
+    min-width: 21px;
+    height: 20px;
     border-radius: 999px;
-    padding: 0 7px;
+    padding: 0 6px;
     background: var(--accent);
     color: #fff;
-    font-size: 0.76rem;
+    font-size: 0.7rem;
     font-weight: 900;
 }
 
@@ -113,7 +113,13 @@ body.modal-open {
 
 .username {
     color: var(--muted);
-    font-size: 0.95rem;
+    font-size: 0.86rem;
+}
+
+.topbar .button.small {
+    min-height: 30px;
+    padding: 0 9px;
+    font-size: 0.84rem;
 }
 
 .shell {
@@ -135,6 +141,42 @@ body.modal-open {
     width: min(440px, 100%);
     margin: 58px auto;
     padding: 28px;
+}
+
+.birthday-panel {
+    position: relative;
+    width: min(560px, 100%);
+}
+
+.birthday-close {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    text-decoration: none;
+}
+
+.danger-note {
+    display: grid;
+    gap: 8px;
+    margin: 18px 0;
+    border: 1px solid rgba(159, 53, 40, 0.34);
+    border-radius: 8px;
+    padding: 14px;
+    background: #fff4f1;
+    color: var(--ink);
+}
+
+.danger-note strong {
+    color: #7d281f;
+}
+
+.danger-note p,
+.danger-note ul {
+    margin-bottom: 0;
+}
+
+.danger-note ul {
+    padding-left: 20px;
 }
 
 .auth-link-row {
@@ -399,6 +441,91 @@ textarea {
     margin-bottom: 0;
 }
 
+.month-heading-row,
+.local-heading-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.local-settings-menu {
+    position: relative;
+}
+
+.local-settings-menu summary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    min-height: 36px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0;
+    background: var(--surface-strong);
+    color: var(--ink);
+    cursor: pointer;
+    font-size: 1.1rem;
+    font-weight: 900;
+    list-style: none;
+}
+
+.local-settings-menu summary::-webkit-details-marker {
+    display: none;
+}
+
+.local-settings-menu[open] summary {
+    border-color: rgba(22, 109, 103, 0.42);
+    background: #ebf6f3;
+    color: var(--primary);
+}
+
+.local-settings-icon {
+    line-height: 1;
+}
+
+.local-settings-menu:not([open]) > .local-settings-popup {
+    display: none;
+}
+
+.local-settings-popup {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    z-index: 30;
+    display: grid;
+    width: min(460px, calc(100vw - 32px));
+    gap: 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.local-settings-popup h2,
+.local-settings-popup p {
+    margin-bottom: 0;
+}
+
+.local-settings-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.local-settings-close {
+    width: 32px;
+    height: 32px;
+    flex: 0 0 auto;
+}
+
+.local-settings-form {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+}
+
 .page-actions {
     display: flex;
     flex-wrap: wrap;
@@ -448,20 +575,24 @@ textarea {
 }
 
 .timeline-frame > .year-grid {
-    margin-top: 16px;
+    margin-top: 14px;
 }
 
 .year-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
     gap: 10px;
     max-height: min(70vh, 680px);
     overflow-y: auto;
-    padding-right: 4px;
+    padding: 2px 4px 2px 2px;
 }
 
 .timeline-button {
-    height: 58px;
+    width: 100%;
+    aspect-ratio: 1;
+    min-height: 0;
+    height: auto;
+    padding: 10px;
     background: #fff;
     border-color: var(--border);
     color: var(--ink);
@@ -474,15 +605,34 @@ textarea {
     background: var(--surface-strong);
 }
 
+.timeline-button:focus-visible,
+.month-button:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+}
+
 .counted-button {
     position: relative;
     gap: 8px;
+    flex-wrap: wrap;
+    align-content: center;
+    line-height: 1.1;
+    text-align: center;
+}
+
+.counted-button > span:first-child {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .count-badge {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    flex: 0 0 auto;
     min-width: 26px;
     height: 24px;
     border-radius: 999px;
@@ -495,15 +645,20 @@ textarea {
 
 .month-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
     gap: 12px;
 }
 
 .month-button {
-    height: 72px;
+    width: 100%;
+    aspect-ratio: 1;
+    min-height: 0;
+    height: auto;
+    padding: 10px;
     background: var(--surface);
     border-color: var(--border);
     color: var(--ink);
+    font-size: 0.96rem;
     box-shadow: 0 8px 20px rgba(24, 31, 28, 0.08);
 }
 
@@ -592,6 +747,56 @@ details.privacy-toggle-panel {
     content: "Hide";
 }
 
+.form-toggle-panel:not([open]) > :not(summary) {
+    display: none;
+}
+
+.upload-panel.form-toggle-panel {
+    margin-bottom: 12px;
+    padding: 10px 14px;
+}
+
+.form-toggle-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 32px;
+    cursor: pointer;
+    color: var(--ink);
+    font-size: 0.92rem;
+    font-weight: 900;
+    list-style: none;
+}
+
+.form-toggle-summary::-webkit-details-marker {
+    display: none;
+}
+
+.form-toggle-summary::after {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface-strong);
+    color: var(--primary);
+    content: "+";
+    flex: 0 0 auto;
+    font-size: 1.1rem;
+    line-height: 1;
+}
+
+.form-toggle-panel[open] .form-toggle-summary {
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 10px;
+}
+
+.form-toggle-panel[open] .form-toggle-summary::after {
+    content: "-";
+}
+
 .privacy-bulk-form {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -641,14 +846,31 @@ details.privacy-toggle-panel {
     gap: 16px;
 }
 
-.public-photo-card {
-    display: block;
+.public-photo-item {
+    position: relative;
+    display: grid;
+    gap: 8px;
     margin: 0;
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 8px;
     background: var(--surface);
     box-shadow: 0 8px 20px rgba(24, 31, 28, 0.08);
+}
+
+.public-photo-card {
+    display: block;
+    width: 100%;
+    border: 0;
+    border-radius: 6px;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
+    transition: transform 140ms ease, border-color 140ms ease;
+}
+
+.public-photo-card:hover {
+    transform: translateY(-1px);
 }
 
 .public-photo-card img {
@@ -660,7 +882,78 @@ details.privacy-toggle-panel {
     object-fit: cover;
 }
 
+.reaction-bar {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.entry-card > .reaction-bar,
+.public-photo-item > .reaction-bar,
+.chapter-preview-wrap > .reaction-bar {
+    position: absolute;
+    z-index: 6;
+}
+
+.entry-card > .reaction-bar {
+    top: 10px;
+    right: 10px;
+}
+
+.public-photo-item > .reaction-bar {
+    top: 14px;
+    right: 14px;
+}
+
+.chapter-preview-wrap > .reaction-bar {
+    top: 6px;
+    right: 6px;
+}
+
+.reaction-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 34px;
+    height: 34px;
+    min-height: 34px;
+    border: 1px solid rgba(255, 255, 255, 0.82);
+    border-radius: 999px;
+    padding: 0 8px;
+    background: rgba(255, 255, 255, 0.9);
+    color: var(--ink);
+    cursor: pointer;
+    box-shadow: 0 8px 18px rgba(24, 31, 28, 0.18);
+    backdrop-filter: blur(8px);
+    font-size: 0.82rem;
+    font-weight: 900;
+    gap: 4px;
+    line-height: 1;
+}
+
+.reaction-button:hover,
+.reaction-button.is-active {
+    border-color: rgba(22, 109, 103, 0.55);
+    background: rgba(235, 246, 243, 0.96);
+    color: var(--primary);
+}
+
+.reaction-icon {
+    display: inline-grid;
+    place-items: center;
+    min-width: 16px;
+    font-size: 1rem;
+    line-height: 1;
+}
+
+.reaction-count {
+    min-width: 1ch;
+    font-size: 0.72rem;
+    line-height: 1;
+}
+
 .entry-card {
+    position: relative;
     display: grid;
     align-content: start;
     gap: 8px;
@@ -705,10 +998,11 @@ details.privacy-toggle-panel {
     white-space: nowrap;
 }
 
-.entry-thumb > .privacy-badge {
+.entry-thumb .privacy-badge {
     position: absolute;
-    top: 8px;
     left: 8px;
+    bottom: 8px;
+    z-index: 4;
     max-width: calc(100% - 16px);
     overflow: hidden;
     border-radius: 6px;
@@ -719,6 +1013,10 @@ details.privacy-toggle-panel {
     font-weight: 900;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.entry-thumb:has(.thumb-date) .privacy-badge {
+    bottom: 42px;
 }
 
 .privacy-badge {
@@ -739,9 +1037,8 @@ details.privacy-toggle-panel {
 }
 
 .text-thumb-content .privacy-badge {
-    display: flex;
-    margin: 0 0 10px;
-    background: var(--surface-strong);
+    margin: 0;
+    background: rgba(255, 255, 255, 0.92);
 }
 
 .text-thumb {
@@ -753,7 +1050,7 @@ details.privacy-toggle-panel {
     overflow-y: auto;
     overscroll-behavior: contain;
     gap: 8px;
-    padding: 14px 12px 42px 14px;
+    padding: 14px 12px 78px 14px;
     scrollbar-gutter: stable;
     text-align: left;
 }
@@ -765,6 +1062,46 @@ details.privacy-toggle-panel {
     line-height: 1.35;
     white-space: pre-wrap;
     word-break: break-word;
+}
+
+.chapter-add-panel {
+    display: grid;
+    gap: 8px;
+}
+
+.chapter-add-panel summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 32px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0 10px;
+    background: var(--surface-strong);
+    color: var(--ink);
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 900;
+    list-style: none;
+}
+
+.chapter-add-panel summary::-webkit-details-marker {
+    display: none;
+}
+
+.chapter-add-panel summary::after {
+    color: var(--primary);
+    content: "+";
+    font-size: 1rem;
+    line-height: 1;
+}
+
+.chapter-add-panel[open] summary::after {
+    content: "-";
+}
+
+.chapter-add-panel:not([open]) > .chapter-add-form {
+    display: none;
 }
 
 .chapter-add-form {
@@ -827,6 +1164,15 @@ details.privacy-toggle-panel {
 
 [hidden] {
     display: none !important;
+}
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
 }
 
 .modal[hidden] {
@@ -1008,7 +1354,9 @@ details.privacy-toggle-panel {
     overflow: hidden;
 }
 
-#modal-image {
+#modal-image,
+#readonly-modal-image,
+.modal-image {
     width: 100%;
     height: 100%;
     min-height: 0;
@@ -1587,6 +1935,11 @@ details.privacy-toggle-panel {
     font-weight: 900;
 }
 
+.chapter-preview-wrap {
+    position: relative;
+    width: 104px;
+}
+
 .chapter-preview {
     display: block;
     width: 104px;
@@ -1807,6 +2160,7 @@ details.privacy-toggle-panel {
         flex-wrap: wrap;
     }
 
+    .chapter-preview-wrap,
     .chapter-preview {
         width: min(100%, 220px);
     }

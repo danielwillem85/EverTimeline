@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}EverTimeline{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
-    <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css', v=static_version('styles.css')) }}">
+    <script src="{{ url_for('static', filename='app.js', v=static_version('app.js')) }}" defer></script>
 </head>
 <body>
     <header class="topbar">
@@ -18,20 +18,20 @@
                     {% if request.endpoint == 'home' %}aria-current="page"{% endif %}
                 >Home</a>
                 <a
-                    class="topbar-link{% if request.endpoint == 'search' %} is-active{% endif %}"
-                    href="{{ url_for('search') }}"
-                    {% if request.endpoint == 'search' %}aria-current="page"{% endif %}
-                >Search</a>
-                <a
-                    class="topbar-link{% if request.endpoint == 'activity' %} is-active{% endif %}"
-                    href="{{ url_for('activity') }}"
-                    {% if request.endpoint == 'activity' %}aria-current="page"{% endif %}
-                >Activity</a>
+                    class="topbar-link{% if request.endpoint in ('timeline', 'year_view', 'month_view', 'birthday') %} is-active{% endif %}"
+                    href="{{ url_for('timeline') }}"
+                    {% if request.endpoint in ('timeline', 'year_view', 'month_view', 'birthday') %}aria-current="page"{% endif %}
+                >Timeline</a>
                 <a
                     class="topbar-link{% if request.endpoint in ('chapters', 'chapter_detail') %} is-active{% endif %}"
                     href="{{ url_for('chapters') }}"
                     {% if request.endpoint in ('chapters', 'chapter_detail') %}aria-current="page"{% endif %}
                 >Chapters</a>
+                <a
+                    class="topbar-link{% if request.endpoint == 'connections' %} is-active{% endif %}"
+                    href="{{ url_for('connections') }}"
+                    {% if request.endpoint == 'connections' %}aria-current="page"{% endif %}
+                >Connections</a>
                 <a
                     class="topbar-link notification-link{% if request.endpoint == 'notifications' %} is-active{% endif %}"
                     href="{{ url_for('notifications') }}"
@@ -45,10 +45,15 @@
                     >{{ notification_count }}</span>
                 </a>
                 <a
-                    class="topbar-link{% if request.endpoint == 'connections' %} is-active{% endif %}"
-                    href="{{ url_for('connections') }}"
-                    {% if request.endpoint == 'connections' %}aria-current="page"{% endif %}
-                >Connections</a>
+                    class="topbar-link{% if request.endpoint == 'activity' %} is-active{% endif %}"
+                    href="{{ url_for('activity') }}"
+                    {% if request.endpoint == 'activity' %}aria-current="page"{% endif %}
+                >Activity</a>
+                <a
+                    class="topbar-link{% if request.endpoint == 'search' %} is-active{% endif %}"
+                    href="{{ url_for('search') }}"
+                    {% if request.endpoint == 'search' %}aria-current="page"{% endif %}
+                >Search</a>
                 <a
                     class="topbar-link{% if request.endpoint == 'profile' %} is-active{% endif %}"
                     href="{{ url_for('profile') }}"

@@ -23,7 +23,25 @@
 <section class="page-heading">
     <div>
         <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
-        <h1>{{ year }}</h1>
+        <div class="local-heading-row">
+            <h1>{{ year }}</h1>
+            <details class="local-settings-menu">
+                <summary aria-label="Local settings" title="Local settings">
+                    <span class="local-settings-icon" aria-hidden="true">&#9881;</span>
+                </summary>
+                <section class="local-settings-popup" aria-label="Local settings">
+                    <header class="local-settings-header">
+                        <h2>Bulk visibility</h2>
+                        <button class="icon-button local-settings-close" type="button" data-close-local-settings aria-label="Close local settings">x</button>
+                    </header>
+                    <p class="muted">Set who can see every item in {{ year }}.</p>
+                    <form method="post" action="{{ url_for('bulk_year_privacy', year=year) }}" class="privacy-bulk-form local-settings-form">
+                        {{ tag_radio_group() }}
+                        <button class="button secondary" type="submit">Apply to year</button>
+                    </form>
+                </section>
+            </details>
+        </div>
     </div>
     <div class="page-actions">
         <a class="button secondary" href="{{ url_for('export_year_pdf', year=year) }}">Export year PDF</a>
@@ -35,19 +53,6 @@
     <button class="button primary view-all-button" id="view-all-button" type="button">View all</button>
     <button class="button secondary view-random-button" id="view-random-button" type="button">View random</button>
 </section>
-
-<details class="upload-panel privacy-panel privacy-toggle-panel">
-    <summary class="privacy-toggle-summary">
-        <span>
-            <strong>Bulk visibility</strong>
-            <small>Set who can see every item in {{ year }}.</small>
-        </span>
-    </summary>
-    <form method="post" action="{{ url_for('bulk_year_privacy', year=year) }}" class="privacy-bulk-form">
-        {{ tag_radio_group() }}
-        <button class="button secondary" type="submit">Apply to year</button>
-    </form>
-</details>
 
 <section class="month-grid" aria-label="Months in {{ year }}">
     {% for month_number, month_name in months %}

@@ -33,6 +33,7 @@ DATABASE = BASE_DIR / "evertimeline.sqlite3"
 ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 EXIF_DATE_TAGS = (36867, 36868, 306)
 TAG_CHOICES = ("private", "family", "friends", "public")
+REACTION_CHOICES = ("like", "love")
 DEFAULT_TAG = "private"
 PRIVACY_AUDIENCE_LABELS = {
     "private": "Only you",
@@ -95,12 +96,20 @@ def inject_tag_choices():
     notification_count = 0
     if getattr(g, "user", None) is not None:
         notification_count = get_notification_count(get_db())
+
+    def static_version(filename):
+        try:
+            return int((BASE_DIR / "static" / filename).stat().st_mtime)
+        except OSError:
+            return 0
+
     return {
         "tag_choices": TAG_CHOICES,
         "default_tag": DEFAULT_TAG,
         "privacy_labels": PRIVACY_AUDIENCE_LABELS,
         "privacy_help": PRIVACY_AUDIENCE_HELP,
         "notification_count": notification_count,
+        "static_version": static_version,
     }
 
 
@@ -165,6 +174,17 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS item_reactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                item_kind TEXT NOT NULL CHECK (item_kind IN ('photo', 'text')),
+                item_id INTEGER NOT NULL,
+                reaction TEXT NOT NULL CHECK (reaction IN ('like', 'love')),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (user_id, item_kind, item_id),
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS message_notification_reads (
                 user_id INTEGER NOT NULL,
                 message_kind TEXT NOT NULL CHECK (message_kind IN ('photo', 'text')),
@@ -172,6 +192,15 @@ def init_db():
                 read_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (user_id, message_kind, message_id),
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS reaction_notification_reads (
+                user_id INTEGER NOT NULL,
+                reaction_id INTEGER NOT NULL,
+                read_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, reaction_id),
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+                FOREIGN KEY (reaction_id) REFERENCES item_reactions (id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS tags (
@@ -278,8 +307,20 @@ def init_db():
         )
         db.execute(
             """
+            CREATE INDEX IF NOT EXISTS item_reactions_item
+            ON item_reactions (item_kind, item_id, reaction)
+            """
+        )
+        db.execute(
+            """
             CREATE INDEX IF NOT EXISTS message_notification_reads_user_kind
             ON message_notification_reads (user_id, message_kind)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS reaction_notification_reads_user
+            ON reaction_notification_reads (user_id, reaction_id)
             """
         )
         db.execute(
@@ -369,6 +410,177 @@ def validate_year_month_for_user(user, year, month):
 
 def validate_year_month(year, month):
     validate_year_month_for_user(g.user, year, month)
+
+
+def items_before_birthday_query(date_column):
+    return f"""
+        user_id = ?
+        AND (
+            year < ?
+            OR (year = ? AND month < ?)
+            OR ({date_column} IS NOT NULL AND {date_column} < ?)
+        )
+    """
+
+
+def load_items_before_birthday(db, user_id, birthday_date):
+    params = (
+        user_id,
+        birthday_date.year,
+        birthday_date.year,
+        birthday_date.month,
+        birthday_date.isoformat(),
+    )
+    photo_rows = db.execute(
+        f"""
+        SELECT id, year, month, photo_date AS item_date, original_filename AS title
+        FROM photos
+        WHERE {items_before_birthday_query("photo_date")}
+        ORDER BY year ASC, month ASC, id ASC
+        """,
+        params,
+    ).fetchall()
+    text_rows = db.execute(
+        f"""
+        SELECT id, year, month, entry_date AS item_date, 'Text entry' AS title
+        FROM text_entries
+        WHERE {items_before_birthday_query("entry_date")}
+        ORDER BY year ASC, month ASC, id ASC
+        """,
+        params,
+    ).fetchall()
+    return photo_rows, text_rows
+
+
+def birthday_deletion_summary(db, user_id, birthday_date):
+    photo_rows, text_rows = load_items_before_birthday(db, user_id, birthday_date)
+    periods = {}
+    for row in [*photo_rows, *text_rows]:
+        key = (row["year"], row["month"])
+        periods[key] = periods.get(key, 0) + 1
+    affected_periods = [
+        {
+            "label": f"{MONTH_NAMES[month - 1]} {year}",
+            "count": count,
+        }
+        for (year, month), count in sorted(periods.items())
+    ]
+    return {
+        "photo_count": len(photo_rows),
+        "text_count": len(text_rows),
+        "total_count": len(photo_rows) + len(text_rows),
+        "affected_periods": affected_periods,
+    }
+
+
+def delete_rows_by_ids(db, statement, ids, prefix_params=(), suffix_params=()):
+    if not ids:
+        return
+    placeholders = ",".join(["?"] * len(ids))
+    db.execute(
+        statement.format(placeholders=placeholders),
+        tuple(prefix_params) + tuple(ids) + tuple(suffix_params),
+    )
+
+
+def delete_items_before_birthday(db, user_id, birthday_date):
+    photo_rows, text_rows = load_items_before_birthday(db, user_id, birthday_date)
+    photo_ids = [row["id"] for row in photo_rows]
+    text_ids = [row["id"] for row in text_rows]
+
+    delete_rows_by_ids(
+        db,
+        """
+        DELETE FROM message_notification_reads
+        WHERE message_kind = 'photo'
+          AND message_id IN (
+            SELECT id FROM messages WHERE photo_id IN ({placeholders})
+          )
+        """,
+        photo_ids,
+    )
+    delete_rows_by_ids(
+        db,
+        """
+        DELETE FROM message_notification_reads
+        WHERE message_kind = 'text'
+          AND message_id IN (
+            SELECT id FROM text_entry_messages WHERE entry_id IN ({placeholders})
+          )
+        """,
+        text_ids,
+    )
+    delete_rows_by_ids(
+        db,
+        """
+        DELETE FROM reaction_notification_reads
+        WHERE reaction_id IN (
+            SELECT id FROM item_reactions
+            WHERE item_kind = 'photo' AND item_id IN ({placeholders})
+        )
+        """,
+        photo_ids,
+    )
+    delete_rows_by_ids(
+        db,
+        """
+        DELETE FROM reaction_notification_reads
+        WHERE reaction_id IN (
+            SELECT id FROM item_reactions
+            WHERE item_kind = 'text' AND item_id IN ({placeholders})
+        )
+        """,
+        text_ids,
+    )
+    delete_rows_by_ids(
+        db,
+        "DELETE FROM item_reactions WHERE item_kind = 'photo' AND item_id IN ({placeholders})",
+        photo_ids,
+    )
+    delete_rows_by_ids(
+        db,
+        "DELETE FROM item_reactions WHERE item_kind = 'text' AND item_id IN ({placeholders})",
+        text_ids,
+    )
+    delete_rows_by_ids(
+        db,
+        """
+        DELETE FROM chapter_items
+        WHERE item_kind = 'photo'
+          AND item_id IN ({placeholders})
+          AND chapter_id IN (SELECT id FROM chapters WHERE user_id = ?)
+        """,
+        photo_ids,
+        suffix_params=(user_id,),
+    )
+    delete_rows_by_ids(
+        db,
+        """
+        DELETE FROM chapter_items
+        WHERE item_kind = 'text'
+          AND item_id IN ({placeholders})
+          AND chapter_id IN (SELECT id FROM chapters WHERE user_id = ?)
+        """,
+        text_ids,
+        suffix_params=(user_id,),
+    )
+    delete_rows_by_ids(
+        db,
+        "DELETE FROM photos WHERE user_id = ? AND id IN ({placeholders})",
+        photo_ids,
+        prefix_params=(user_id,),
+    )
+    delete_rows_by_ids(
+        db,
+        "DELETE FROM text_entries WHERE user_id = ? AND id IN ({placeholders})",
+        text_ids,
+        prefix_params=(user_id,),
+    )
+    return {
+        "photo_count": len(photo_ids),
+        "text_count": len(text_ids),
+        "total_count": len(photo_ids) + len(text_ids),
+    }
 
 
 def normalize_email(value):
@@ -813,6 +1025,120 @@ def tags_visible_to_connection(tags, allowed_tags):
     return bool(set(parse_tags(tags)) & set(allowed_tags))
 
 
+def reaction_payload(kind, item_id, counts=None, user_reaction=None):
+    counts = counts or {}
+    return {
+        "kind": kind,
+        "item_id": item_id,
+        "like_count": counts.get("like", 0),
+        "love_count": counts.get("love", 0),
+        "user_reaction": user_reaction or "",
+        "reaction_url": url_for("timeline_item_reaction", item_kind=kind, item_id=item_id),
+    }
+
+
+def load_reaction_payloads(db, item_refs):
+    refs = sorted({(kind, int(item_id)) for kind, item_id in item_refs if kind in ("photo", "text")})
+    payloads = {
+        (kind, item_id): reaction_payload(kind, item_id)
+        for kind, item_id in refs
+    }
+    if not refs:
+        return payloads
+
+    for kind in ("photo", "text"):
+        item_ids = [item_id for ref_kind, item_id in refs if ref_kind == kind]
+        if not item_ids:
+            continue
+        placeholders = ",".join(["?"] * len(item_ids))
+        count_rows = db.execute(
+            f"""
+            SELECT item_id, reaction, COUNT(*) AS reaction_count
+            FROM item_reactions
+            WHERE item_kind = ? AND item_id IN ({placeholders})
+            GROUP BY item_id, reaction
+            """,
+            (kind, *item_ids),
+        ).fetchall()
+        for row in count_rows:
+            key = (kind, row["item_id"])
+            payloads[key][f"{row['reaction']}_count"] = row["reaction_count"]
+
+        user_rows = db.execute(
+            f"""
+            SELECT item_id, reaction
+            FROM item_reactions
+            WHERE user_id = ? AND item_kind = ? AND item_id IN ({placeholders})
+            """,
+            (g.user["id"], kind, *item_ids),
+        ).fetchall()
+        for row in user_rows:
+            payloads[(kind, row["item_id"])]["user_reaction"] = row["reaction"]
+
+    return payloads
+
+
+def attach_reactions(db, items):
+    payloads = load_reaction_payloads(db, [(item["kind"], item["id"]) for item in items])
+    for item in items:
+        item["reactions"] = payloads.get(
+            (item["kind"], item["id"]),
+            reaction_payload(item["kind"], item["id"]),
+        )
+    return items
+
+
+def get_timeline_item_for_reaction(item_kind, item_id):
+    if item_kind == "photo":
+        table = "photos"
+    elif item_kind == "text":
+        table = "text_entries"
+    else:
+        abort(404)
+
+    db = get_db()
+    item = db.execute(
+        f"""
+        SELECT *
+        FROM {table}
+        WHERE id = ?
+        """,
+        (item_id,),
+    ).fetchone()
+    if item is None:
+        abort(404)
+
+    owner_id = item["user_id"]
+    if owner_id == g.user["id"]:
+        return item
+
+    tags = get_tags_for_item(db, item_kind, item_id, owner_id)
+    if tags_visible_to_connection(tags, ("public",)):
+        return item
+
+    connection = db.execute(
+        """
+        SELECT relation
+        FROM connection_requests
+        WHERE status = 'accepted'
+          AND (
+            (requester_id = ? AND recipient_id = ?)
+            OR (recipient_id = ? AND requester_id = ?)
+          )
+        ORDER BY responded_at DESC, created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (g.user["id"], owner_id, g.user["id"], owner_id),
+    ).fetchone()
+    if connection and tags_visible_to_connection(
+        tags,
+        CONNECTION_VISIBLE_TAGS.get(connection["relation"], ("public",)),
+    ):
+        return item
+
+    abort(404)
+
+
 def visible_tags_for_connection(connected_user):
     return CONNECTION_VISIBLE_TAGS.get(connected_user["connection_relation"], ("public",))
 
@@ -973,16 +1299,19 @@ def random_public_photos(db, limit=48):
         """,
         (limit,),
     ).fetchall()
-    return [
+    photos = [
         {
+            "kind": "photo",
             "id": row["id"],
             "image_url": url_for("public_photo_image", photo_id=row["id"]),
+            "messages_url": url_for("public_photo_messages", photo_id=row["id"]),
             "title": row["original_filename"] or "Public photo",
             "owner_name": user_full_name(row) or row["username"],
             "display_date": row["photo_date"],
         }
         for row in rows
     ]
+    return attach_reactions(db, photos)
 
 
 def timeline_item_focus(kind, item_id):
@@ -1241,7 +1570,7 @@ def build_chapter_items(db, chapter_id, image_url_builder, message_url_builder=N
                     "title": "Text entry",
                 }
             )
-    return items
+    return attach_reactions(db, items)
 
 
 def get_unread_message_notifications(db):
@@ -1373,6 +1702,140 @@ def mark_message_notifications_read(db, notifications):
             VALUES (?, ?, ?)
             """,
             (g.user["id"], notification["kind"], notification["message_id"]),
+        )
+    if notifications:
+        db.commit()
+
+
+def get_unread_reaction_notifications(db):
+    photo_rows = db.execute(
+        """
+        SELECT
+            'photo' AS item_kind,
+            ir.id AS reaction_id,
+            ir.reaction,
+            ir.created_at,
+            p.id AS item_id,
+            p.year,
+            p.month,
+            p.photo_date AS item_date,
+            p.original_filename AS item_title,
+            p.user_id AS owner_id,
+            u.username,
+            u.first_name,
+            u.last_name
+        FROM item_reactions ir
+        JOIN photos p ON ir.item_kind = 'photo' AND p.id = ir.item_id
+        JOIN users u ON u.id = ir.user_id
+        LEFT JOIN reaction_notification_reads rnr
+          ON rnr.user_id = ?
+         AND rnr.reaction_id = ir.id
+        WHERE p.user_id = ?
+          AND ir.user_id <> ?
+          AND (rnr.reaction_id IS NULL OR rnr.read_at < ir.created_at)
+        """,
+        (g.user["id"], g.user["id"], g.user["id"]),
+    ).fetchall()
+    text_rows = db.execute(
+        """
+        SELECT
+            'text' AS item_kind,
+            ir.id AS reaction_id,
+            ir.reaction,
+            ir.created_at,
+            te.id AS item_id,
+            te.year,
+            te.month,
+            te.entry_date AS item_date,
+            'Text entry' AS item_title,
+            te.body AS body,
+            te.user_id AS owner_id,
+            u.username,
+            u.first_name,
+            u.last_name
+        FROM item_reactions ir
+        JOIN text_entries te ON ir.item_kind = 'text' AND te.id = ir.item_id
+        JOIN users u ON u.id = ir.user_id
+        LEFT JOIN reaction_notification_reads rnr
+          ON rnr.user_id = ?
+         AND rnr.reaction_id = ir.id
+        WHERE te.user_id = ?
+          AND ir.user_id <> ?
+          AND (rnr.reaction_id IS NULL OR rnr.read_at < ir.created_at)
+        """,
+        (g.user["id"], g.user["id"], g.user["id"]),
+    ).fetchall()
+
+    notifications = []
+    for row in [*photo_rows, *text_rows]:
+        item_label = row["item_title"] or "Photo"
+        reaction_label = "liked" if row["reaction"] == "like" else "loved"
+        notifications.append(
+            {
+                "kind": row["item_kind"],
+                "reaction_id": row["reaction_id"],
+                "reaction": row["reaction"],
+                "reaction_label": reaction_label,
+                "actor_name": message_author_name(row),
+                "created_at": row["created_at"],
+                "item_label": item_label,
+                "item_date": row["item_date"] or format_timeline_date_label(row["year"], row["month"], None),
+                "preview": short_preview(row["body"] if row["item_kind"] == "text" else item_label),
+                "url": timeline_item_link(
+                    row["owner_id"],
+                    row["year"],
+                    row["month"],
+                    row["item_kind"],
+                    row["item_id"],
+                ),
+            }
+        )
+    notifications.sort(key=lambda item: item["created_at"], reverse=True)
+    return notifications
+
+
+def get_unread_reaction_notification_count(db):
+    photo_row = db.execute(
+        """
+        SELECT COUNT(*) AS unread_count
+        FROM item_reactions ir
+        JOIN photos p ON ir.item_kind = 'photo' AND p.id = ir.item_id
+        LEFT JOIN reaction_notification_reads rnr
+          ON rnr.user_id = ?
+         AND rnr.reaction_id = ir.id
+        WHERE p.user_id = ?
+          AND ir.user_id <> ?
+          AND (rnr.reaction_id IS NULL OR rnr.read_at < ir.created_at)
+        """,
+        (g.user["id"], g.user["id"], g.user["id"]),
+    ).fetchone()
+    text_row = db.execute(
+        """
+        SELECT COUNT(*) AS unread_count
+        FROM item_reactions ir
+        JOIN text_entries te ON ir.item_kind = 'text' AND te.id = ir.item_id
+        LEFT JOIN reaction_notification_reads rnr
+          ON rnr.user_id = ?
+         AND rnr.reaction_id = ir.id
+        WHERE te.user_id = ?
+          AND ir.user_id <> ?
+          AND (rnr.reaction_id IS NULL OR rnr.read_at < ir.created_at)
+        """,
+        (g.user["id"], g.user["id"], g.user["id"]),
+    ).fetchone()
+    return (photo_row["unread_count"] if photo_row else 0) + (text_row["unread_count"] if text_row else 0)
+
+
+def mark_reaction_notifications_read(db, notifications):
+    for notification in notifications:
+        db.execute(
+            """
+            INSERT INTO reaction_notification_reads (user_id, reaction_id, read_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, reaction_id)
+            DO UPDATE SET read_at = CURRENT_TIMESTAMP
+            """,
+            (g.user["id"], notification["reaction_id"]),
         )
     if notifications:
         db.commit()
@@ -1641,7 +2104,11 @@ def get_notification_count(db):
         (g.user["id"],),
     ).fetchone()
     connection_count = row["notification_count"] if row is not None else 0
-    return connection_count + get_unread_message_notification_count(db)
+    return (
+        connection_count
+        + get_unread_message_notification_count(db)
+        + get_unread_reaction_notification_count(db)
+    )
 
 
 def get_incoming_connection_requests(db):
@@ -1858,7 +2325,7 @@ def build_month_items(db, owner_id, year, month, image_url_builder, allowed_tags
             }
         )
     items.sort(key=timeline_item_sort_key)
-    return items
+    return attach_reactions(db, items)
 
 
 def build_timeline_api_items(
@@ -2475,11 +2942,52 @@ def birthday():
             return render_template("birthday.html")
 
         db = get_db()
+        current_birthday = g.user["birthday"]
+        birthday_changed = current_birthday != birthday_date.isoformat()
+        is_confirming = request.form.get("action") == "confirm"
+
+        if current_birthday and birthday_changed and not is_confirming:
+            return render_template(
+                "birthday.html",
+                confirmation_required=True,
+                pending_birthday=birthday_date.isoformat(),
+                deletion_summary=birthday_deletion_summary(db, g.user["id"], birthday_date),
+            )
+
+        if current_birthday and birthday_changed and is_confirming:
+            confirmation_text = request.form.get("confirmation_text", "").strip().lower()
+            deletion_summary = birthday_deletion_summary(db, g.user["id"], birthday_date)
+            if confirmation_text != "proceed":
+                flash("Type proceed to confirm the birthday change.", "error")
+                return render_template(
+                    "birthday.html",
+                    confirmation_required=True,
+                    pending_birthday=birthday_date.isoformat(),
+                    deletion_summary=deletion_summary,
+                )
+
+            deleted_counts = delete_items_before_birthday(db, g.user["id"], birthday_date)
+        else:
+            deleted_counts = {"total_count": 0, "photo_count": 0, "text_count": 0}
+
         db.execute(
             "UPDATE users SET birthday = ? WHERE id = ?",
             (birthday_date.isoformat(), g.user["id"]),
         )
         db.commit()
+        if deleted_counts["total_count"]:
+            photo_word = "photo" if deleted_counts["photo_count"] == 1 else "photos"
+            text_word = "text entry" if deleted_counts["text_count"] == 1 else "text entries"
+            flash(
+                (
+                    "Birthday updated. Deleted "
+                    f"{deleted_counts['photo_count']} {photo_word} and "
+                    f"{deleted_counts['text_count']} {text_word} before {birthday_date.isoformat()}."
+                ),
+                "success",
+            )
+        elif birthday_changed:
+            flash("Birthday updated.", "success")
         return redirect(url_for("timeline"))
 
     return render_template("birthday.html")
@@ -3056,11 +3564,14 @@ def connections():
 def notifications():
     db = get_db()
     message_notifications = get_unread_message_notifications(db)
+    reaction_notifications = get_unread_reaction_notifications(db)
     mark_message_notifications_read(db, message_notifications)
+    mark_reaction_notifications_read(db, reaction_notifications)
     return render_template(
         "notifications.html",
         incoming_requests=get_incoming_connection_requests(db),
         message_notifications=message_notifications,
+        reaction_notifications=reaction_notifications,
     )
 
 
@@ -3198,6 +3709,13 @@ def public_photo_image(photo_id):
     return Response(photo["image_data"], mimetype=photo["mime_type"])
 
 
+@app.route("/public/photo/<int:photo_id>/messages")
+@birthday_required
+def public_photo_messages(photo_id):
+    get_public_photo(photo_id)
+    return jsonify(load_messages_for_timeline_item(get_db(), "photo", photo_id))
+
+
 @app.route("/api/photo/<int:photo_id>", methods=("DELETE",))
 @birthday_required
 def delete_photo(photo_id):
@@ -3211,6 +3729,10 @@ def delete_photo(photo_id):
           AND chapter_id IN (SELECT id FROM chapters WHERE user_id = ?)
         """,
         (photo_id, g.user["id"]),
+    )
+    db.execute(
+        "DELETE FROM item_reactions WHERE item_kind = 'photo' AND item_id = ?",
+        (photo_id,),
     )
     db.execute(
         "DELETE FROM photos WHERE id = ? AND user_id = ?",
@@ -3251,6 +3773,10 @@ def text_entry(entry_id):
               AND chapter_id IN (SELECT id FROM chapters WHERE user_id = ?)
             """,
             (entry_id, g.user["id"]),
+        )
+        db.execute(
+            "DELETE FROM item_reactions WHERE item_kind = 'text' AND item_id = ?",
+            (entry_id,),
         )
         db.execute(
             "DELETE FROM text_entries WHERE id = ? AND user_id = ?",
@@ -3321,6 +3847,42 @@ def timeline_item_messages(item_kind, item_id):
         return jsonify(message), 201
 
     return jsonify(load_messages_for_timeline_item(db, item_kind, item_id))
+
+
+@app.route("/api/timeline-item/<item_kind>/<int:item_id>/reaction", methods=("GET", "PUT", "DELETE"))
+@login_required
+def timeline_item_reaction(item_kind, item_id):
+    get_timeline_item_for_reaction(item_kind, item_id)
+    db = get_db()
+
+    if request.method == "PUT":
+        payload = request.get_json(silent=True) or request.form
+        reaction = (payload.get("reaction") or "").strip().lower()
+        if reaction not in REACTION_CHOICES:
+            return jsonify({"error": "Choose like or love."}), 400
+
+        db.execute(
+            """
+            INSERT INTO item_reactions (user_id, item_kind, item_id, reaction)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, item_kind, item_id)
+            DO UPDATE SET reaction = excluded.reaction, created_at = CURRENT_TIMESTAMP
+            """,
+            (g.user["id"], item_kind, item_id, reaction),
+        )
+        db.commit()
+    elif request.method == "DELETE":
+        db.execute(
+            """
+            DELETE FROM item_reactions
+            WHERE user_id = ? AND item_kind = ? AND item_id = ?
+            """,
+            (g.user["id"], item_kind, item_id),
+        )
+        db.commit()
+
+    payloads = load_reaction_payloads(db, [(item_kind, item_id)])
+    return jsonify(payloads[(item_kind, item_id)])
 
 
 @app.route("/api/photo/<int:photo_id>/messages", methods=("GET", "POST"))

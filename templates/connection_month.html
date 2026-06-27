@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_reactions.html" import reaction_bar %}
 
 {% block title %}{{ month_name }} {{ year }} - {{ connection["username"] }} - EverTimeline{% endblock %}
 
@@ -15,41 +16,47 @@
     <div class="photo-grid">
         {% for item in items %}
             {% if item["kind"] == "photo" %}
-                <button
-                    class="entry-thumb readonly-photo-thumb"
-                    type="button"
-                    data-entry-ref="photo-{{ item['id'] }}"
-                    data-photo-date="{{ item['display_date'] or '' }}"
-                    data-privacy-label="{{ item['privacy_label'] }}"
-                    data-privacy-help="{{ item['privacy_help'] }}"
-                    data-full-src="{{ item['image_url'] }}"
-                    data-messages-url="{{ url_for('connection_photo_messages', connection_id=connection['id'], photo_id=item['id']) }}"
-                >
-                    <img src="{{ item['image_url'] }}" alt="{{ item['original_filename'] or 'Timeline picture' }}" loading="lazy">
-                    <span class="privacy-badge" title="{{ item['privacy_help'] }}">Visible: {{ item["privacy_label"] }}</span>
-                    {% if item["display_date"] %}
-                        <span class="thumb-date">{{ item["display_date"] }}</span>
-                    {% endif %}
-                </button>
-            {% else %}
-                <button
-                    class="entry-thumb text-thumb readonly-text-thumb"
-                    type="button"
-                    data-entry-ref="text-{{ item['id'] }}"
-                    data-entry-date="{{ item['display_date'] or '' }}"
-                    data-entry-body="{{ item['body'] }}"
-                    data-privacy-label="{{ item['privacy_label'] }}"
-                    data-privacy-help="{{ item['privacy_help'] }}"
-                    aria-label="Text entry{% if item['display_date'] %} from {{ item['display_date'] }}{% endif %}"
-                >
-                    <div class="text-thumb-content">
-                        <div class="text-thumb-preview">{{ item["body"] }}</div>
+                <article class="entry-card">
+                    <button
+                        class="entry-thumb readonly-photo-thumb"
+                        type="button"
+                        data-entry-ref="photo-{{ item['id'] }}"
+                        data-photo-date="{{ item['display_date'] or '' }}"
+                        data-privacy-label="{{ item['privacy_label'] }}"
+                        data-privacy-help="{{ item['privacy_help'] }}"
+                        data-full-src="{{ item['image_url'] }}"
+                        data-messages-url="{{ url_for('connection_photo_messages', connection_id=connection['id'], photo_id=item['id']) }}"
+                    >
+                        <img src="{{ item['image_url'] }}" alt="{{ item['original_filename'] or 'Timeline picture' }}" loading="lazy">
                         <span class="privacy-badge" title="{{ item['privacy_help'] }}">Visible: {{ item["privacy_label"] }}</span>
-                    </div>
-                    {% if item["display_date"] %}
-                        <span class="thumb-date">{{ item["display_date"] }}</span>
-                    {% endif %}
-                </button>
+                        {% if item["display_date"] %}
+                            <span class="thumb-date">{{ item["display_date"] }}</span>
+                        {% endif %}
+                    </button>
+                    {{ reaction_bar(item) }}
+                </article>
+            {% else %}
+                <article class="entry-card">
+                    <button
+                        class="entry-thumb text-thumb readonly-text-thumb"
+                        type="button"
+                        data-entry-ref="text-{{ item['id'] }}"
+                        data-entry-date="{{ item['display_date'] or '' }}"
+                        data-entry-body="{{ item['body'] }}"
+                        data-privacy-label="{{ item['privacy_label'] }}"
+                        data-privacy-help="{{ item['privacy_help'] }}"
+                        aria-label="Text entry{% if item['display_date'] %} from {{ item['display_date'] }}{% endif %}"
+                    >
+                        <div class="text-thumb-content">
+                            <span class="privacy-badge" title="{{ item['privacy_help'] }}">Visible: {{ item["privacy_label"] }}</span>
+                            <div class="text-thumb-preview">{{ item["body"] }}</div>
+                        </div>
+                        {% if item["display_date"] %}
+                            <span class="thumb-date">{{ item["display_date"] }}</span>
+                        {% endif %}
+                    </button>
+                    {{ reaction_bar(item) }}
+                </article>
             {% endif %}
         {% else %}
             <p class="empty-state">No entries yet.</p>

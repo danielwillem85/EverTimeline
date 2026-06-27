@@ -42,6 +42,65 @@ document.addEventListener("DOMContentLoaded", () => {
         container.dataset.privacyHelp = help || "";
     };
 
+    const birthdayConfirmInput = document.querySelector("[data-birthday-confirm-input]");
+    const birthdayConfirmButton = document.querySelector("[data-birthday-confirm-button]");
+    if (birthdayConfirmInput && birthdayConfirmButton) {
+        const updateBirthdayConfirmButton = () => {
+            birthdayConfirmButton.disabled = birthdayConfirmInput.value.trim().toLowerCase() !== "proceed";
+        };
+        birthdayConfirmInput.addEventListener("input", updateBirthdayConfirmButton);
+        updateBirthdayConfirmButton();
+    }
+
+    const birthdayReviewInput = document.querySelector("[data-birthday-review-input]");
+    const birthdayReviewButton = document.querySelector("[data-birthday-review-button]");
+    if (birthdayReviewInput && birthdayReviewButton) {
+        const currentBirthday = birthdayReviewInput.dataset.currentBirthday || "";
+        const updateBirthdayReviewButton = () => {
+            birthdayReviewButton.disabled = Boolean(currentBirthday) && birthdayReviewInput.value === currentBirthday;
+        };
+        birthdayReviewInput.addEventListener("input", updateBirthdayReviewButton);
+        birthdayReviewInput.addEventListener("change", updateBirthdayReviewButton);
+        updateBirthdayReviewButton();
+    }
+
+    const localSettingsMenus = Array.from(document.querySelectorAll(".local-settings-menu"));
+    if (localSettingsMenus.length > 0) {
+        const closeLocalSettingsMenu = (menu) => {
+            menu.open = false;
+        };
+
+        localSettingsMenus.forEach((menu) => {
+            const closeButton = menu.querySelector("[data-close-local-settings]");
+            const summary = menu.querySelector("summary");
+
+            if (closeButton) {
+                closeButton.addEventListener("click", (event) => {
+                    event.preventDefault();
+                    closeLocalSettingsMenu(menu);
+                    if (summary) {
+                        summary.focus();
+                    }
+                });
+            }
+        });
+
+        document.addEventListener("click", (event) => {
+            localSettingsMenus.forEach((menu) => {
+                if (menu.open && !menu.contains(event.target)) {
+                    closeLocalSettingsMenu(menu);
+                }
+            });
+        });
+
+        document.addEventListener("keydown", (event) => {
+            if (event.key !== "Escape") {
+                return;
+            }
+            localSettingsMenus.forEach(closeLocalSettingsMenu);
+        });
+    }
+
     const notificationBadge = document.querySelector("[data-notification-count]");
     if (notificationBadge) {
         const updateNotificationBadge = (count) => {
@@ -596,6 +655,131 @@ document.addEventListener("DOMContentLoaded", () => {
         document.addEventListener("keydown", (event) => {
             if (event.key === "Escape" && !connectionModal.hidden) {
                 closeConnectionModal();
+            }
+        });
+    }
+
+    const updateReactionBars = (kind, itemId, payload) => {
+        document.querySelectorAll("[data-reaction-bar]").forEach((bar) => {
+            if (bar.dataset.reactionKind !== kind || bar.dataset.reactionId !== String(itemId)) {
+                return;
+            }
+
+            const userReaction = payload.user_reaction || "";
+            bar.dataset.userReaction = userReaction;
+            bar.querySelectorAll("[data-reaction-button]").forEach((button) => {
+                const reactionValue = button.dataset.reactionValue;
+                const isActive = reactionValue === userReaction;
+                button.classList.toggle("is-active", isActive);
+                button.setAttribute("aria-pressed", isActive ? "true" : "false");
+            });
+            bar.querySelectorAll("[data-reaction-count]").forEach((count) => {
+                const reactionValue = count.dataset.reactionCount;
+                count.textContent = String(payload[`${reactionValue}_count`] || 0);
+            });
+        });
+    };
+
+    document.querySelectorAll("[data-reaction-button]").forEach((button) => {
+        button.addEventListener("click", async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const bar = button.closest("[data-reaction-bar]");
+            if (!bar || !bar.dataset.reactionUrl) {
+                return;
+            }
+
+            const reactionValue = button.dataset.reactionValue;
+            const alreadySelected = bar.dataset.userReaction === reactionValue;
+            const response = await fetch(bar.dataset.reactionUrl, {
+                method: alreadySelected ? "DELETE" : "PUT",
+                headers: {"Content-Type": "application/json"},
+                body: alreadySelected ? null : JSON.stringify({reaction: reactionValue}),
+            });
+            if (!response.ok) {
+                return;
+            }
+
+            const payload = await response.json();
+            updateReactionBars(bar.dataset.reactionKind, bar.dataset.reactionId, payload);
+        });
+    });
+
+    const homePhotoModal = document.getElementById("home-photo-modal");
+    if (homePhotoModal) {
+        const homePhotoImage = document.getElementById("home-photo-modal-image");
+        const homePhotoOwner = document.getElementById("home-photo-modal-owner");
+        const homePhotoDate = document.getElementById("home-photo-modal-date");
+        const homePhotoMessageList = document.getElementById("home-photo-message-list");
+
+        const renderHomePhotoMessages = (messages) => {
+            homePhotoMessageList.innerHTML = "";
+            if (messages.length === 0) {
+                const empty = document.createElement("p");
+                empty.className = "empty-state compact";
+                empty.textContent = "No messages yet.";
+                homePhotoMessageList.appendChild(empty);
+                return;
+            }
+
+            messages.forEach((message) => {
+                const item = document.createElement("article");
+                item.className = "message-item";
+
+                if (message.author_name) {
+                    const author = document.createElement("strong");
+                    author.className = "message-author";
+                    author.textContent = message.author_name;
+                    item.appendChild(author);
+                }
+
+                const body = document.createElement("p");
+                body.textContent = message.body;
+
+                const stamp = document.createElement("time");
+                stamp.textContent = message.created_at;
+
+                item.append(body, stamp);
+                homePhotoMessageList.appendChild(item);
+            });
+        };
+
+        const closeHomePhotoModal = () => {
+            homePhotoModal.hidden = true;
+            homePhotoImage.removeAttribute("src");
+            homePhotoMessageList.innerHTML = "";
+            document.body.classList.remove("modal-open");
+        };
+
+        const openHomePhotoModal = async (button) => {
+            homePhotoImage.src = button.dataset.fullSrc;
+            homePhotoImage.alt = button.dataset.photoTitle || "Selected public photo";
+            homePhotoOwner.textContent = button.dataset.photoOwner || "";
+            homePhotoDate.textContent = button.dataset.photoDate || "";
+            renderHomePhotoMessages([]);
+            homePhotoModal.hidden = false;
+            document.body.classList.add("modal-open");
+
+            try {
+                const response = await fetch(button.dataset.messagesUrl);
+                renderHomePhotoMessages(response.ok ? await response.json() : []);
+            } catch (error) {
+                renderHomePhotoMessages([]);
+            }
+        };
+
+        document.querySelectorAll(".public-photo-card").forEach((button) => {
+            button.addEventListener("click", () => openHomePhotoModal(button));
+        });
+
+        homePhotoModal.querySelectorAll("[data-close-home-photo-modal]").forEach((button) => {
+            button.addEventListener("click", closeHomePhotoModal);
+        });
+
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape" && !homePhotoModal.hidden) {
+                closeHomePhotoModal();
             }
         });
     }

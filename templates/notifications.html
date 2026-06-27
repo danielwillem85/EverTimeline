@@ -35,6 +35,28 @@
 </section>
 
 <section class="connection-section">
+    <h2>New reactions</h2>
+    {% if reaction_notifications %}
+        <div class="activity-list">
+            {% for notification in reaction_notifications %}
+                <article class="activity-card is-unread">
+                    <div class="activity-main">
+                        <strong>{{ notification["actor_name"] }} {{ notification["reaction_label"] }} your {{ "photo" if notification["kind"] == "photo" else "text entry" }}</strong>
+                        <span>{{ notification["item_label"] }} &middot; {{ notification["item_date"] }}</span>
+                        {% if notification["preview"] %}
+                            <p>{{ notification["preview"] }}</p>
+                        {% endif %}
+                    </div>
+                    <a class="button primary small" href="{{ notification['url'] }}">Open</a>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty-state">No new likes or loves.</p>
+    {% endif %}
+</section>
+
+<section class="connection-section">
     <h2>Connection requests</h2>
     {% if incoming_requests %}
         <div class="request-list">

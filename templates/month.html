@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_reactions.html" import reaction_bar %}
 
 {% block title %}{{ month_name }} {{ year }} - EverTimeline{% endblock %}
 
@@ -21,21 +22,24 @@
 
 {% macro chapter_add_form(item) %}
     {% if chapters %}
-        <form method="post" action="{{ url_for('add_chapter_item') }}" class="chapter-add-form">
-            <input type="hidden" name="item_kind" value="{{ item['kind'] }}">
-            <input type="hidden" name="item_id" value="{{ item['id'] }}">
-            <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
-            <label>
-                <span>Chapter</span>
-                <select name="chapter_id" required>
-                    <option value="">Add to chapter</option>
-                    {% for chapter in chapters %}
-                        <option value="{{ chapter['id'] }}">{{ chapter["title"] }}</option>
-                    {% endfor %}
-                </select>
-            </label>
-            <button class="button secondary small" type="submit">Add</button>
-        </form>
+        <details class="chapter-add-panel">
+            <summary>Chapter</summary>
+            <form method="post" action="{{ url_for('add_chapter_item') }}" class="chapter-add-form">
+                <input type="hidden" name="item_kind" value="{{ item['kind'] }}">
+                <input type="hidden" name="item_id" value="{{ item['id'] }}">
+                <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
+                <label>
+                    <span class="sr-only">Choose chapter</span>
+                    <select name="chapter_id" required>
+                        <option value="">Add to chapter</option>
+                        {% for chapter in chapters %}
+                            <option value="{{ chapter['id'] }}">{{ chapter["title"] }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <button class="button secondary small" type="submit">Add</button>
+            </form>
+        </details>
     {% else %}
         <a class="button secondary small chapter-create-link" href="{{ url_for('chapters') }}">Create chapter</a>
     {% endif %}
@@ -45,27 +49,33 @@
 <section class="page-heading">
     <div>
         <a class="back-link" href="{{ url_for('year_view', year=year) }}">{{ year }}</a>
-        <h1>{{ month_name }}</h1>
+        <div class="month-heading-row">
+            <h1>{{ month_name }}</h1>
+            <details class="local-settings-menu">
+                <summary aria-label="Local settings" title="Local settings">
+                    <span class="local-settings-icon" aria-hidden="true">&#9881;</span>
+                </summary>
+                <section class="local-settings-popup" aria-label="Local settings">
+                    <header class="local-settings-header">
+                        <h2>Bulk visibility</h2>
+                        <button class="icon-button local-settings-close" type="button" data-close-local-settings aria-label="Close local settings">x</button>
+                    </header>
+                    <p class="muted">Set who can see every item in {{ month_name }} {{ year }}.</p>
+                    <form method="post" action="{{ url_for('bulk_month_privacy', year=year, month=month) }}" class="privacy-bulk-form local-settings-form">
+                        {{ tag_radio_group() }}
+                        <button class="button secondary" type="submit">Apply to month</button>
+                    </form>
+                </section>
+            </details>
+        </div>
     </div>
     <div class="page-actions">
         <a class="button secondary" href="{{ url_for('export_month_pdf', year=year, month=month) }}">Export month PDF</a>
     </div>
 </section>
 
-<details class="upload-panel privacy-panel privacy-toggle-panel">
-    <summary class="privacy-toggle-summary">
-        <span>
-            <strong>Bulk visibility</strong>
-            <small>Set who can see every item in {{ month_name }} {{ year }}.</small>
-        </span>
-    </summary>
-    <form method="post" action="{{ url_for('bulk_month_privacy', year=year, month=month) }}" class="privacy-bulk-form">
-        {{ tag_radio_group() }}
-        <button class="button secondary" type="submit">Apply to month</button>
-    </form>
-</details>
-
-<section class="upload-panel">
+<details class="upload-panel form-toggle-panel">
+    <summary class="form-toggle-summary">Add picture(s)</summary>
     <form method="post" enctype="multipart/form-data" class="upload-form">
         <label class="file-field">
             <span>Pictures</span>
@@ -78,9 +88,10 @@
         {{ tag_radio_group() }}
         <button class="button primary" type="submit">Upload</button>
     </form>
-</section>
+</details>
 
-<section class="upload-panel text-entry-panel">
+<details class="upload-panel form-toggle-panel text-entry-panel">
+    <summary class="form-toggle-summary">Text entry</summary>
     <form method="post" action="{{ url_for('create_text_entry', year=year, month=month) }}" class="text-entry-form">
         <label class="text-entry-field">
             <span>Text entry</span>
@@ -93,7 +104,7 @@
         {{ tag_radio_group() }}
         <button class="button primary" type="submit">Save</button>
     </form>
-</section>
+</details>
 
 <section class="photo-section">
     <div class="photo-grid">
@@ -117,6 +128,7 @@
                             <span class="thumb-date">{{ item["display_date"] }}</span>
                         {% endif %}
                     </button>
+                    {{ reaction_bar(item) }}
                     {{ chapter_add_form(item) }}
                 </article>
             {% else %}
@@ -139,6 +151,7 @@
                             <span class="thumb-date">{{ item["display_date"] }}</span>
                         {% endif %}
                     </button>
+                    {{ reaction_bar(item) }}
                     {{ chapter_add_form(item) }}
                 </article>
             {% endif %}

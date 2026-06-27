@@ -1,0 +1,36 @@
+{% macro reaction_bar(item, extra_class="") %}
+    {% set reactions = item.get("reactions", {}) %}
+    <div
+        class="reaction-bar {{ extra_class }}"
+        data-reaction-bar
+        data-reaction-kind="{{ item['kind'] }}"
+        data-reaction-id="{{ item['id'] }}"
+        data-reaction-url="{{ reactions.get('reaction_url') or url_for('timeline_item_reaction', item_kind=item['kind'], item_id=item['id']) }}"
+        data-user-reaction="{{ reactions.get('user_reaction', '') }}"
+    >
+        <button
+            class="reaction-button{% if reactions.get('user_reaction') == 'like' %} is-active{% endif %}"
+            type="button"
+            data-reaction-button
+            data-reaction-value="like"
+            title="Like"
+            aria-label="Like"
+            aria-pressed="{{ 'true' if reactions.get('user_reaction') == 'like' else 'false' }}"
+        >
+            <span class="reaction-icon" aria-hidden="true">&#128077;</span>
+            <span class="reaction-count" data-reaction-count="like">{{ reactions.get("like_count", 0) }}</span>
+        </button>
+        <button
+            class="reaction-button{% if reactions.get('user_reaction') == 'love' %} is-active{% endif %}"
+            type="button"
+            data-reaction-button
+            data-reaction-value="love"
+            title="Love"
+            aria-label="Love"
+            aria-pressed="{{ 'true' if reactions.get('user_reaction') == 'love' else 'false' }}"
+        >
+            <span class="reaction-icon" aria-hidden="true">&#9829;</span>
+            <span class="reaction-count" data-reaction-count="love">{{ reactions.get("love_count", 0) }}</span>
+        </button>
+    </div>
+{% endmacro %}

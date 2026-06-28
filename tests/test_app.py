@@ -251,6 +251,56 @@ def test_timeline_import_assistant_reviews_detected_dates_before_saving(client, 
     assert helpers.row("SELECT COUNT(*) AS count FROM photo_import_items")["count"] == 0
 
 
+def test_timeline_import_assistant_reviews_duplicate_photos(client, helpers):
+    helpers.create_user(client, "owner")
+    existing_photo_id = helpers.upload_photo(
+        client,
+        filename="existing-memory.png",
+        title="Existing memory",
+        photo_date="2020-05-04",
+        tag="private",
+    )
+
+    upload_response = client.post(
+        "/timeline/import",
+        data={
+            **helpers.csrf_form_data(client, "/timeline/import"),
+            "photo": (
+                io.BytesIO(helpers.png_bytes()),
+                "duplicate-20200504.png",
+                "image/png",
+            ),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert upload_response.status_code == 302
+    review_path = upload_response.headers["Location"]
+    item = helpers.row("SELECT * FROM photo_import_items")
+    assert item["duplicate_photo_id"] == existing_photo_id
+
+    review_response = client.get(review_path)
+    assert review_response.status_code == 200
+    assert b"Possible duplicate" in review_response.data
+    assert b"Already in timeline" in review_response.data
+    assert b"Existing memory" in review_response.data
+    assert b"Skip duplicate" in review_response.data
+    assert b"checked" in review_response.data
+
+    save_response = client.post(
+        review_path,
+        data={
+            **helpers.csrf_form_data(client, review_path),
+            f"photo_date_{item['id']}": "2020-05-04",
+            f"tags_{item['id']}": "private",
+        },
+    )
+
+    assert save_response.status_code == 302
+    assert helpers.row("SELECT COUNT(*) AS count FROM photos")["count"] == 2
+    assert helpers.row("SELECT COUNT(*) AS count FROM photo_import_batches")["count"] == 0
+
+
 def test_full_account_backup_export_and_import(client, helpers):
     owner_id = helpers.create_user(client, "owner")
     photo_id = helpers.upload_photo(

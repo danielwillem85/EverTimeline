@@ -1046,7 +1046,7 @@ details.privacy-toggle-panel {
 
 .import-review-card {
     display: grid;
-    grid-template-columns: 160px minmax(0, 1fr);
+    grid-template-columns: minmax(160px, 190px) minmax(0, 1fr);
     gap: 16px;
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -1055,12 +1055,60 @@ details.privacy-toggle-panel {
     box-shadow: 0 8px 20px rgba(24, 31, 28, 0.08);
 }
 
-.import-review-card img {
+.import-review-card.has-duplicate {
+    grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+    border-color: rgba(184, 79, 62, 0.38);
+    background: #fffaf8;
+}
+
+.import-review-preview-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+}
+
+.import-review-card.has-duplicate .import-review-preview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.import-review-preview {
+    display: grid;
+    align-content: start;
+    gap: 8px;
+    min-width: 0;
+    margin: 0;
+}
+
+.import-review-preview img {
     width: 100%;
     aspect-ratio: 1;
     border-radius: 6px;
     background: var(--surface-strong);
     object-fit: cover;
+}
+
+.import-review-preview figcaption {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+
+.import-review-preview figcaption strong,
+.import-review-preview figcaption span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.import-review-preview figcaption strong {
+    color: var(--ink);
+    font-size: 0.82rem;
+}
+
+.import-review-preview figcaption span {
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 800;
 }
 
 .import-review-main {
@@ -1083,6 +1131,23 @@ details.privacy-toggle-panel {
     margin-bottom: 0;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.import-review-badges {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+}
+
+.duplicate-badge {
+    background: #fff0eb;
+    color: #8b2c21;
+}
+
+.import-duplicate-link {
+    justify-self: start;
 }
 
 .import-review-fields {
@@ -3149,11 +3214,14 @@ details.privacy-toggle-panel {
     }
 
     .import-review-card,
+    .import-review-card.has-duplicate,
+    .import-review-preview-grid,
+    .import-review-card.has-duplicate .import-review-preview-grid,
     .import-review-fields {
         grid-template-columns: 1fr;
     }
 
-    .import-review-card img {
+    .import-review-preview img {
         max-height: 240px;
     }
 

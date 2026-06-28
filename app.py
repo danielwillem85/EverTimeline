@@ -37,7 +37,8 @@ BASE_DIR = Path(__file__).resolve().parent
 DATABASE = Path(os.environ.get("EVERTIMELINE_DATABASE", BASE_DIR / "evertimeline.sqlite3"))
 ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 JPEG_STORAGE_MIME = "image/jpeg"
-JPEG_STORAGE_QUALITY = 82
+JPEG_STORAGE_QUALITY = 72
+JPEG_STORAGE_MAX_EDGE = 1600
 EXIF_DATE_TAGS = (36867, 36868, 306)
 TAG_CHOICES = ("private", "family", "friends", "public")
 REACTION_CHOICES = ("like", "love")
@@ -1078,6 +1079,12 @@ def storage_jpeg_from_image(image_data):
                 image = background
             elif image.mode != "RGB":
                 image = image.convert("RGB")
+
+            if max(image.size) > JPEG_STORAGE_MAX_EDGE:
+                image.thumbnail(
+                    (JPEG_STORAGE_MAX_EDGE, JPEG_STORAGE_MAX_EDGE),
+                    Image.Resampling.LANCZOS,
+                )
 
             buffer = io.BytesIO()
             image.save(

@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% from "_reactions.html" import reaction_bar %}
+
+{% block title %}On this day - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <h1>On this day</h1>
+        <p class="muted">{{ month_day_label }} across your timeline.</p>
+    </div>
+    <div class="page-actions">
+        <a class="button secondary" href="{{ url_for('timeline') }}">Timeline</a>
+    </div>
+</section>
+
+<section class="search-panel on-this-day-controls">
+    <form class="search-form on-this-day-form" method="get">
+        <label>
+            <span>Memory date</span>
+            <input name="date" type="date" value="{{ selected_date_value }}">
+        </label>
+        <button class="button primary" type="submit">Show memories</button>
+    </form>
+</section>
+
+<section class="on-this-day-summary" aria-label="On this day summary">
+    <span class="status-badge">{{ items|length }} {{ "memory" if items|length == 1 else "memories" }}</span>
+    {% if years %}
+        <p class="muted">Years: {{ years|join(", ") }}</p>
+    {% else %}
+        <p class="muted">Add dated photos or text entries and they will appear here each year.</p>
+    {% endif %}
+</section>
+
+<section class="photo-section">
+    <div class="photo-grid on-this-day-grid">
+        {% for item in items %}
+            {% if item["kind"] == "photo" %}
+                <article class="entry-card on-this-day-card">
+                    <button
+                        class="entry-thumb photo-thumb readonly-photo-thumb"
+                        type="button"
+                        data-entry-ref="{{ item['entry_ref'] }}"
+                        data-photo-display-title="{{ item['display_title'] }}"
+                        data-photo-caption="{{ item['caption'] or '' }}"
+                        data-photo-date="{{ item['display_date'] or '' }}"
+                        data-privacy-label="{{ item['privacy_label'] }}"
+                        data-privacy-help="{{ item['privacy_help'] }}"
+                        data-full-src="{{ item['image_url'] }}"
+                        data-messages-url="{{ item['messages_url'] }}"
+                    >
+                        <img src="{{ item['image_url'] }}" alt="{{ item['display_title'] }}" loading="lazy">
+                        <span class="memory-year-badge">{{ item["year"] }}</span>
+                        <span class="privacy-badge" title="{{ item['privacy_help'] }}">Visible: {{ item["privacy_label"] }}</span>
+                        <span class="thumb-date">{{ item["display_date"] }}</span>
+                    </button>
+                    {% if item["title"] or item["caption"] %}
+                        <div class="photo-card-meta">
+                            {% if item["title"] %}
+                                <strong>{{ item["title"] }}</strong>
+                            {% endif %}
+                            {% if item["caption"] %}
+                                <span>{{ item["caption"] }}</span>
+                            {% endif %}
+                        </div>
+                    {% endif %}
+                    {{ reaction_bar(item) }}
+                    <a
+                        class="button secondary small open-month-button"
+                        href="{{ url_for('month_view', year=item['year'], month=item['month'], focus=item['entry_ref']) }}"
+                    >Open month</a>
+                </article>
+            {% else %}
+                <article class="entry-card on-this-day-card">
+                    <button
+                        class="entry-thumb text-thumb readonly-text-thumb"
+                        type="button"
+                        data-entry-ref="{{ item['entry_ref'] }}"
+                        data-entry-date="{{ item['display_date'] or '' }}"
+                        data-entry-body="{{ item['body'] }}"
+                        data-privacy-label="{{ item['privacy_label'] }}"
+                        data-privacy-help="{{ item['privacy_help'] }}"
+                        aria-label="Text entry from {{ item['display_date'] }}"
+                    >
+                        <span class="memory-year-badge">{{ item["year"] }}</span>
+                        <div class="text-thumb-content">
+                            <span class="privacy-badge" title="{{ item['privacy_help'] }}">Visible: {{ item["privacy_label"] }}</span>
+                            <div class="text-thumb-preview">{{ item["body"] }}</div>
+                        </div>
+                        <span class="thumb-date">{{ item["display_date"] }}</span>
+                    </button>
+                    {{ reaction_bar(item) }}
+                    <a
+                        class="button secondary small open-month-button"
+                        href="{{ url_for('month_view', year=item['year'], month=item['month'], focus=item['entry_ref']) }}"
+                    >Open month</a>
+                </article>
+            {% endif %}
+        {% else %}
+            <p class="empty-state">No memories for {{ month_day_label }} yet.</p>
+        {% endfor %}
+    </div>
+</section>
+
+<div class="modal" id="readonly-text-modal" hidden>
+    <div class="modal-backdrop" data-close-readonly-text-modal></div>
+    <section class="modal-panel text-modal-panel" role="dialog" aria-modal="true" aria-labelledby="readonly-text-modal-title">
+        <header class="modal-header">
+            <div>
+                <h2 id="readonly-text-modal-title">Text entry</h2>
+                <p id="readonly-text-modal-date" class="muted"></p>
+                <p id="readonly-text-privacy-summary" class="privacy-summary"></p>
+            </div>
+            <button class="icon-button" type="button" data-close-readonly-text-modal aria-label="Close popup">x</button>
+        </header>
+        <div class="text-modal-body">
+            <div id="readonly-text-entry-view" class="text-entry-view"></div>
+        </div>
+    </section>
+</div>
+
+<div class="modal" id="readonly-photo-modal" hidden>
+    <div class="modal-backdrop" data-close-readonly-photo-modal></div>
+    <section class="modal-panel photo-modal-panel" role="dialog" aria-modal="true" aria-labelledby="readonly-photo-modal-title">
+        <header class="modal-header">
+            <div>
+                <h2 id="readonly-photo-modal-title">Picture</h2>
+                <p id="readonly-photo-modal-date" class="muted"></p>
+                <p id="readonly-photo-caption-view" class="photo-caption-view"></p>
+                <p id="readonly-photo-privacy-summary" class="privacy-summary"></p>
+            </div>
+            <button class="icon-button" type="button" data-close-readonly-photo-modal aria-label="Close popup">x</button>
+        </header>
+        <div class="modal-body">
+            <img id="readonly-modal-image" alt="Selected timeline picture">
+            <aside class="message-panel readonly-message-panel">
+                <h3>Messages</h3>
+                <div id="readonly-message-list" class="message-list"></div>
+            </aside>
+        </div>
+    </section>
+</div>
+{% endblock %}

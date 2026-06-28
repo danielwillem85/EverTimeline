@@ -27,6 +27,7 @@ from flask import (
     url_for,
 )
 from markupsafe import Markup, escape as html_escape
+from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 from PIL import Image
@@ -98,6 +99,7 @@ MONTH_NAMES = [
 BACKUP_FORMAT = "evertimeline.account_backup"
 BACKUP_FORMAT_VERSION = 1
 BACKUP_MANIFEST_NAME = "evertimeline-backup.json"
+DEFAULT_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
 
 
 def env_flag(name, default=False):
@@ -131,10 +133,33 @@ def run_debug_enabled():
     return env_flag("EVERTIMELINE_DEBUG") or env_flag("FLASK_DEBUG")
 
 
+def configured_max_upload_bytes():
+    value = os.environ.get("EVERTIMELINE_MAX_UPLOAD_MB")
+    if not value:
+        return DEFAULT_MAX_UPLOAD_BYTES
+    try:
+        megabytes = int(value)
+    except ValueError:
+        return DEFAULT_MAX_UPLOAD_BYTES
+    if megabytes <= 0:
+        return DEFAULT_MAX_UPLOAD_BYTES
+    return megabytes * 1024 * 1024
+
+
+def human_readable_bytes(byte_count):
+    if byte_count >= 1024 * 1024 * 1024:
+        return f"{byte_count / (1024 * 1024 * 1024):g} GB"
+    if byte_count >= 1024 * 1024:
+        return f"{byte_count / (1024 * 1024):g} MB"
+    if byte_count >= 1024:
+        return f"{byte_count / 1024:g} KB"
+    return f"{byte_count} bytes"
+
+
 app = Flask(__name__)
 app.config.update(
     SECRET_KEY=configured_secret_key(),
-    MAX_CONTENT_LENGTH=128 * 1024 * 1024,
+    MAX_CONTENT_LENGTH=configured_max_upload_bytes(),
     CSRF_PROTECT=True,
     LOCAL_PASSWORD_RESET_LINKS=is_local_development(),
 )
@@ -151,6 +176,17 @@ def csrf_token():
 def csrf_field():
     token = html_escape(csrf_token())
     return Markup(f'<input type="hidden" name="csrf_token" value="{token}">')
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def handle_request_too_large(error):
+    max_size = human_readable_bytes(app.config["MAX_CONTENT_LENGTH"])
+    flash(
+        f"That upload is too large. The current limit is {max_size} per request. Try fewer or smaller files.",
+        "error",
+    )
+    target = request.path if request.path.startswith("/") else url_for("timeline")
+    return redirect(target), 303
 
 
 @app.before_request
@@ -1861,6 +1897,207 @@ def people_payload(people):
         "people": parsed_people,
         "people_text": people_to_text(parsed_people),
     }
+
+
+def people_year_label(years):
+    years = sorted(years)
+    if not years:
+        return ""
+    if len(years) == 1:
+        return str(years[0])
+    return f"{years[0]}-{years[-1]}"
+
+
+def get_timeline_person(db, person_id):
+    person = db.execute(
+        """
+        SELECT id, name
+        FROM people
+        WHERE id = ? AND user_id = ?
+        """,
+        (person_id, g.user["id"]),
+    ).fetchone()
+    if person is None:
+        abort(404)
+    return person
+
+
+def build_people_summaries(db):
+    photo_rows = db.execute(
+        """
+        SELECT p.id AS person_id, p.name, ph.id AS item_id, ph.year, ph.month,
+               ph.photo_date AS display_date
+        FROM people p
+        JOIN photo_people pp ON pp.person_id = p.id
+        JOIN photos ph ON ph.id = pp.photo_id AND ph.user_id = p.user_id
+        WHERE p.user_id = ?
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    text_rows = db.execute(
+        """
+        SELECT p.id AS person_id, p.name, te.id AS item_id, te.year, te.month,
+               te.entry_date AS display_date
+        FROM people p
+        JOIN text_entry_people tep ON tep.person_id = p.id
+        JOIN text_entries te ON te.id = tep.entry_id AND te.user_id = p.user_id
+        WHERE p.user_id = ?
+        """,
+        (g.user["id"],),
+    ).fetchall()
+
+    summaries = {}
+
+    def add_row(row, kind):
+        person_id = row["person_id"]
+        summary = summaries.setdefault(
+            person_id,
+            {
+                "id": person_id,
+                "name": normalize_person_name(row["name"]),
+                "photo_count": 0,
+                "text_count": 0,
+                "years": set(),
+                "latest_sort_key": None,
+                "latest_label": "",
+                "url": url_for("timeline_person", person_id=person_id),
+            },
+        )
+        if kind == "photo":
+            summary["photo_count"] += 1
+        else:
+            summary["text_count"] += 1
+        summary["years"].add(row["year"])
+        sort_key = timeline_item_sort_key(
+            {
+                "year": row["year"],
+                "month": row["month"],
+                "display_date": row["display_date"],
+                "kind": kind,
+                "id": row["item_id"],
+            }
+        )
+        if summary["latest_sort_key"] is None or sort_key > summary["latest_sort_key"]:
+            summary["latest_sort_key"] = sort_key
+            summary["latest_label"] = format_timeline_date_label(
+                row["year"],
+                row["month"],
+                row["display_date"],
+            )
+
+    for row in photo_rows:
+        add_row(row, "photo")
+    for row in text_rows:
+        add_row(row, "text")
+
+    people = []
+    for summary in summaries.values():
+        summary["item_count"] = summary["photo_count"] + summary["text_count"]
+        summary["year_label"] = people_year_label(summary["years"])
+        summary.pop("years", None)
+        summary.pop("latest_sort_key", None)
+        people.append(summary)
+
+    people.sort(key=lambda item: (-item["item_count"], item["name"].casefold()))
+    return people
+
+
+def build_person_timeline_items(db, person_id):
+    get_timeline_person(db, person_id)
+    photo_rows = db.execute(
+        """
+        SELECT ph.id, ph.year, ph.month, ph.original_filename, ph.title, ph.caption,
+               ph.photo_date, ph.location_name, ph.latitude, ph.longitude, ph.created_at
+        FROM photos ph
+        JOIN photo_people pp ON pp.photo_id = ph.id
+        WHERE ph.user_id = ? AND pp.person_id = ?
+        """,
+        (g.user["id"], person_id),
+    ).fetchall()
+    text_rows = db.execute(
+        """
+        SELECT te.id, te.year, te.month, te.body, te.entry_date, te.location_name,
+               te.latitude, te.longitude, te.created_at, te.updated_at
+        FROM text_entries te
+        JOIN text_entry_people tep ON tep.entry_id = te.id
+        WHERE te.user_id = ? AND tep.person_id = ?
+        """,
+        (g.user["id"], person_id),
+    ).fetchall()
+
+    photo_ids = [row["id"] for row in photo_rows]
+    text_ids = [row["id"] for row in text_rows]
+    photo_tags = load_tags_for_items(db, "photo", photo_ids)
+    text_tags = load_tags_for_items(db, "text", text_ids)
+    photo_people = load_people_for_items(db, "photo", photo_ids)
+    text_people = load_people_for_items(db, "text", text_ids)
+
+    items = []
+    for row in photo_rows:
+        tags = photo_tags.get(row["id"], [])
+        people = photo_people.get(row["id"], [])
+        sort_key = timeline_item_sort_key(
+            {
+                "year": row["year"],
+                "month": row["month"],
+                "display_date": row["photo_date"],
+                "kind": "photo",
+                "id": row["id"],
+            }
+        )
+        items.append(
+            {
+                "kind": "photo",
+                "kind_label": "Photo",
+                "id": row["id"],
+                "title": photo_display_title(row),
+                "preview": short_preview(row["caption"] or "Photo"),
+                "date_label": format_timeline_date_label(row["year"], row["month"], row["photo_date"]),
+                "source_label": item_source_label(row["year"], row["month"]),
+                "image_url": url_for("photo_image", photo_id=row["id"]),
+                "url": timeline_item_link(g.user["id"], row["year"], row["month"], "photo", row["id"]),
+                "tags": tags,
+                "tags_text": tags_to_text(tags),
+                **people_payload(people),
+                **privacy_payload_for_tags(tags),
+                "sort_key": sort_key,
+            }
+        )
+
+    for row in text_rows:
+        tags = text_tags.get(row["id"], [])
+        people = text_people.get(row["id"], [])
+        sort_key = timeline_item_sort_key(
+            {
+                "year": row["year"],
+                "month": row["month"],
+                "display_date": row["entry_date"],
+                "kind": "text",
+                "id": row["id"],
+            }
+        )
+        items.append(
+            {
+                "kind": "text",
+                "kind_label": "Text",
+                "id": row["id"],
+                "title": "Text entry",
+                "preview": short_preview(row["body"], 180),
+                "date_label": format_timeline_date_label(row["year"], row["month"], row["entry_date"]),
+                "source_label": item_source_label(row["year"], row["month"]),
+                "url": timeline_item_link(g.user["id"], row["year"], row["month"], "text", row["id"]),
+                "tags": tags,
+                "tags_text": tags_to_text(tags),
+                **people_payload(people),
+                **privacy_payload_for_tags(tags),
+                "sort_key": sort_key,
+            }
+        )
+
+    items.sort(key=lambda item: item["sort_key"], reverse=True)
+    for item in items:
+        item.pop("sort_key", None)
+    return items
 
 
 def tags_visible_to_connection(tags, allowed_tags):
@@ -6586,6 +6823,30 @@ def delete_timeline_collection(view_id):
     flash("Deleted saved view.", "success")
     return redirect(url_for("timeline_collections"))
 
+
+@app.route("/timeline/people")
+@birthday_required
+def timeline_people():
+    return render_template(
+        "timeline_people.html",
+        people=build_people_summaries(get_db()),
+    )
+
+
+@app.route("/timeline/people/<int:person_id>")
+@birthday_required
+def timeline_person(person_id):
+    db = get_db()
+    person = get_timeline_person(db, person_id)
+    items = build_person_timeline_items(db, person_id)
+    return render_template(
+        "timeline_person.html",
+        person=person,
+        items=items,
+    )
+ 
+@app.route("/timeline/people")
+ 
 
 @app.route("/timeline/map")
 @birthday_required

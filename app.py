@@ -189,6 +189,7 @@ def inject_tag_choices():
 
 def init_db():
     with closing(sqlite3.connect(DATABASE)) as db:
+        db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys = ON")
         db.executescript(
             """
@@ -2588,26 +2589,38 @@ def owner_label(owner_id, name):
     return "your" if owner_id == g.user["id"] else f"{name}'s"
 
 
-def add_activity_item(feed_items, *, created_at, actor_id, actor_name, owner_id, owner_name, action, item_kind, item_id, year, month, display_date=None, body=None):
+def add_activity_event(feed_items, *, created_at, type_label, summary, meta="", preview="", url=""):
+    if not created_at:
+        return
+    feed_items.append(
+        {
+            "created_at": created_at,
+            "type_label": type_label,
+            "summary": summary,
+            "item_date": meta,
+            "preview": short_preview(preview or ""),
+            "url": url,
+        }
+    )
+
+
+def add_activity_item(feed_items, *, created_at, actor_id, actor_name, owner_id, owner_name, action, item_kind, item_id, year, month, display_date=None, body=None, type_label="Timeline"):
     if item_kind == "photo":
         target_label = "photo"
     else:
         target_label = "text entry"
-    feed_items.append(
-        {
-            "created_at": created_at,
-            "actor_name": actor_label(actor_id, actor_name),
-            "owner_name": owner_name,
-            "summary": action.format(
-                actor=actor_label(actor_id, actor_name),
-                owner=owner_label(owner_id, owner_name),
-                item=target_label,
-            ),
-            "item_kind": item_kind,
-            "item_date": display_date or format_timeline_date_label(year, month, None),
-            "preview": short_preview(body or ""),
-            "url": timeline_item_link(owner_id, year, month, item_kind, item_id),
-        }
+    add_activity_event(
+        feed_items,
+        created_at=created_at,
+        type_label=type_label,
+        summary=action.format(
+            actor=actor_label(actor_id, actor_name),
+            owner=owner_label(owner_id, owner_name),
+            item=target_label,
+        ),
+        meta=display_date or format_timeline_date_label(year, month, None),
+        preview=body,
+        url=timeline_item_link(owner_id, year, month, item_kind, item_id),
     )
 
 
@@ -2662,6 +2675,7 @@ def get_activity_feed(db, limit=60):
                 month=row["month"],
                 display_date=row["photo_date"],
                 body=row["caption"] or photo_display_title(row),
+                type_label="Upload",
             )
 
         text_rows = db.execute(
@@ -2692,6 +2706,7 @@ def get_activity_feed(db, limit=60):
                 month=row["month"],
                 display_date=row["entry_date"],
                 body=row["body"],
+                type_label="Text",
             )
 
     message_photo_rows = db.execute(
@@ -2739,6 +2754,7 @@ def get_activity_feed(db, limit=60):
             month=row["month"],
             display_date=row["item_date"],
             body=row["body"],
+            type_label="Comment",
         )
 
     message_text_rows = db.execute(
@@ -2786,7 +2802,248 @@ def get_activity_feed(db, limit=60):
             month=row["month"],
             display_date=row["item_date"],
             body=row["body"],
+            type_label="Comment",
         )
+
+    reaction_rows = db.execute(
+        f"""
+        SELECT
+            ir.reaction,
+            ir.created_at,
+            ir.user_id AS actor_id,
+            ir.item_kind,
+            ir.item_id,
+            COALESCE(p.user_id, te.user_id) AS owner_id,
+            COALESCE(p.year, te.year) AS year,
+            COALESCE(p.month, te.month) AS month,
+            COALESCE(p.photo_date, te.entry_date) AS item_date,
+            COALESCE(NULLIF(p.title, ''), p.original_filename, te.body, 'Text entry') AS preview,
+            u.username,
+            u.first_name,
+            u.last_name
+        FROM item_reactions ir
+        LEFT JOIN photos p ON ir.item_kind = 'photo' AND p.id = ir.item_id
+        LEFT JOIN text_entries te ON ir.item_kind = 'text' AND te.id = ir.item_id
+        JOIN users u ON u.id = ir.user_id
+        WHERE COALESCE(p.user_id, te.user_id) IN ({placeholders})
+        ORDER BY ir.created_at DESC
+        LIMIT 80
+        """,
+        tuple(visible_owner_ids),
+    ).fetchall()
+    for row in reaction_rows:
+        owner_id = row["owner_id"]
+        allowed_tags = None if owner_id == g.user["id"] else connection_by_id[owner_id]["allowed_tags"]
+        tags = get_tags_for_item(db, row["item_kind"], row["item_id"], owner_id)
+        if not tags_visible_to_connection(tags, allowed_tags):
+            continue
+        actor_name = user_full_name(row) or row["username"]
+        reaction_word = "liked" if row["reaction"] == "like" else "loved"
+        add_activity_item(
+            feed_items,
+            created_at=row["created_at"],
+            actor_id=row["actor_id"],
+            actor_name=actor_name,
+            owner_id=owner_id,
+            owner_name=user_names.get(owner_id, "Someone"),
+            action=f"{{actor}} {reaction_word} {{owner}} {{item}}",
+            item_kind=row["item_kind"],
+            item_id=row["item_id"],
+            year=row["year"],
+            month=row["month"],
+            display_date=row["item_date"],
+            body=row["preview"],
+            type_label="Reaction",
+        )
+
+    chapter_rows = db.execute(
+        """
+        SELECT id, title, description, created_at, updated_at
+        FROM chapters
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        LIMIT 60
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    for row in chapter_rows:
+        add_activity_event(
+            feed_items,
+            created_at=row["created_at"],
+            type_label="Chapter",
+            summary=f"You created chapter \"{row['title']}\"",
+            meta=row["created_at"],
+            preview=row["description"] or "",
+            url=url_for("chapter_detail", chapter_id=row["id"]),
+        )
+        if row["updated_at"]:
+            add_activity_event(
+                feed_items,
+                created_at=row["updated_at"],
+                type_label="Chapter",
+                summary=f"You updated chapter \"{row['title']}\"",
+                meta=row["updated_at"],
+                preview=row["description"] or "",
+                url=url_for("chapter_detail", chapter_id=row["id"]),
+            )
+
+    chapter_item_rows = db.execute(
+        """
+        SELECT
+            ci.item_kind,
+            ci.item_id,
+            ci.created_at,
+            c.id AS chapter_id,
+            c.title AS chapter_title,
+            COALESCE(p.year, te.year) AS year,
+            COALESCE(p.month, te.month) AS month,
+            COALESCE(p.photo_date, te.entry_date) AS item_date,
+            COALESCE(NULLIF(p.title, ''), p.original_filename, te.body, 'Text entry') AS preview
+        FROM chapter_items ci
+        JOIN chapters c ON c.id = ci.chapter_id
+        LEFT JOIN photos p ON ci.item_kind = 'photo' AND p.id = ci.item_id
+        LEFT JOIN text_entries te ON ci.item_kind = 'text' AND te.id = ci.item_id
+        WHERE c.user_id = ?
+        ORDER BY ci.created_at DESC
+        LIMIT 60
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    for row in chapter_item_rows:
+        target_label = "photo" if row["item_kind"] == "photo" else "text entry"
+        add_activity_event(
+            feed_items,
+            created_at=row["created_at"],
+            type_label="Chapter",
+            summary=f"You added a {target_label} to \"{row['chapter_title']}\"",
+            meta=row["item_date"] or format_timeline_date_label(row["year"], row["month"], None),
+            preview=row["preview"],
+            url=url_for("chapter_detail", chapter_id=row["chapter_id"]),
+        )
+
+    chapter_invite_rows = db.execute(
+        """
+        SELECT
+            ci.*,
+            c.title AS chapter_title,
+            inviter.username AS inviter_username,
+            inviter.first_name AS inviter_first_name,
+            inviter.last_name AS inviter_last_name,
+            recipient.username AS recipient_username,
+            recipient.first_name AS recipient_first_name,
+            recipient.last_name AS recipient_last_name
+        FROM chapter_invites ci
+        JOIN chapters c ON c.id = ci.chapter_id
+        JOIN users inviter ON inviter.id = ci.inviter_id
+        JOIN users recipient ON recipient.id = ci.recipient_id
+        WHERE ci.inviter_id = ? OR ci.recipient_id = ?
+        ORDER BY ci.created_at DESC
+        LIMIT 80
+        """,
+        (g.user["id"], g.user["id"]),
+    ).fetchall()
+    for row in chapter_invite_rows:
+        inviter_name = user_full_name(
+            {
+                "first_name": row["inviter_first_name"],
+                "last_name": row["inviter_last_name"],
+            }
+        ) or row["inviter_username"]
+        recipient_name = user_full_name(
+            {
+                "first_name": row["recipient_first_name"],
+                "last_name": row["recipient_last_name"],
+            }
+        ) or row["recipient_username"]
+        if row["inviter_id"] == g.user["id"]:
+            created_summary = f"You invited {recipient_name} to \"{row['chapter_title']}\""
+            url = url_for("chapter_detail", chapter_id=row["chapter_id"])
+        else:
+            created_summary = f"{inviter_name} invited you to \"{row['chapter_title']}\""
+            url = (
+                url_for("shared_chapter_detail", chapter_id=row["chapter_id"])
+                if row["status"] == "accepted"
+                else url_for("notifications")
+            )
+        add_activity_event(
+            feed_items,
+            created_at=row["created_at"],
+            type_label="Share",
+            summary=created_summary,
+            meta=row["status"],
+            url=url,
+        )
+        if row["responded_at"]:
+            if row["recipient_id"] == g.user["id"]:
+                response_summary = f"You {row['status']} the invite to \"{row['chapter_title']}\""
+            else:
+                response_summary = f"{recipient_name} {row['status']} your invite to \"{row['chapter_title']}\""
+            add_activity_event(
+                feed_items,
+                created_at=row["responded_at"],
+                type_label="Share",
+                summary=response_summary,
+                meta=row["status"],
+                url=url,
+            )
+
+    connection_rows = db.execute(
+        """
+        SELECT
+            cr.*,
+            requester.username AS requester_username,
+            requester.first_name AS requester_first_name,
+            requester.last_name AS requester_last_name,
+            recipient.username AS recipient_username,
+            recipient.first_name AS recipient_first_name,
+            recipient.last_name AS recipient_last_name
+        FROM connection_requests cr
+        JOIN users requester ON requester.id = cr.requester_id
+        JOIN users recipient ON recipient.id = cr.recipient_id
+        WHERE cr.requester_id = ? OR cr.recipient_id = ?
+        ORDER BY cr.created_at DESC
+        LIMIT 80
+        """,
+        (g.user["id"], g.user["id"]),
+    ).fetchall()
+    for row in connection_rows:
+        requester_name = user_full_name(
+            {
+                "first_name": row["requester_first_name"],
+                "last_name": row["requester_last_name"],
+            }
+        ) or row["requester_username"]
+        recipient_name = user_full_name(
+            {
+                "first_name": row["recipient_first_name"],
+                "last_name": row["recipient_last_name"],
+            }
+        ) or row["recipient_username"]
+        if row["requester_id"] == g.user["id"]:
+            created_summary = f"You sent {recipient_name} a connection request"
+        else:
+            created_summary = f"{requester_name} sent you a connection request"
+        add_activity_event(
+            feed_items,
+            created_at=row["created_at"],
+            type_label="Connection",
+            summary=created_summary,
+            meta=row["relation"],
+            url=url_for("connections"),
+        )
+        if row["responded_at"]:
+            if row["recipient_id"] == g.user["id"]:
+                response_summary = f"You {row['status']} {requester_name}'s connection request"
+            else:
+                response_summary = f"{recipient_name} {row['status']} your connection request"
+            add_activity_event(
+                feed_items,
+                created_at=row["responded_at"],
+                type_label="Connection",
+                summary=response_summary,
+                meta=row["relation"],
+                url=url_for("connections"),
+            )
 
     feed_items.sort(key=lambda item: item["created_at"], reverse=True)
     return feed_items[:limit]
@@ -5709,7 +5966,7 @@ def notification_count():
 @app.route("/activity")
 @login_required
 def activity():
-    return redirect(url_for("notifications"))
+    return render_template("activity.html", feed_items=get_activity_feed(get_db(), limit=120))
 
 
 @app.route("/connections/request", methods=("POST",))

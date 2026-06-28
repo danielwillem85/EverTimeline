@@ -658,3 +658,87 @@ def test_reactions_messages_and_notifications_for_connection(app, client, helper
     messages = client.get(f"/api/timeline-item/text/{text_id}/messages")
     assert messages.status_code == 200
     assert [message["body"] for message in messages.get_json()] == ["This made me smile."]
+
+
+def test_activity_history_shows_uploads_chapters_connections_comments_and_reactions(app, client, helpers):
+    owner_id = helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="activity-photo.png",
+        title="Activity photo",
+        caption="A visible upload",
+        tag="friends",
+    )
+
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Activity chapter",
+            "description": "Original chapter note",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row(
+        "SELECT id FROM chapters WHERE user_id = ? ORDER BY id DESC",
+        (owner_id,),
+    )["id"]
+    add_response = client.post(
+        "/chapters/items",
+        data={
+            **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+            "chapter_id": chapter_id,
+            "item_kind": "photo",
+            "item_id": photo_id,
+        },
+    )
+    assert add_response.status_code == 302
+    update_response = client.post(
+        f"/chapters/{chapter_id}/settings",
+        data={
+            **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+            "title": "Activity chapter updated",
+            "description": "Edited chapter note",
+            "visibility": "private",
+            "cover_ref": "",
+        },
+    )
+    assert update_response.status_code == 302
+
+    friend = app.test_client()
+    helpers.create_user(friend, "friend")
+    request_id = helpers.request_connection(friend, owner_id, relation="friend")
+    helpers.accept_connection(client, request_id)
+
+    message_response = friend.post(
+        f"/connections/{owner_id}/api/timeline-item/photo/{photo_id}/messages",
+        headers=helpers.csrf_headers(friend, f"/connections/{owner_id}/timeline"),
+        json={"body": "Activity comment"},
+    )
+    assert message_response.status_code == 201
+    reaction_response = friend.put(
+        f"/api/timeline-item/photo/{photo_id}/reaction",
+        headers=helpers.csrf_headers(friend, f"/connections/{owner_id}/timeline"),
+        json={"reaction": "like"},
+    )
+    assert reaction_response.status_code == 200
+
+    activity = client.get("/activity")
+    assert activity.status_code == 200
+    expectations = [
+        b"History",
+        b"Upload",
+        b"Activity photo",
+        b"Chapter",
+        b"You updated chapter",
+        b"You added a photo",
+        b"Connection",
+        b"You accepted",
+        b"Comment",
+        b"Activity comment",
+        b"Reaction",
+        b"liked your photo",
+    ]
+    for expected in expectations:
+        assert expected in activity.data

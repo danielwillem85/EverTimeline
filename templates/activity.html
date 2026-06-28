@@ -8,22 +8,30 @@
         <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
         <h1>Activity</h1>
     </div>
+    <div class="page-actions">
+        <a class="button secondary" href="{{ url_for('notifications') }}">Notifications</a>
+    </div>
 </section>
 
 <section class="connection-section">
-    <h2>Recent activity</h2>
+    <h2>History</h2>
     {% if feed_items %}
         <div class="activity-list">
             {% for item in feed_items %}
                 <article class="activity-card">
                     <div class="activity-main">
-                        <strong>{{ item["summary"] }}</strong>
-                        <span>{{ item["item_date"] }} · {{ item["created_at"] }}</span>
+                        <div class="activity-title-row">
+                            <span class="status-badge">{{ item["type_label"] or "Activity" }}</span>
+                            <strong>{{ item["summary"] }}</strong>
+                        </div>
+                        <span>{{ item["item_date"] }} &middot; {{ item["created_at"] }}</span>
                         {% if item["preview"] %}
                             <p>{{ item["preview"] }}</p>
                         {% endif %}
                     </div>
-                    <a class="button secondary small" href="{{ item['url'] }}">Open</a>
+                    {% if item["url"] %}
+                        <a class="button secondary small" href="{{ item['url'] }}">Open</a>
+                    {% endif %}
                 </article>
             {% endfor %}
         </div>

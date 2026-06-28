@@ -35,6 +35,11 @@
                     {% if request.endpoint == 'home' %}aria-current="page"{% endif %}
                 >Home</a>
                 <a
+                    class="topbar-link{% if request.endpoint == 'on_this_day' %} is-active{% endif %}"
+                    href="{{ url_for('on_this_day') }}"
+                    {% if request.endpoint == 'on_this_day' %}aria-current="page"{% endif %}
+                >Today</a>
+                <a
                     class="topbar-link{% if request.endpoint in ('timeline', 'timeline_search', 'timeline_map', 'year_view', 'month_view', 'birthday') %} is-active{% endif %}"
                     href="{{ url_for('timeline') }}"
                     {% if request.endpoint in ('timeline', 'timeline_search', 'timeline_map', 'year_view', 'month_view', 'birthday') %}aria-current="page"{% endif %}

@@ -21,17 +21,46 @@
     {{ csrf_field() }}
     <div class="import-review-list">
         {% for item in items %}
-            <article class="import-review-card">
-                <img
-                    src="{{ url_for('timeline_import_item_image', token=token, item_id=item['id']) }}"
-                    alt="{{ item['original_filename'] }}"
-                    loading="lazy"
-                >
+            <article class="import-review-card{% if item['duplicate'] %} has-duplicate{% endif %}">
+                <div class="import-review-preview-grid">
+                    <figure class="import-review-preview">
+                        <img
+                            src="{{ url_for('timeline_import_item_image', token=token, item_id=item['id']) }}"
+                            alt="{{ item['original_filename'] }}"
+                            loading="lazy"
+                        >
+                        <figcaption>
+                            <strong>New upload</strong>
+                            <span>{{ item["review_date"] or item["detected_date"] or "No date" }}</span>
+                        </figcaption>
+                    </figure>
+                    {% if item["duplicate"] %}
+                        <figure class="import-review-preview duplicate-preview">
+                            <img
+                                src="{{ item['duplicate']['image_url'] }}"
+                                alt="{{ item['duplicate']['title'] }}"
+                                loading="lazy"
+                            >
+                            <figcaption>
+                                <strong>{{ item["duplicate"]["label"] }}</strong>
+                                <span>{{ item["duplicate"]["date_label"] }}</span>
+                            </figcaption>
+                        </figure>
+                    {% endif %}
+                </div>
                 <div class="import-review-main">
                     <div class="import-review-title-row">
                         <h2>{{ item["original_filename"] }}</h2>
-                        <span class="status-badge">{{ item["detected_label"] }}</span>
+                        <div class="import-review-badges">
+                            <span class="status-badge">{{ item["detected_label"] }}</span>
+                            {% if item["duplicate"] %}
+                                <span class="status-badge duplicate-badge">Possible duplicate</span>
+                            {% endif %}
+                        </div>
                     </div>
+                    {% if item["duplicate"] and item["duplicate"]["open_url"] %}
+                        <a class="button secondary small import-duplicate-link" href="{{ item['duplicate']['open_url'] }}">Open existing</a>
+                    {% endif %}
                     <div class="import-review-fields">
                         <label>
                             <span>Date</span>
@@ -67,7 +96,7 @@
                                 value="1"
                                 {% if item["skip_checked"] %}checked{% endif %}
                             >
-                            <span>Skip</span>
+                            <span>{{ "Skip duplicate" if item["duplicate"] else "Skip" }}</span>
                         </label>
                     </div>
                 </div>

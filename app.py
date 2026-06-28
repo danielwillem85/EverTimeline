@@ -328,8 +328,12 @@ def init_db():
                 image_hash TEXT NOT NULL,
                 detected_date TEXT,
                 detected_source TEXT NOT NULL DEFAULT '',
+                duplicate_photo_id INTEGER,
+                duplicate_import_item_id INTEGER,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (batch_id) REFERENCES photo_import_batches (id) ON DELETE CASCADE
+                FOREIGN KEY (batch_id) REFERENCES photo_import_batches (id) ON DELETE CASCADE,
+                FOREIGN KEY (duplicate_photo_id) REFERENCES photos (id) ON DELETE SET NULL,
+                FOREIGN KEY (duplicate_import_item_id) REFERENCES photo_import_items (id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS connection_requests (
@@ -384,6 +388,7 @@ def init_db():
         ensure_photo_columns(db)
         ensure_chapter_columns(db)
         ensure_timeline_location_columns(db)
+        ensure_photo_import_columns(db)
         db.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique
@@ -537,6 +542,17 @@ def ensure_timeline_location_columns(db):
                 for column_name, statement in location_migrations.items()
             },
         )
+
+
+def ensure_photo_import_columns(db):
+    ensure_table_columns(
+        db,
+        "photo_import_items",
+        {
+            "duplicate_photo_id": "ALTER TABLE photo_import_items ADD COLUMN duplicate_photo_id INTEGER",
+            "duplicate_import_item_id": "ALTER TABLE photo_import_items ADD COLUMN duplicate_import_item_id INTEGER",
+        },
+    )
 
 
 @app.before_request
@@ -1094,7 +1110,8 @@ def load_import_items(db, batch_id):
     return db.execute(
         """
         SELECT id, original_filename, mime_type, image_hash, detected_date,
-               detected_source, created_at
+               detected_source, duplicate_photo_id, duplicate_import_item_id,
+               created_at
         FROM photo_import_items
         WHERE batch_id = ?
         ORDER BY id ASC
@@ -1117,11 +1134,61 @@ def get_import_item(db, batch_id, item_id):
     return item
 
 
-def import_review_items(item_rows, form=None):
+def import_duplicate_payload(db, token, batch_id, item):
+    if item["duplicate_photo_id"]:
+        photo = db.execute(
+            """
+            SELECT id, year, month, original_filename, title, caption, photo_date, created_at
+            FROM photos
+            WHERE id = ? AND user_id = ?
+            """,
+            (item["duplicate_photo_id"], g.user["id"]),
+        ).fetchone()
+        if photo is None:
+            return None
+        return {
+            "source": "timeline",
+            "label": "Already in timeline",
+            "title": photo_display_title(photo),
+            "date_label": format_timeline_date_label(photo["year"], photo["month"], photo["photo_date"]),
+            "image_url": url_for("photo_image", photo_id=photo["id"]),
+            "open_url": url_for(
+                "month_view",
+                year=photo["year"],
+                month=photo["month"],
+                focus=timeline_item_focus("photo", photo["id"]),
+            ),
+        }
+
+    if item["duplicate_import_item_id"]:
+        import_item = db.execute(
+            """
+            SELECT id, original_filename, detected_date
+            FROM photo_import_items
+            WHERE id = ? AND batch_id = ?
+            """,
+            (item["duplicate_import_item_id"], batch_id),
+        ).fetchone()
+        if import_item is None:
+            return None
+        return {
+            "source": "batch",
+            "label": "Already in this batch",
+            "title": import_item["original_filename"] or "Photo",
+            "date_label": import_item["detected_date"] or "No date",
+            "image_url": url_for("timeline_import_item_image", token=token, item_id=import_item["id"]),
+            "open_url": "",
+        }
+
+    return None
+
+
+def import_review_items(db, token, batch_id, item_rows, form=None):
     review_items = []
     for item in item_rows:
         item_id = str(item["id"])
         default_tag = DEFAULT_TAG
+        duplicate = import_duplicate_payload(db, token, batch_id, item)
         review_items.append(
             {
                 "id": item["id"],
@@ -1129,6 +1196,7 @@ def import_review_items(item_rows, form=None):
                 "detected_date": item["detected_date"] or "",
                 "detected_source": item["detected_source"] or "",
                 "detected_label": import_detection_label(item["detected_source"]),
+                "duplicate": duplicate,
                 "review_date": (
                     form.get(f"photo_date_{item_id}", item["detected_date"] or "")
                     if form is not None
@@ -1139,7 +1207,11 @@ def import_review_items(item_rows, form=None):
                     if form is not None
                     else default_tag
                 ),
-                "skip_checked": form is not None and f"skip_{item_id}" in form,
+                "skip_checked": (
+                    f"skip_{item_id}" in form
+                    if form is not None
+                    else duplicate is not None
+                ),
             }
         )
     return review_items
@@ -4621,7 +4693,7 @@ def timeline_import():
         staged_count = 0
         skipped_count = 0
         duplicate_count = 0
-        seen_hashes = set()
+        seen_hashes = {}
 
         for image in images:
             if image.mimetype not in ALLOWED_IMAGE_MIMES:
@@ -4634,19 +4706,21 @@ def timeline_import():
                 continue
 
             image_hash = photo_image_hash(image_data)
-            if image_hash in seen_hashes or find_duplicate_photo(db, g.user["id"], image_hash):
+            duplicate = find_duplicate_photo(db, g.user["id"], image_hash)
+            duplicate_import_item_id = seen_hashes.get(image_hash)
+            duplicate_photo_id = duplicate["id"] if duplicate is not None else None
+            if duplicate_photo_id or duplicate_import_item_id:
                 duplicate_count += 1
-                continue
 
-            seen_hashes.add(image_hash)
             detected_date, detected_source = detect_import_photo_date(image_data, image.filename)
-            db.execute(
+            cursor = db.execute(
                 """
                 INSERT INTO photo_import_items (
                     batch_id, original_filename, mime_type, image_data,
-                    image_hash, detected_date, detected_source
+                    image_hash, detected_date, detected_source,
+                    duplicate_photo_id, duplicate_import_item_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     batch.lastrowid,
@@ -4656,16 +4730,17 @@ def timeline_import():
                     image_hash,
                     detected_date,
                     detected_source,
+                    duplicate_photo_id,
+                    duplicate_import_item_id,
                 ),
             )
+            if image_hash not in seen_hashes:
+                seen_hashes[image_hash] = cursor.lastrowid
             staged_count += 1
 
         if staged_count == 0:
             db.rollback()
-            if duplicate_count:
-                flash("No new photos to review. The selected images are already in your timeline.", "error")
-            else:
-                flash("No photos prepared. Choose JPG, PNG, GIF, or WebP images.", "error")
+            flash("No photos prepared. Choose JPG, PNG, GIF, or WebP images.", "error")
             return redirect(url_for("timeline_import"))
 
         db.commit()
@@ -4673,7 +4748,7 @@ def timeline_import():
         if skipped_count:
             parts.append(f"Skipped {skipped_count} unsupported or empty {'file' if skipped_count == 1 else 'files'}.")
         if duplicate_count:
-            parts.append(f"Skipped {duplicate_count} duplicate {'photo' if duplicate_count == 1 else 'photos'}.")
+            parts.append(f"Flagged {duplicate_count} possible duplicate {'photo' if duplicate_count == 1 else 'photos'}.")
         flash(" ".join(parts), "success")
         return redirect(url_for("timeline_import_review", token=token))
 
@@ -4739,7 +4814,7 @@ def timeline_import_review(token):
             return render_template(
                 "timeline_import_review.html",
                 token=token,
-                items=import_review_items(item_rows, request.form),
+                items=import_review_items(db, token, batch["id"], item_rows, request.form),
             )
 
         imported_count = 0
@@ -4747,7 +4822,12 @@ def timeline_import_review(token):
         imported_months = set()
         for prepared_item in prepared:
             item = prepared_item["item"]
-            if find_duplicate_photo(db, g.user["id"], item["image_hash"]):
+            existing_duplicate = find_duplicate_photo(db, g.user["id"], item["image_hash"])
+            duplicate_was_reviewed = (
+                (item["duplicate_photo_id"] and existing_duplicate and existing_duplicate["id"] == item["duplicate_photo_id"])
+                or item["duplicate_import_item_id"]
+            )
+            if existing_duplicate and not duplicate_was_reviewed:
                 duplicate_count += 1
                 continue
 
@@ -4791,7 +4871,7 @@ def timeline_import_review(token):
     return render_template(
         "timeline_import_review.html",
         token=token,
-        items=import_review_items(item_rows),
+        items=import_review_items(db, token, batch["id"], item_rows),
     )
 
 

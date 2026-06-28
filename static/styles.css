@@ -1045,6 +1045,41 @@ details.privacy-toggle-panel {
     gap: 14px;
 }
 
+.on-this-day-controls {
+    margin-bottom: 14px;
+}
+
+.on-this-day-summary {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 18px;
+}
+
+.on-this-day-summary p {
+    margin-bottom: 0;
+}
+
+.on-this-day-card .open-month-button {
+    width: 100%;
+    min-height: 34px;
+}
+
+.memory-year-badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 5;
+    border-radius: 6px;
+    padding: 5px 8px;
+    background: rgba(255, 255, 255, 0.92);
+    color: var(--ink);
+    font-size: 0.82rem;
+    font-weight: 900;
+    box-shadow: 0 8px 18px rgba(24, 31, 28, 0.12);
+}
+
 .public-photo-section {
     min-height: 240px;
 }

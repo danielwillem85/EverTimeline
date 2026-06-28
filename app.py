@@ -1586,6 +1586,83 @@ def random_public_photos(db, limit=48):
     return attach_reactions(db, photos)
 
 
+def build_on_this_day_items(db, owner_id, month, day, image_url_builder):
+    date_key = f"{month:02d}-{day:02d}"
+    photo_rows = db.execute(
+        """
+        SELECT id, year, month, original_filename, title, caption, photo_date,
+               location_name, latitude, longitude, created_at
+        FROM photos
+        WHERE user_id = ?
+          AND photo_date IS NOT NULL
+          AND substr(photo_date, 6, 5) = ?
+        ORDER BY photo_date ASC, id ASC
+        """,
+        (owner_id, date_key),
+    ).fetchall()
+    text_rows = db.execute(
+        """
+        SELECT id, year, month, body, entry_date, location_name, latitude, longitude,
+               created_at, updated_at
+        FROM text_entries
+        WHERE user_id = ?
+          AND entry_date IS NOT NULL
+          AND substr(entry_date, 6, 5) = ?
+        ORDER BY entry_date ASC, id ASC
+        """,
+        (owner_id, date_key),
+    ).fetchall()
+    photo_tags = load_tags_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
+    text_tags = load_tags_for_items(db, "text", [entry["id"] for entry in text_rows], owner_id)
+    items = []
+    for photo in photo_rows:
+        tags = photo_tags.get(photo["id"], [])
+        items.append(
+            {
+                "kind": "photo",
+                "id": photo["id"],
+                "year": photo["year"],
+                "month": photo["month"],
+                "original_filename": photo["original_filename"],
+                "title": photo["title"] or "",
+                "display_title": photo_display_title(photo),
+                "caption": photo["caption"] or "",
+                "display_date": photo["photo_date"],
+                "date_label": format_timeline_date_label(photo["year"], photo["month"], photo["photo_date"]),
+                **timeline_location_payload(photo),
+                "created_at": photo["created_at"],
+                "image_url": image_url_builder(photo["id"]),
+                "messages_url": url_for("timeline_item_messages", item_kind="photo", item_id=photo["id"]),
+                "entry_ref": timeline_item_focus("photo", photo["id"]),
+                "tags": tags,
+                "tags_text": tags_to_text(tags),
+                **privacy_payload_for_tags(tags),
+            }
+        )
+    for entry in text_rows:
+        tags = text_tags.get(entry["id"], [])
+        items.append(
+            {
+                "kind": "text",
+                "id": entry["id"],
+                "year": entry["year"],
+                "month": entry["month"],
+                "body": entry["body"],
+                "display_date": entry["entry_date"],
+                "date_label": format_timeline_date_label(entry["year"], entry["month"], entry["entry_date"]),
+                **timeline_location_payload(entry),
+                "created_at": entry["created_at"],
+                "updated_at": entry["updated_at"],
+                "entry_ref": timeline_item_focus("text", entry["id"]),
+                "tags": tags,
+                "tags_text": tags_to_text(tags),
+                **privacy_payload_for_tags(tags),
+            }
+        )
+    items.sort(key=timeline_item_sort_key)
+    return attach_reactions(db, items)
+
+
 def timeline_item_focus(kind, item_id):
     return f"{kind}-{item_id}"
 
@@ -4341,6 +4418,36 @@ def timeline():
     years = list(user_years())
     year_counts = get_year_counts(db)
     return render_template("timeline.html", years=years, year_counts=year_counts)
+
+
+@app.route("/on-this-day")
+@birthday_required
+def on_this_day():
+    raw_date = request.args.get("date", "").strip()
+    selected_date = date.today()
+    if raw_date:
+        try:
+            selected_date = date.fromisoformat(raw_date)
+        except ValueError:
+            flash("Choose a valid date.", "error")
+            return redirect(url_for("on_this_day"))
+
+    items = build_on_this_day_items(
+        get_db(),
+        g.user["id"],
+        selected_date.month,
+        selected_date.day,
+        lambda photo_id: url_for("photo_image", photo_id=photo_id),
+    )
+    years = sorted({item["year"] for item in items})
+    return render_template(
+        "on_this_day.html",
+        selected_date=selected_date,
+        selected_date_value=selected_date.isoformat(),
+        month_day_label=f"{MONTH_NAMES[selected_date.month - 1]} {selected_date.day}",
+        items=items,
+        years=years,
+    )
 
 
 @app.route("/timeline/search")

@@ -152,6 +152,44 @@ def test_uploads_text_entries_and_pdf_exports(client, helpers):
     assert month_pdf.data.startswith(b"%PDF")
 
 
+def test_on_this_day_shows_matching_dated_memories(client, helpers):
+    helpers.create_user(client, "owner")
+    helpers.upload_photo(
+        client,
+        year=2020,
+        month=5,
+        filename="picnic.png",
+        photo_date="2020-05-04",
+        title="Park picnic",
+        tag="private",
+    )
+    helpers.create_text(
+        client,
+        "A same-day text memory",
+        year=2021,
+        month=5,
+        entry_date="2021-05-04",
+        tag="friends",
+    )
+    helpers.create_text(
+        client,
+        "A different-day text memory",
+        year=2021,
+        month=5,
+        entry_date="2021-05-05",
+        tag="friends",
+    )
+
+    response = client.get("/on-this-day?date=2026-05-04")
+
+    assert response.status_code == 200
+    assert b"On this day" in response.data
+    assert b"May 4 across your timeline." in response.data
+    assert b"Park picnic" in response.data
+    assert b"A same-day text memory" in response.data
+    assert b"A different-day text memory" not in response.data
+
+
 def test_full_account_backup_export_and_import(client, helpers):
     owner_id = helpers.create_user(client, "owner")
     photo_id = helpers.upload_photo(

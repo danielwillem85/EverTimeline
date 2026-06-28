@@ -42,6 +42,107 @@ document.addEventListener("DOMContentLoaded", () => {
         container.dataset.privacyHelp = help || "";
     };
 
+    const syncModalOpenState = () => {
+        const hasOpenModal = Array.from(document.querySelectorAll(".modal")).some((modal) => {
+            return !modal.hidden;
+        });
+        document.body.classList.toggle("modal-open", hasOpenModal);
+    };
+
+    const confirmationModal = document.getElementById("confirmation-modal");
+    const confirmationTitle = document.getElementById("confirmation-modal-title");
+    const confirmationMessage = document.getElementById("confirmation-modal-message");
+    const confirmationAcceptButton = confirmationModal ? confirmationModal.querySelector("[data-confirm-accept]") : null;
+    const confirmationCancelButtons = confirmationModal ? Array.from(confirmationModal.querySelectorAll("[data-confirm-cancel]")) : [];
+    let confirmationResolve = null;
+    let confirmationTrigger = null;
+
+    const closeConfirmation = (confirmed) => {
+        if (!confirmationModal || !confirmationResolve) {
+            return;
+        }
+
+        const resolve = confirmationResolve;
+        const trigger = confirmationTrigger;
+        confirmationResolve = null;
+        confirmationTrigger = null;
+        confirmationModal.hidden = true;
+        syncModalOpenState();
+        resolve(confirmed);
+
+        if (trigger && typeof trigger.focus === "function") {
+            trigger.focus({preventScroll: true});
+        }
+    };
+
+    const requestConfirmation = ({
+        title = "Confirm action",
+        message = "This action needs confirmation.",
+        confirmLabel = "Confirm",
+        danger = false,
+    } = {}) => {
+        if (!confirmationModal || !confirmationTitle || !confirmationMessage || !confirmationAcceptButton) {
+            return Promise.resolve(true);
+        }
+
+        if (confirmationResolve) {
+            closeConfirmation(false);
+        }
+
+        confirmationTitle.textContent = title;
+        confirmationMessage.textContent = message;
+        confirmationAcceptButton.textContent = confirmLabel;
+        confirmationAcceptButton.className = `button ${danger ? "danger" : "primary"}`;
+        confirmationTrigger = document.activeElement;
+        confirmationModal.hidden = false;
+        syncModalOpenState();
+        confirmationAcceptButton.focus();
+
+        return new Promise((resolve) => {
+            confirmationResolve = resolve;
+        });
+    };
+
+    if (confirmationModal) {
+        confirmationAcceptButton.addEventListener("click", () => closeConfirmation(true));
+        confirmationCancelButtons.forEach((button) => {
+            button.addEventListener("click", () => closeConfirmation(false));
+        });
+
+        document.addEventListener("keydown", (event) => {
+            if (event.key !== "Escape" || confirmationModal.hidden) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            closeConfirmation(false);
+        });
+    }
+
+    document.querySelectorAll("form[data-confirm]").forEach((form) => {
+        form.addEventListener("submit", async (event) => {
+            if (form.dataset.confirmed === "true") {
+                delete form.dataset.confirmed;
+                return;
+            }
+
+            event.preventDefault();
+            const confirmed = await requestConfirmation({
+                title: form.dataset.confirmTitle || "Confirm action",
+                message: form.dataset.confirmMessage || "This action needs confirmation.",
+                confirmLabel: form.dataset.confirmAction || "Confirm",
+                danger: form.dataset.confirmDanger === "true",
+            });
+            if (!confirmed) {
+                return;
+            }
+
+            form.dataset.confirmed = "true";
+            HTMLFormElement.prototype.submit.call(form);
+        });
+    });
+
     const birthdayConfirmInput = document.querySelector("[data-birthday-confirm-input]");
     const birthdayConfirmButton = document.querySelector("[data-birthday-confirm-button]");
     if (birthdayConfirmInput && birthdayConfirmButton) {
@@ -1266,6 +1367,16 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
+        const confirmed = await requestConfirmation({
+            title: "Delete picture?",
+            message: "This permanently removes the picture, messages, chapter placements, tags, likes, loves, and related notifications.",
+            confirmLabel: "Delete picture",
+            danger: true,
+        });
+        if (!confirmed) {
+            return;
+        }
+
         deletePhotoButton.disabled = true;
         const response = await fetch(`/api/photo/${activePhotoId}`, {
             method: "DELETE",
@@ -1324,6 +1435,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
     deleteTextButton.addEventListener("click", async () => {
         if (activeTextEntryId === null) {
+            return;
+        }
+
+        const confirmed = await requestConfirmation({
+            title: "Delete text entry?",
+            message: "This permanently removes the text entry, chapter placements, tags, likes, loves, and related notifications.",
+            confirmLabel: "Delete text",
+            danger: true,
+        });
+        if (!confirmed) {
             return;
         }
 

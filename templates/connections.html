@@ -66,7 +66,15 @@
                                         <span aria-hidden="true">&#9881;</span>
                                     </summary>
                                     <div class="connection-actions-panel">
-                                        <form class="connection-type-form" method="post" action="{{ url_for('update_connection_relation', request_id=connection['request_id']) }}">
+                                        <form
+                                            class="connection-type-form"
+                                            method="post"
+                                            action="{{ url_for('update_connection_relation', request_id=connection['request_id']) }}"
+                                            data-confirm
+                                            data-confirm-title="Change connection type?"
+                                            data-confirm-message="This can change which private timeline items this connection is allowed to see."
+                                            data-confirm-action="Save change"
+                                        >
                                             <label>
                                                 <span>Change type</span>
                                                 <select name="relation" aria-label="Connection type for {{ connection['username'] }}">
@@ -76,7 +84,16 @@
                                             </label>
                                             <button class="button secondary small" type="submit">Save</button>
                                         </form>
-                                        <form class="inline-form" method="post" action="{{ url_for('remove_connection', request_id=connection['request_id']) }}">
+                                        <form
+                                            class="inline-form"
+                                            method="post"
+                                            action="{{ url_for('remove_connection', request_id=connection['request_id']) }}"
+                                            data-confirm
+                                            data-confirm-title="Remove connection?"
+                                            data-confirm-message="This removes the connection for both people. They will no longer have connection access to your timeline."
+                                            data-confirm-action="Remove connection"
+                                            data-confirm-danger="true"
+                                        >
                                             <button class="button danger small" type="submit">Remove connection</button>
                                         </form>
                                     </div>

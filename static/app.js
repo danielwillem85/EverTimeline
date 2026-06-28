@@ -1251,6 +1251,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const modalImage = document.getElementById("modal-image");
     const modalDate = document.getElementById("modal-date");
+    const photoLocationSummary = document.getElementById("photo-location-summary");
     const photoPrivacySummary = document.getElementById("photo-privacy-summary");
     const messageList = document.getElementById("message-list");
     const messageForm = document.getElementById("message-form");
@@ -1258,13 +1259,21 @@ document.addEventListener("DOMContentLoaded", () => {
     const deletePhotoButton = document.getElementById("delete-photo-button");
     const photoTagsForm = document.getElementById("photo-tags-form");
     const photoTagInputs = Array.from(photoTagsForm.querySelectorAll("input[name='tags']"));
+    const photoLocationForm = document.getElementById("photo-location-form");
+    const photoLocationName = photoLocationForm.querySelector("input[name='location_name']");
+    const photoLatitude = photoLocationForm.querySelector("input[name='latitude']");
+    const photoLongitude = photoLocationForm.querySelector("input[name='longitude']");
 
     const textModalDate = document.getElementById("text-modal-date");
+    const textLocationSummary = document.getElementById("text-location-summary");
     const textPrivacySummary = document.getElementById("text-privacy-summary");
     const textEntryView = document.getElementById("text-entry-view");
     const textEntryEditForm = document.getElementById("text-entry-edit-form");
     const textEntryEditBody = textEntryEditForm.querySelector("textarea");
     const textEntryEditDate = textEntryEditForm.querySelector("input[name='entry_date']");
+    const textEntryLocationName = textEntryEditForm.querySelector("input[name='location_name']");
+    const textEntryLatitude = textEntryEditForm.querySelector("input[name='latitude']");
+    const textEntryLongitude = textEntryEditForm.querySelector("input[name='longitude']");
     const textEntryEditTagInputs = Array.from(textEntryEditForm.querySelectorAll("input[name='tags']"));
     const editTextButton = document.getElementById("edit-text-button");
     const deleteTextButton = document.getElementById("delete-text-button");
@@ -1336,6 +1345,47 @@ document.addEventListener("DOMContentLoaded", () => {
         return list;
     };
 
+    const locationPayloadFromFields = (nameInput, latitudeInput, longitudeInput) => ({
+        location_name: nameInput.value.trim(),
+        latitude: latitudeInput.value.trim(),
+        longitude: longitudeInput.value.trim(),
+    });
+
+    const setLocationFields = (nameInput, latitudeInput, longitudeInput, location) => {
+        nameInput.value = location.location_name || "";
+        latitudeInput.value = location.latitude ?? "";
+        longitudeInput.value = location.longitude ?? "";
+    };
+
+    const formatLocation = (location) => {
+        const name = location.location_name || "";
+        const hasCoordinates = location.latitude !== null
+            && location.latitude !== undefined
+            && location.longitude !== null
+            && location.longitude !== undefined
+            && location.latitude !== ""
+            && location.longitude !== "";
+        if (name && hasCoordinates) {
+            return `${name} (${location.latitude}, ${location.longitude})`;
+        }
+        if (name) {
+            return name;
+        }
+        if (hasCoordinates) {
+            return `${location.latitude}, ${location.longitude}`;
+        }
+        return "";
+    };
+
+    const setLocationSummary = (element, location) => {
+        if (!element) {
+            return;
+        }
+        const label = formatLocation(location);
+        element.textContent = label;
+        element.hidden = !label;
+    };
+
     const updatePhotoThumbnailTags = (tags, tagsText, privacyLabel, privacyHelpText) => {
         if (!activePhotoThumbnail) {
             return;
@@ -1360,6 +1410,24 @@ document.addEventListener("DOMContentLoaded", () => {
             privacyLabel || privacyLabelFromTag(tagsText),
             privacyHelpText || privacyHelpFromTag(tagsText)
         );
+    };
+
+    const updatePhotoThumbnailLocation = (location) => {
+        if (!activePhotoThumbnail) {
+            return;
+        }
+        activePhotoThumbnail.dataset.locationName = location.location_name || "";
+        activePhotoThumbnail.dataset.latitude = location.latitude ?? "";
+        activePhotoThumbnail.dataset.longitude = location.longitude ?? "";
+    };
+
+    const updateTextThumbnailLocation = (location) => {
+        if (!activeTextThumbnail) {
+            return;
+        }
+        activeTextThumbnail.dataset.locationName = location.location_name || "";
+        activeTextThumbnail.dataset.latitude = location.latitude ?? "";
+        activeTextThumbnail.dataset.longitude = location.longitude ?? "";
     };
 
     const renderMessages = (messages) => {
@@ -1408,6 +1476,13 @@ document.addEventListener("DOMContentLoaded", () => {
         activePhotoThumbnail = button;
         modalImage.src = button.dataset.fullSrc;
         modalDate.textContent = button.dataset.photoDate || "";
+        const location = {
+            location_name: button.dataset.locationName || "",
+            latitude: button.dataset.latitude || "",
+            longitude: button.dataset.longitude || "",
+        };
+        setLocationSummary(photoLocationSummary, location);
+        setLocationFields(photoLocationName, photoLatitude, photoLongitude, location);
         setPrivacySummary(
             photoPrivacySummary,
             button.dataset.privacyLabel || privacyLabelFromTag(button.dataset.photoTags || "private"),
@@ -1431,9 +1506,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const renderTextEntry = (entry) => {
         activeTextEntry = entry;
         textModalDate.textContent = entry.entry_date || "";
+        setLocationSummary(textLocationSummary, entry);
         textEntryView.textContent = entry.body;
         textEntryEditBody.value = entry.body;
         textEntryEditDate.value = entry.entry_date || "";
+        setLocationFields(textEntryLocationName, textEntryLatitude, textEntryLongitude, entry);
         setPrivacySummary(
             textPrivacySummary,
             entry.privacy_label || privacyLabelFromTag(entry.tags_text || "private"),
@@ -1472,6 +1549,7 @@ document.addEventListener("DOMContentLoaded", () => {
             entry.privacy_label,
             entry.privacy_help
         );
+        updateTextThumbnailLocation(entry);
     };
 
     const showTextView = () => {
@@ -1586,6 +1664,26 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+    photoLocationForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (activePhotoId === null) {
+            return;
+        }
+
+        const response = await csrfFetch(`/api/photo/${activePhotoId}/location`, {
+            method: "PATCH",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(locationPayloadFromFields(photoLocationName, photoLatitude, photoLongitude)),
+        });
+
+        if (response.ok) {
+            const location = await response.json();
+            setLocationFields(photoLocationName, photoLatitude, photoLongitude, location);
+            setLocationSummary(photoLocationSummary, location);
+            updatePhotoThumbnailLocation(location);
+        }
+    });
+
     deletePhotoButton.addEventListener("click", async () => {
         if (activePhotoId === null) {
             return;
@@ -1645,6 +1743,11 @@ document.addEventListener("DOMContentLoaded", () => {
             body: JSON.stringify({
                 body,
                 entry_date: textEntryEditDate.value,
+                ...locationPayloadFromFields(
+                    textEntryLocationName,
+                    textEntryLatitude,
+                    textEntryLongitude
+                ),
                 tags: selectedTagValue(textEntryEditTagInputs),
             }),
         });

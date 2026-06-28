@@ -306,6 +306,77 @@ def test_timeline_search_finds_owned_content_types_and_excludes_other_users(app,
     assert b"No timeline matches." in response.data
 
 
+def test_timeline_map_shows_owned_locations_and_updates_photo_place(app, client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="lisbon-photo.png",
+        location_name="Lisbon",
+        latitude="38.7223",
+        longitude="-9.1393",
+        tag="private",
+    )
+    text_id = helpers.create_text(
+        client,
+        "A quiet walk near the old station",
+        location_name="Old station",
+        tag="private",
+    )
+
+    other = app.test_client()
+    helpers.create_user(other, "other")
+    helpers.create_text(
+        other,
+        "hidden place",
+        location_name="Forbidden harbor",
+        latitude="12.34",
+        longitude="56.78",
+    )
+
+    map_response = client.get("/timeline/map")
+    assert map_response.status_code == 200
+    assert b"Lisbon" in map_response.data
+    assert b"Old station" in map_response.data
+    assert b"Needs coordinates" in map_response.data
+    assert b"Forbidden harbor" not in map_response.data
+
+    timeline_response = client.get("/api/timeline-items?year=2020")
+    assert timeline_response.status_code == 200
+    items = timeline_response.get_json()
+    photo = next(item for item in items if item["kind"] == "photo" and item["id"] == photo_id)
+    text = next(item for item in items if item["kind"] == "text" and item["id"] == text_id)
+    assert photo["location_name"] == "Lisbon"
+    assert photo["latitude"] == 38.7223
+    assert photo["longitude"] == -9.1393
+    assert text["location_name"] == "Old station"
+    assert text["latitude"] is None
+    assert text["longitude"] is None
+
+    invalid_response = client.patch(
+        f"/api/photo/{photo_id}/location",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={"location_name": "Incomplete", "latitude": "10", "longitude": ""},
+    )
+    assert invalid_response.status_code == 400
+    assert invalid_response.get_json()["error"] == "Latitude and longitude must be provided together."
+
+    update_response = client.patch(
+        f"/api/photo/{photo_id}/location",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={"location_name": "Porto", "latitude": "41.1579", "longitude": "-8.6291"},
+    )
+    assert update_response.status_code == 200
+    assert update_response.get_json() == {
+        "location_name": "Porto",
+        "latitude": 41.1579,
+        "longitude": -8.6291,
+    }
+
+    updated_map = client.get("/timeline/map")
+    assert b"Porto" in updated_map.data
+    assert b"Lisbon" not in updated_map.data
+
+
 def test_connection_requests_and_privacy_visibility_for_friend_and_family(app, client, helpers):
     owner_id = helpers.create_user(client, "owner")
     helpers.create_text(client, "private memory", tag="private")

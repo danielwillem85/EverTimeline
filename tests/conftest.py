@@ -128,6 +128,9 @@ class TestHelpers:
         month=5,
         entry_date="2020-05-03",
         tag="private",
+        location_name="",
+        latitude="",
+        longitude="",
     ):
         response = client.post(
             f"/year/{year}/{month}/text",
@@ -136,6 +139,9 @@ class TestHelpers:
                 "body": body,
                 "entry_date": entry_date,
                 "tags": tag,
+                "location_name": location_name,
+                "latitude": latitude,
+                "longitude": longitude,
             },
         )
         assert response.status_code == 302
@@ -153,6 +159,9 @@ class TestHelpers:
         filename="photo.png",
         photo_date="2020-05-04",
         tag="private",
+        location_name="",
+        latitude="",
+        longitude="",
     ):
         response = client.post(
             f"/year/{year}/{month}",
@@ -161,6 +170,9 @@ class TestHelpers:
                 "photo": (io.BytesIO(self.png_bytes()), filename, "image/png"),
                 "photo_date": photo_date,
                 "tags": tag,
+                "location_name": location_name,
+                "latitude": latitude,
+                "longitude": longitude,
             },
             content_type="multipart/form-data",
         )

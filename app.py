@@ -212,6 +212,9 @@ def init_db():
                 mime_type TEXT NOT NULL,
                 image_data BLOB NOT NULL,
                 photo_date TEXT,
+                location_name TEXT,
+                latitude REAL,
+                longitude REAL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             );
@@ -233,6 +236,9 @@ def init_db():
                 month INTEGER NOT NULL,
                 body TEXT NOT NULL,
                 entry_date TEXT,
+                location_name TEXT,
+                latitude REAL,
+                longitude REAL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
@@ -352,6 +358,7 @@ def init_db():
         )
         ensure_user_profile_columns(db)
         ensure_chapter_columns(db)
+        ensure_timeline_location_columns(db)
         db.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique
@@ -444,6 +451,33 @@ def ensure_chapter_columns(db):
     for column_name, statement in migrations.items():
         if column_name not in columns:
             db.execute(statement)
+
+
+def ensure_table_columns(db, table_name, migrations):
+    columns = {
+        row[1]
+        for row in db.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+    for column_name, statement in migrations.items():
+        if column_name not in columns:
+            db.execute(statement)
+
+
+def ensure_timeline_location_columns(db):
+    location_migrations = {
+        "location_name": "ADD COLUMN location_name TEXT",
+        "latitude": "ADD COLUMN latitude REAL",
+        "longitude": "ADD COLUMN longitude REAL",
+    }
+    for table_name in ("photos", "text_entries"):
+        ensure_table_columns(
+            db,
+            table_name,
+            {
+                column_name: f"ALTER TABLE {table_name} {statement}"
+                for column_name, statement in location_migrations.items()
+            },
+        )
 
 
 @app.before_request
@@ -820,13 +854,14 @@ def uploaded_photo_files():
     ]
 
 
-def insert_uploaded_photo(db, image, image_data, year, month, photo_date, tags):
+def insert_uploaded_photo(db, image, image_data, year, month, photo_date, tags, location):
     cursor = db.execute(
         """
         INSERT INTO photos (
-            user_id, year, month, original_filename, mime_type, image_data, photo_date
+            user_id, year, month, original_filename, mime_type, image_data, photo_date,
+            location_name, latitude, longitude
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             g.user["id"],
@@ -836,6 +871,9 @@ def insert_uploaded_photo(db, image, image_data, year, month, photo_date, tags):
             image.mimetype,
             image_data,
             photo_date,
+            location["location_name"],
+            location["latitude"],
+            location["longitude"],
         ),
     )
     set_tags_for_item(db, "photo", cursor.lastrowid, tags)
@@ -986,6 +1024,47 @@ def format_timeline_date_label(year, month, display_date):
     if display_date:
         return display_date
     return f"{year:04d}-{month:02d}-??"
+
+
+def normalize_coordinate(value, label, minimum, maximum):
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return None
+    try:
+        coordinate = float(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a number.") from exc
+    if coordinate < minimum or coordinate > maximum:
+        raise ValueError(f"{label} must be between {minimum:g} and {maximum:g}.")
+    return coordinate
+
+
+def normalize_location_payload(payload):
+    location_name = " ".join((payload.get("location_name") or "").strip().split())
+    latitude = normalize_coordinate(payload.get("latitude"), "Latitude", -90, 90)
+    longitude = normalize_coordinate(payload.get("longitude"), "Longitude", -180, 180)
+    if (latitude is None) != (longitude is None):
+        raise ValueError("Latitude and longitude must be provided together.")
+    return {
+        "location_name": location_name,
+        "latitude": latitude,
+        "longitude": longitude,
+    }
+
+
+def timeline_location_payload(row):
+    return {
+        "location_name": row["location_name"] if "location_name" in row.keys() else "",
+        "latitude": row["latitude"] if "latitude" in row.keys() else None,
+        "longitude": row["longitude"] if "longitude" in row.keys() else None,
+    }
+
+
+def map_position(latitude, longitude):
+    return {
+        "x": ((longitude + 180) / 360) * 100,
+        "y": ((90 - latitude) / 180) * 100,
+    }
 
 
 def normalize_tag_name(value):
@@ -2443,7 +2522,7 @@ def search_timeline_content(db, query):
 
     photo_rows = db.execute(
         """
-        SELECT id, year, month, original_filename, photo_date, created_at
+        SELECT id, year, month, original_filename, photo_date, location_name, latitude, longitude, created_at
         FROM photos
         WHERE user_id = ?
           AND (
@@ -2605,6 +2684,93 @@ def search_timeline_content(db, query):
     return results[:80]
 
 
+def build_timeline_map_items(db):
+    photo_rows = db.execute(
+        """
+        SELECT id, year, month, original_filename, photo_date, location_name, latitude, longitude, created_at
+        FROM photos
+        WHERE user_id = ?
+          AND (
+            COALESCE(location_name, '') <> ''
+            OR (latitude IS NOT NULL AND longitude IS NOT NULL)
+          )
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    text_rows = db.execute(
+        """
+        SELECT id, year, month, body, entry_date, location_name, latitude, longitude, created_at
+        FROM text_entries
+        WHERE user_id = ?
+          AND (
+            COALESCE(location_name, '') <> ''
+            OR (latitude IS NOT NULL AND longitude IS NOT NULL)
+          )
+        """,
+        (g.user["id"],),
+    ).fetchall()
+
+    items = []
+    for row in photo_rows:
+        has_coordinates = row["latitude"] is not None and row["longitude"] is not None
+        item = {
+            "kind": "photo",
+            "id": row["id"],
+            "title": row["original_filename"] or "Photo",
+            "preview": "Photo",
+            "date_label": format_timeline_date_label(row["year"], row["month"], row["photo_date"]),
+            "location_name": row["location_name"] or "",
+            "latitude": row["latitude"],
+            "longitude": row["longitude"],
+            "has_coordinates": has_coordinates,
+            "url": timeline_item_link(g.user["id"], row["year"], row["month"], "photo", row["id"]),
+            "sort_key": timeline_item_sort_key(
+                {
+                    "year": row["year"],
+                    "month": row["month"],
+                    "display_date": row["photo_date"],
+                    "kind": "photo",
+                    "id": row["id"],
+                }
+            ),
+        }
+        if has_coordinates:
+            item.update(map_position(row["latitude"], row["longitude"]))
+        items.append(item)
+
+    for row in text_rows:
+        has_coordinates = row["latitude"] is not None and row["longitude"] is not None
+        item = {
+            "kind": "text",
+            "id": row["id"],
+            "title": "Text entry",
+            "preview": short_preview(row["body"]),
+            "date_label": format_timeline_date_label(row["year"], row["month"], row["entry_date"]),
+            "location_name": row["location_name"] or "",
+            "latitude": row["latitude"],
+            "longitude": row["longitude"],
+            "has_coordinates": has_coordinates,
+            "url": timeline_item_link(g.user["id"], row["year"], row["month"], "text", row["id"]),
+            "sort_key": timeline_item_sort_key(
+                {
+                    "year": row["year"],
+                    "month": row["month"],
+                    "display_date": row["entry_date"],
+                    "kind": "text",
+                    "id": row["id"],
+                }
+            ),
+        }
+        if has_coordinates:
+            item.update(map_position(row["latitude"], row["longitude"]))
+        items.append(item)
+
+    items.sort(key=lambda item: item["sort_key"])
+    for item in items:
+        item.pop("sort_key", None)
+    return items
+
+
 def current_profile_form_values():
     return {
         "first_name": g.user["first_name"] or "",
@@ -2670,7 +2836,7 @@ def get_connection_timeline_item(connection_id, item_kind, item_id):
 def build_month_items(db, owner_id, year, month, image_url_builder, allowed_tags=None):
     photo_rows = db.execute(
         """
-        SELECT id, original_filename, photo_date, created_at
+        SELECT id, original_filename, photo_date, location_name, latitude, longitude, created_at
         FROM photos
         WHERE user_id = ? AND year = ? AND month = ?
         ORDER BY COALESCE(photo_date, created_at) DESC, id DESC
@@ -2679,7 +2845,7 @@ def build_month_items(db, owner_id, year, month, image_url_builder, allowed_tags
     ).fetchall()
     text_rows = db.execute(
         """
-        SELECT id, body, entry_date, created_at, updated_at
+        SELECT id, body, entry_date, location_name, latitude, longitude, created_at, updated_at
         FROM text_entries
         WHERE user_id = ? AND year = ? AND month = ?
         ORDER BY COALESCE(entry_date, created_at) DESC, id DESC
@@ -2701,6 +2867,7 @@ def build_month_items(db, owner_id, year, month, image_url_builder, allowed_tags
                 "month": month,
                 "original_filename": photo["original_filename"],
                 "display_date": photo["photo_date"],
+                **timeline_location_payload(photo),
                 "created_at": photo["created_at"],
                 "image_url": image_url_builder(photo["id"]),
                 "tags": tags,
@@ -2720,6 +2887,7 @@ def build_month_items(db, owner_id, year, month, image_url_builder, allowed_tags
                 "month": month,
                 "body": entry["body"],
                 "display_date": entry["entry_date"],
+                **timeline_location_payload(entry),
                 "created_at": entry["created_at"],
                 "tags": tags,
                 "tags_text": tags_to_text(tags),
@@ -2747,7 +2915,7 @@ def build_timeline_api_items(
 
     photo_rows = db.execute(
         f"""
-        SELECT id, year, month, original_filename, photo_date, created_at
+        SELECT id, year, month, original_filename, photo_date, location_name, latitude, longitude, created_at
         FROM photos
         WHERE user_id = ?{query_suffix}
         """,
@@ -2755,7 +2923,7 @@ def build_timeline_api_items(
     ).fetchall()
     text_rows = db.execute(
         f"""
-        SELECT id, year, month, body, entry_date, created_at, updated_at
+        SELECT id, year, month, body, entry_date, location_name, latitude, longitude, created_at, updated_at
         FROM text_entries
         WHERE user_id = ?{query_suffix}
         """,
@@ -2820,6 +2988,7 @@ def build_timeline_api_items(
                 "month": photo["month"],
                 "display_date": display_date,
                 "date_label": format_timeline_date_label(photo["year"], photo["month"], display_date),
+                **timeline_location_payload(photo),
                 "created_at": photo["created_at"],
                 "image_url": image_url_builder(photo["id"]),
                 "messages": messages_by_photo.get(photo["id"], []),
@@ -2844,6 +3013,7 @@ def build_timeline_api_items(
                 "month": entry["month"],
                 "display_date": display_date,
                 "date_label": format_timeline_date_label(entry["year"], entry["month"], display_date),
+                **timeline_location_payload(entry),
                 "created_at": entry["created_at"],
                 "body": entry["body"],
                 "messages": messages_by_text.get(entry["id"], []),
@@ -4063,6 +4233,18 @@ def timeline_search():
     )
 
 
+@app.route("/timeline/map")
+@birthday_required
+def timeline_map():
+    items = build_timeline_map_items(get_db())
+    return render_template(
+        "timeline_map.html",
+        items=items,
+        mapped_items=[item for item in items if item["has_coordinates"]],
+        named_items=[item for item in items if not item["has_coordinates"]],
+    )
+
+
 @app.route("/year/<int:year>")
 @birthday_required
 def year_view(year):
@@ -4143,6 +4325,12 @@ def month_view(year, month):
             flash(str(exc), "error")
             return redirect(url_for("month_view", year=year, month=month))
 
+        try:
+            location = normalize_location_payload(request.form)
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("month_view", year=year, month=month))
+
         uploaded_count = 0
         auto_dated_count = 0
         ignored_exif_count = 0
@@ -4172,6 +4360,7 @@ def month_view(year, month):
                 month,
                 normalized_photo_date,
                 tags,
+                location,
             )
             uploaded_count += 1
             if used_auto_date:
@@ -4278,13 +4467,30 @@ def create_text_entry(year, month):
         flash(str(exc), "error")
         return redirect(url_for("month_view", year=year, month=month))
 
+    try:
+        location = normalize_location_payload(request.form)
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("month_view", year=year, month=month))
+
     db = get_db()
     cursor = db.execute(
         """
-        INSERT INTO text_entries (user_id, year, month, body, entry_date)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO text_entries (
+            user_id, year, month, body, entry_date, location_name, latitude, longitude
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (g.user["id"], year, month, body, normalized_entry_date),
+        (
+            g.user["id"],
+            year,
+            month,
+            body,
+            normalized_entry_date,
+            location["location_name"],
+            location["latitude"],
+            location["longitude"],
+        ),
     )
     set_tags_for_item(db, "text", cursor.lastrowid, tags)
     db.commit()
@@ -5003,6 +5209,39 @@ def photo_tags(photo_id):
     return jsonify({"tags": tags, "tags_text": tags_to_text(tags), **privacy_payload_for_tags(tags)})
 
 
+@app.route("/api/photo/<int:photo_id>/location", methods=("GET", "PATCH"))
+@birthday_required
+def photo_location(photo_id):
+    photo = get_owned_photo(photo_id)
+    db = get_db()
+
+    if request.method == "PATCH":
+        payload = request.get_json(silent=True) or request.form
+        try:
+            location = normalize_location_payload(payload)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        db.execute(
+            """
+            UPDATE photos
+            SET location_name = ?, latitude = ?, longitude = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                location["location_name"],
+                location["latitude"],
+                location["longitude"],
+                photo_id,
+                g.user["id"],
+            ),
+        )
+        db.commit()
+        photo = get_owned_photo(photo_id)
+
+    return jsonify(timeline_location_payload(photo))
+
+
 @app.route("/api/text-entry/<int:entry_id>", methods=("GET", "PATCH", "DELETE"))
 @birthday_required
 def text_entry(entry_id):
@@ -5049,13 +5288,27 @@ def text_entry(entry_id):
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
 
+        try:
+            location = normalize_location_payload(payload)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
         db.execute(
             """
             UPDATE text_entries
-            SET body = ?, entry_date = ?, updated_at = CURRENT_TIMESTAMP
+            SET body = ?, entry_date = ?, location_name = ?, latitude = ?, longitude = ?,
+                updated_at = CURRENT_TIMESTAMP
             WHERE id = ? AND user_id = ?
             """,
-            (body, normalized_entry_date, entry_id, g.user["id"]),
+            (
+                body,
+                normalized_entry_date,
+                location["location_name"],
+                location["latitude"],
+                location["longitude"],
+                entry_id,
+                g.user["id"],
+            ),
         )
         set_tags_for_item(db, "text", entry_id, tags)
         db.commit()
@@ -5067,6 +5320,7 @@ def text_entry(entry_id):
             "id": entry["id"],
             "body": entry["body"],
             "entry_date": entry["entry_date"],
+            **timeline_location_payload(entry),
             "created_at": entry["created_at"],
             "updated_at": entry["updated_at"],
             "tags": tags,

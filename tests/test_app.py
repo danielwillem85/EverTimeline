@@ -1229,6 +1229,15 @@ def test_reactions_messages_and_notifications_for_connection(app, client, helper
     assert messages.status_code == 200
     assert [message["body"] for message in messages.get_json()] == ["This made me smile."]
 
+    lazy_items = client.get("/api/timeline-items?include_messages=0").get_json()
+    lazy_text = next(item for item in lazy_items if item["kind"] == "text" and item["id"] == text_id)
+    assert "messages" not in lazy_text
+    assert lazy_text["messages_url"] == f"/api/timeline-item/text/{text_id}/messages"
+
+    eager_items = client.get("/api/timeline-items").get_json()
+    eager_text = next(item for item in eager_items if item["kind"] == "text" and item["id"] == text_id)
+    assert [message["body"] for message in eager_text["messages"]] == ["This made me smile."]
+
 
 def test_activity_history_shows_uploads_chapters_connections_comments_and_reactions(app, client, helpers):
     owner_id = helpers.create_user(client, "owner")

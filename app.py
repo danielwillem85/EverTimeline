@@ -2556,6 +2556,10 @@ def redirect_back(default_endpoint="timeline", **kwargs):
     return redirect(url_for(default_endpoint, **kwargs))
 
 
+def request_includes_messages():
+    return request.args.get("include_messages", "1") != "0"
+
+
 def get_chapter_options(db):
     return db.execute(
         """
@@ -2971,6 +2975,7 @@ def build_chapter_items(
     owner_id=None,
     item_url_builder=None,
     reaction_url_builder=None,
+    include_messages=True,
 ):
     owner_id = owner_id if owner_id is not None else g.user["id"]
     refs = db.execute(
@@ -3032,31 +3037,31 @@ def build_chapter_items(
                 if item_url_builder
                 else timeline_item_link(owner_id, photo["year"], photo["month"], "photo", photo["id"])
             )
-            items.append(
-                {
-                    "kind": "photo",
-                    "id": photo["id"],
-                    "chapter_item_id": ref["id"],
-                    "position": ref["position"],
-                    "year": photo["year"],
-                    "month": photo["month"],
-                    "display_date": photo["photo_date"],
-                    "date_label": format_timeline_date_label(photo["year"], photo["month"], photo["photo_date"]),
-                    "created_at": photo["created_at"],
-                    "source_label": item_source_label(photo["year"], photo["month"]),
-                    "url": item_url,
-                    "image_url": image_url_builder(photo["id"]),
-                    "caption": photo["caption"] or "",
-                    "messages": load_messages_for_timeline_item(db, "photo", photo["id"]) if message_url_builder else [],
-                    "messages_url": messages_url,
-                    "can_message": can_message and bool(messages_url),
-                    "tags": tags,
-                    "tags_text": tags_to_text(tags),
-                    **people_payload(people),
-                    **privacy_payload_for_tags(tags),
-                    "title": photo_display_title(photo),
-                }
-            )
+            item = {
+                "kind": "photo",
+                "id": photo["id"],
+                "chapter_item_id": ref["id"],
+                "position": ref["position"],
+                "year": photo["year"],
+                "month": photo["month"],
+                "display_date": photo["photo_date"],
+                "date_label": format_timeline_date_label(photo["year"], photo["month"], photo["photo_date"]),
+                "created_at": photo["created_at"],
+                "source_label": item_source_label(photo["year"], photo["month"]),
+                "url": item_url,
+                "image_url": image_url_builder(photo["id"]),
+                "caption": photo["caption"] or "",
+                "messages_url": messages_url,
+                "can_message": can_message and bool(messages_url),
+                "tags": tags,
+                "tags_text": tags_to_text(tags),
+                **people_payload(people),
+                **privacy_payload_for_tags(tags),
+                "title": photo_display_title(photo),
+            }
+            if include_messages:
+                item["messages"] = load_messages_for_timeline_item(db, "photo", photo["id"]) if message_url_builder else []
+            items.append(item)
         else:
             entry = text_map.get(ref["item_id"])
             if entry is None:
@@ -3069,30 +3074,30 @@ def build_chapter_items(
                 if item_url_builder
                 else timeline_item_link(owner_id, entry["year"], entry["month"], "text", entry["id"])
             )
-            items.append(
-                {
-                    "kind": "text",
-                    "id": entry["id"],
-                    "chapter_item_id": ref["id"],
-                    "position": ref["position"],
-                    "year": entry["year"],
-                    "month": entry["month"],
-                    "display_date": entry["entry_date"],
-                    "date_label": format_timeline_date_label(entry["year"], entry["month"], entry["entry_date"]),
-                    "created_at": entry["created_at"],
-                    "source_label": item_source_label(entry["year"], entry["month"]),
-                    "url": item_url,
-                    "body": entry["body"],
-                    "messages": load_messages_for_timeline_item(db, "text", entry["id"]) if message_url_builder else [],
-                    "messages_url": messages_url,
-                    "can_message": can_message and bool(messages_url),
-                    "tags": tags,
-                    "tags_text": tags_to_text(tags),
-                    **people_payload(people),
-                    **privacy_payload_for_tags(tags),
-                    "title": "Text entry",
-                }
-            )
+            item = {
+                "kind": "text",
+                "id": entry["id"],
+                "chapter_item_id": ref["id"],
+                "position": ref["position"],
+                "year": entry["year"],
+                "month": entry["month"],
+                "display_date": entry["entry_date"],
+                "date_label": format_timeline_date_label(entry["year"], entry["month"], entry["entry_date"]),
+                "created_at": entry["created_at"],
+                "source_label": item_source_label(entry["year"], entry["month"]),
+                "url": item_url,
+                "body": entry["body"],
+                "messages_url": messages_url,
+                "can_message": can_message and bool(messages_url),
+                "tags": tags,
+                "tags_text": tags_to_text(tags),
+                **people_payload(people),
+                **privacy_payload_for_tags(tags),
+                "title": "Text entry",
+            }
+            if include_messages:
+                item["messages"] = load_messages_for_timeline_item(db, "text", entry["id"]) if message_url_builder else []
+            items.append(item)
     attach_reactions(db, items)
     if reaction_url_builder:
         for item in items:
@@ -5083,6 +5088,7 @@ def build_timeline_api_items(
     allowed_tags=None,
     message_url_builder=None,
     can_message=False,
+    include_messages=True,
 ):
     query_suffix = ""
     query_params = [owner_id]
@@ -5123,7 +5129,7 @@ def build_timeline_api_items(
     ]
     messages_by_photo = {}
     photo_ids = [photo["id"] for photo in visible_photo_rows]
-    if photo_ids:
+    if include_messages and photo_ids:
         placeholders = ",".join(["?"] * len(photo_ids))
         message_rows = db.execute(
             f"""
@@ -5140,7 +5146,7 @@ def build_timeline_api_items(
 
     messages_by_text = {}
     text_ids = [entry["id"] for entry in visible_text_rows]
-    if text_ids:
+    if include_messages and text_ids:
         placeholders = ",".join(["?"] * len(text_ids))
         message_rows = db.execute(
             f"""
@@ -5161,57 +5167,57 @@ def build_timeline_api_items(
         tags = photo_tags.get(photo["id"], [])
         people = photo_people.get(photo["id"], [])
         messages_url = message_url_builder("photo", photo["id"]) if message_url_builder else ""
-        items.append(
-            {
-                "kind": "photo",
-                "id": photo["id"],
-                "year": photo["year"],
-                "month": photo["month"],
-                "display_date": display_date,
-                "date_label": format_timeline_date_label(photo["year"], photo["month"], display_date),
-                **timeline_location_payload(photo),
-                "created_at": photo["created_at"],
-                "image_url": image_url_builder(photo["id"]),
-                "caption": photo["caption"] or "",
-                "messages": messages_by_photo.get(photo["id"], []),
-                "messages_url": messages_url,
-                "can_message": can_message and bool(messages_url),
-                "tags": tags,
-                "tags_text": tags_to_text(tags),
-                **people_payload(people),
-                **privacy_payload_for_tags(tags),
-                "title": photo_display_title(photo),
-                "guided_prompts": guided_prompts_for_item("photo", photo, people),
-            }
-        )
+        item = {
+            "kind": "photo",
+            "id": photo["id"],
+            "year": photo["year"],
+            "month": photo["month"],
+            "display_date": display_date,
+            "date_label": format_timeline_date_label(photo["year"], photo["month"], display_date),
+            **timeline_location_payload(photo),
+            "created_at": photo["created_at"],
+            "image_url": image_url_builder(photo["id"]),
+            "caption": photo["caption"] or "",
+            "messages_url": messages_url,
+            "can_message": can_message and bool(messages_url),
+            "tags": tags,
+            "tags_text": tags_to_text(tags),
+            **people_payload(people),
+            **privacy_payload_for_tags(tags),
+            "title": photo_display_title(photo),
+            "guided_prompts": guided_prompts_for_item("photo", photo, people),
+        }
+        if include_messages:
+            item["messages"] = messages_by_photo.get(photo["id"], [])
+        items.append(item)
 
     for entry in visible_text_rows:
         display_date = entry["entry_date"]
         tags = text_tags.get(entry["id"], [])
         people = text_people.get(entry["id"], [])
         messages_url = message_url_builder("text", entry["id"]) if message_url_builder else ""
-        items.append(
-            {
-                "kind": "text",
-                "id": entry["id"],
-                "year": entry["year"],
-                "month": entry["month"],
-                "display_date": display_date,
-                "date_label": format_timeline_date_label(entry["year"], entry["month"], display_date),
-                **timeline_location_payload(entry),
-                "created_at": entry["created_at"],
-                "body": entry["body"],
-                "messages": messages_by_text.get(entry["id"], []),
-                "messages_url": messages_url,
-                "can_message": can_message and bool(messages_url),
-                "tags": tags,
-                "tags_text": tags_to_text(tags),
-                **people_payload(people),
-                **privacy_payload_for_tags(tags),
-                "title": "Text entry",
-                "guided_prompts": guided_prompts_for_item("text", entry, people),
-            }
-        )
+        item = {
+            "kind": "text",
+            "id": entry["id"],
+            "year": entry["year"],
+            "month": entry["month"],
+            "display_date": display_date,
+            "date_label": format_timeline_date_label(entry["year"], entry["month"], display_date),
+            **timeline_location_payload(entry),
+            "created_at": entry["created_at"],
+            "body": entry["body"],
+            "messages_url": messages_url,
+            "can_message": can_message and bool(messages_url),
+            "tags": tags,
+            "tags_text": tags_to_text(tags),
+            **people_payload(people),
+            **privacy_payload_for_tags(tags),
+            "title": "Text entry",
+            "guided_prompts": guided_prompts_for_item("text", entry, people),
+        }
+        if include_messages:
+            item["messages"] = messages_by_text.get(entry["id"], [])
+        items.append(item)
 
     items.sort(key=timeline_item_sort_key)
     return items
@@ -7204,6 +7210,7 @@ def timeline_items():
                 item_id=item_id,
             ),
             can_message=True,
+            include_messages=request_includes_messages(),
         )
     )
 
@@ -7594,6 +7601,7 @@ def chapter_items(chapter_id):
                 item_id=item_id,
             ),
             can_message=True,
+            include_messages=request_includes_messages(),
         )
     )
 
@@ -7691,6 +7699,7 @@ def shared_chapter_items(chapter_id):
                 item_kind=item_kind,
                 item_id=item_id,
             ),
+            include_messages=request_includes_messages(),
         )
     )
 
@@ -7815,6 +7824,7 @@ def connection_timeline_items(connection_id):
                 item_id=item_id,
             ),
             can_message=True,
+            include_messages=request_includes_messages(),
         )
     )
 

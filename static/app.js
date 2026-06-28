@@ -431,9 +431,31 @@ document.addEventListener("DOMContentLoaded", () => {
             document.body.classList.remove("modal-open");
         };
 
-        const renderCarouselMessages = (list, messages) => {
+        const carouselItemsUrl = () => {
+            const url = new URL(allItemsModal.dataset.itemsUrl || "/api/timeline-items", window.location.href);
+            url.searchParams.set("include_messages", "0");
+            return url.toString();
+        };
+
+        const renderCarouselMessages = (list, messages, status = "ready") => {
             list.innerHTML = "";
-            if (messages.length === 0) {
+            if (status === "loading") {
+                const loading = document.createElement("p");
+                loading.className = "empty-state compact";
+                loading.textContent = "Loading messages...";
+                list.appendChild(loading);
+                return;
+            }
+            if (status === "error") {
+                const error = document.createElement("p");
+                error.className = "empty-state compact";
+                error.textContent = "Messages could not be loaded.";
+                list.appendChild(error);
+                return;
+            }
+
+            const visibleMessages = Array.isArray(messages) ? messages : [];
+            if (visibleMessages.length === 0) {
                 const empty = document.createElement("p");
                 empty.className = "empty-state compact";
                 empty.textContent = "No messages yet.";
@@ -441,7 +463,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 return;
             }
 
-            messages.forEach((message) => {
+            visibleMessages.forEach((message) => {
                 const article = document.createElement("article");
                 article.className = "message-item";
 
@@ -463,6 +485,52 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         };
 
+        const loadCarouselMessages = (item, list) => {
+            if (Array.isArray(item.messages)) {
+                item.messagesLoaded = true;
+                renderCarouselMessages(list, item.messages);
+                return;
+            }
+
+            if (!item.messages_url) {
+                item.messages = [];
+                item.messagesLoaded = true;
+                renderCarouselMessages(list, item.messages);
+                return;
+            }
+
+            renderCarouselMessages(list, [], "loading");
+
+            if (!item.messagesPromise) {
+                item.messagesPromise = csrfFetch(item.messages_url)
+                    .then((response) => {
+                        if (!response.ok) {
+                            throw new Error("Messages could not be loaded.");
+                        }
+                        return response.json();
+                    })
+                    .then((messages) => {
+                        item.messages = Array.isArray(messages) ? messages : [];
+                        item.messagesLoaded = true;
+                        item.messagesLoadError = false;
+                        return item.messages;
+                    })
+                    .catch(() => {
+                        item.messages = [];
+                        item.messagesLoaded = true;
+                        item.messagesLoadError = true;
+                        return item.messages;
+                    })
+                    .finally(() => {
+                        item.messagesPromise = null;
+                    });
+            }
+
+            item.messagesPromise.then(() => {
+                renderCarouselMessages(list, item.messages, item.messagesLoadError ? "error" : "ready");
+            });
+        };
+
         const renderCarouselMessagePanel = (item) => {
             const messagePanel = document.createElement("aside");
             messagePanel.className = "carousel-message-panel";
@@ -472,7 +540,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const list = document.createElement("div");
             list.className = "carousel-message-list";
-            renderCarouselMessages(list, item.messages || []);
+            loadCarouselMessages(item, list);
 
             const form = document.createElement("form");
             form.className = "carousel-message-form";
@@ -520,6 +588,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
                 const message = await response.json();
                 item.messages = [...(item.messages || []), message];
+                item.messagesLoaded = true;
+                item.messagesLoadError = false;
                 textarea.value = "";
                 renderCarouselMessages(list, item.messages);
             });
@@ -595,6 +665,11 @@ document.addEventListener("DOMContentLoaded", () => {
             if (item.kind === "photo") {
                 const image = document.createElement("img");
                 image.className = "carousel-image";
+                image.decoding = "async";
+                image.loading = slotIndex === 0 ? "eager" : "lazy";
+                if ("fetchPriority" in image) {
+                    image.fetchPriority = slotIndex === 0 ? "high" : "low";
+                }
                 image.src = item.image_url;
                 image.alt = item.title || "Timeline photo";
                 media.appendChild(image);
@@ -735,7 +810,7 @@ document.addEventListener("DOMContentLoaded", () => {
             allItemsMeta.textContent = "Loading...";
             updateCarouselControl();
 
-            const itemsUrl = allItemsModal.dataset.itemsUrl || "/api/timeline-items";
+            const itemsUrl = carouselItemsUrl();
             const response = await csrfFetch(itemsUrl);
             const fetchedItems = response.ok ? await response.json() : [];
             const filteredItems = skipTagFilter

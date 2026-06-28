@@ -1,3 +1,8 @@
+import io
+import json
+import zipfile
+
+
 def test_auth_registration_birthday_login_and_logout(client, helpers):
     response = client.get("/timeline")
     assert response.status_code == 302
@@ -103,6 +108,149 @@ def test_uploads_text_entries_and_pdf_exports(client, helpers):
     assert month_pdf.status_code == 200
     assert month_pdf.mimetype == "application/pdf"
     assert month_pdf.data.startswith(b"%PDF")
+
+
+def test_full_account_backup_export_and_import(client, helpers):
+    owner_id = helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="family-trip.png",
+        photo_date="2020-05-04",
+        tag="family",
+    )
+    text_id = helpers.create_text(
+        client,
+        "A text memory to preserve",
+        entry_date="2020-05-05",
+        tag="friends",
+    )
+
+    photo_message = client.post(
+        f"/api/timeline-item/photo/{photo_id}/messages",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={"body": "Photo message"},
+    )
+    assert photo_message.status_code == 201
+    text_message = client.post(
+        f"/api/timeline-item/text/{text_id}/messages",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={"body": "Text message"},
+    )
+    assert text_message.status_code == 201
+    reaction = client.put(
+        f"/api/timeline-item/text/{text_id}/reaction",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={"reaction": "love"},
+    )
+    assert reaction.status_code == 200
+
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Chapter One",
+            "description": "A restored story",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row(
+        "SELECT id FROM chapters WHERE user_id = ?",
+        (owner_id,),
+    )["id"]
+    for item_kind, item_id in (("photo", photo_id), ("text", text_id)):
+        add_response = client.post(
+            "/chapters/items",
+            data={
+                **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+                "chapter_id": chapter_id,
+                "item_kind": item_kind,
+                "item_id": item_id,
+            },
+        )
+        assert add_response.status_code == 302
+
+    export_response = client.get("/account/export.zip")
+    assert export_response.status_code == 200
+    assert export_response.mimetype == "application/zip"
+
+    with zipfile.ZipFile(io.BytesIO(export_response.data)) as archive:
+        manifest = json.loads(archive.read("evertimeline-backup.json").decode("utf-8"))
+        assert manifest["format"] == "evertimeline.account_backup"
+        assert manifest["user"]["username"] == "owner"
+        assert manifest["photos"][0]["tags"] == ["family"]
+        assert manifest["photos"][0]["messages"][0]["body"] == "Photo message"
+        assert manifest["text_entries"][0]["reactions"][0]["reaction"] == "love"
+        assert archive.read(manifest["photos"][0]["image_path"]).startswith(b"\x89PNG")
+
+    assert client.post(
+        "/logout",
+        data=helpers.csrf_form_data(client, "/timeline"),
+    ).status_code == 302
+    importer_id = helpers.create_user(client, "importer", birthday="1999-02-03")
+
+    import_response = client.post(
+        "/account/import",
+        data={
+            **helpers.csrf_form_data(client, "/profile"),
+            "backup": (
+                io.BytesIO(export_response.data),
+                "evertimeline-backup.zip",
+                "application/zip",
+            ),
+        },
+        content_type="multipart/form-data",
+    )
+    assert import_response.status_code == 302
+
+    assert helpers.row(
+        "SELECT birthday FROM users WHERE id = ?",
+        (importer_id,),
+    )["birthday"] == "2000-01-15"
+    assert helpers.row(
+        "SELECT COUNT(*) AS count FROM photos WHERE user_id = ?",
+        (importer_id,),
+    )["count"] == 1
+    assert helpers.row(
+        "SELECT COUNT(*) AS count FROM text_entries WHERE user_id = ?",
+        (importer_id,),
+    )["count"] == 1
+    assert helpers.row(
+        """
+        SELECT COUNT(*) AS count
+        FROM messages m
+        JOIN photos p ON p.id = m.photo_id
+        WHERE p.user_id = ?
+        """,
+        (importer_id,),
+    )["count"] == 1
+    assert helpers.row(
+        """
+        SELECT COUNT(*) AS count
+        FROM text_entry_messages tem
+        JOIN text_entries te ON te.id = tem.entry_id
+        WHERE te.user_id = ?
+        """,
+        (importer_id,),
+    )["count"] == 1
+    assert helpers.row(
+        """
+        SELECT COUNT(*) AS count
+        FROM chapters c
+        JOIN chapter_items ci ON ci.chapter_id = c.id
+        WHERE c.user_id = ?
+        """,
+        (importer_id,),
+    )["count"] == 2
+    assert helpers.row(
+        """
+        SELECT t.name
+        FROM text_entries te
+        JOIN text_entry_tags tet ON tet.entry_id = te.id
+        JOIN tags t ON t.id = tet.tag_id
+        WHERE te.user_id = ?
+        """,
+        (importer_id,),
+    )["name"] == "friends"
 
 
 def test_connection_requests_and_privacy_visibility_for_friend_and_family(app, client, helpers):

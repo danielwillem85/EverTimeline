@@ -55,6 +55,11 @@
                     {% if request.endpoint == 'connections' %}aria-current="page"{% endif %}
                 >Connections</a>
                 <a
+                    class="topbar-link{% if request.endpoint == 'activity' %} is-active{% endif %}"
+                    href="{{ url_for('activity') }}"
+                    {% if request.endpoint == 'activity' %}aria-current="page"{% endif %}
+                >Activity</a>
+                <a
                     class="topbar-link notification-link{% if request.endpoint == 'notifications' %} is-active{% endif %}"
                     href="{{ url_for('notifications') }}"
                     {% if request.endpoint == 'notifications' %}aria-current="page"{% endif %}

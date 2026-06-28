@@ -2247,6 +2247,13 @@ details.privacy-toggle-panel {
     gap: 5px;
 }
 
+.activity-title-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
 .activity-main strong {
     color: var(--ink);
     font-size: 1rem;

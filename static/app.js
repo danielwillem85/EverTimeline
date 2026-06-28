@@ -51,6 +51,50 @@ document.addEventListener("DOMContentLoaded", () => {
         container.dataset.privacyLabel = normalizedLabel;
         container.dataset.privacyHelp = help || "";
     };
+    const parsePeopleText = (value) => String(value || "")
+        .split(/[;,]/)
+        .map((person) => person.trim())
+        .filter(Boolean);
+    const peopleToText = (people) => parsePeopleText(Array.isArray(people) ? people.join(", ") : people).join(", ");
+    const setPeopleSummary = (element, people) => {
+        if (!element) {
+            return;
+        }
+        const peopleText = peopleToText(people);
+        element.textContent = peopleText ? `People: ${peopleText}` : "";
+        element.hidden = !peopleText;
+    };
+    const updatePeopleChips = (thumbnail, people) => {
+        if (!thumbnail) {
+            return;
+        }
+        const card = thumbnail.closest(".entry-card");
+        if (!card) {
+            return;
+        }
+        const parsedPeople = parsePeopleText(Array.isArray(people) ? people.join(", ") : people);
+        let list = card.querySelector(".people-chip-list");
+        if (!parsedPeople.length) {
+            if (list) {
+                list.remove();
+            }
+            return;
+        }
+        if (!list) {
+            list = document.createElement("div");
+            list.className = "people-chip-list";
+            list.setAttribute("aria-label", "People");
+            const meta = card.querySelector(".photo-card-meta");
+            (meta || thumbnail).insertAdjacentElement("afterend", list);
+        }
+        list.innerHTML = "";
+        parsedPeople.forEach((person) => {
+            const chip = document.createElement("span");
+            chip.className = "people-chip";
+            chip.textContent = person;
+            list.appendChild(chip);
+        });
+    };
 
     const syncModalOpenState = () => {
         const hasOpenModal = Array.from(document.querySelectorAll(".modal")).some((modal) => {
@@ -1137,6 +1181,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const readonlyPhotoCaption = document.getElementById("readonly-photo-caption-view");
         const readonlyMessageList = document.getElementById("readonly-message-list");
         const readonlyTextDate = document.getElementById("readonly-text-modal-date");
+        const readonlyPhotoPeopleSummary = document.getElementById("readonly-photo-people-summary");
+        const readonlyTextPeopleSummary = document.getElementById("readonly-text-people-summary");
         const readonlyPhotoPrivacySummary = document.getElementById("readonly-photo-privacy-summary");
         const readonlyTextPrivacySummary = document.getElementById("readonly-text-privacy-summary");
         const readonlyTextEntryView = document.getElementById("readonly-text-entry-view");
@@ -1184,6 +1230,7 @@ document.addEventListener("DOMContentLoaded", () => {
             readonlyPhotoTitle.textContent = button.dataset.photoDisplayTitle || "Picture";
             readonlyPhotoDate.textContent = button.dataset.photoDate || "";
             readonlyPhotoCaption.textContent = button.dataset.photoCaption || "";
+            setPeopleSummary(readonlyPhotoPeopleSummary, button.dataset.photoPeople || "");
             setPrivacySummary(
                 readonlyPhotoPrivacySummary,
                 button.dataset.privacyLabel,
@@ -1208,6 +1255,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const openReadonlyTextModal = (button) => {
             readonlyTextDate.textContent = button.dataset.entryDate || "";
+            setPeopleSummary(readonlyTextPeopleSummary, button.dataset.entryPeople || "");
             setPrivacySummary(
                 readonlyTextPrivacySummary,
                 button.dataset.privacyLabel,
@@ -1277,6 +1325,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const modalTitle = document.getElementById("modal-title");
     const modalDate = document.getElementById("modal-date");
     const photoLocationSummary = document.getElementById("photo-location-summary");
+    const photoPeopleSummary = document.getElementById("photo-people-summary");
     const photoCaptionView = document.getElementById("photo-caption-view");
     const photoPrivacySummary = document.getElementById("photo-privacy-summary");
     const messageList = document.getElementById("message-list");
@@ -1288,6 +1337,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const photoDetailsCaption = photoDetailsForm.querySelector("textarea[name='caption']");
     const photoTagsForm = document.getElementById("photo-tags-form");
     const photoTagInputs = Array.from(photoTagsForm.querySelectorAll("input[name='tags']"));
+    const photoPeopleForm = document.getElementById("photo-people-form");
+    const photoPeopleInput = photoPeopleForm.querySelector("input[name='people']");
     const photoLocationForm = document.getElementById("photo-location-form");
     const photoLocationName = photoLocationForm.querySelector("input[name='location_name']");
     const photoLatitude = photoLocationForm.querySelector("input[name='latitude']");
@@ -1295,11 +1346,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const textModalDate = document.getElementById("text-modal-date");
     const textLocationSummary = document.getElementById("text-location-summary");
+    const textPeopleSummary = document.getElementById("text-people-summary");
     const textPrivacySummary = document.getElementById("text-privacy-summary");
     const textEntryView = document.getElementById("text-entry-view");
     const textEntryEditForm = document.getElementById("text-entry-edit-form");
     const textEntryEditBody = textEntryEditForm.querySelector("textarea");
     const textEntryEditDate = textEntryEditForm.querySelector("input[name='entry_date']");
+    const textEntryPeopleInput = textEntryEditForm.querySelector("input[name='people']");
     const textEntryLocationName = textEntryEditForm.querySelector("input[name='location_name']");
     const textEntryLatitude = textEntryEditForm.querySelector("input[name='latitude']");
     const textEntryLongitude = textEntryEditForm.querySelector("input[name='longitude']");
@@ -1428,6 +1481,15 @@ document.addEventListener("DOMContentLoaded", () => {
         );
     };
 
+    const updatePhotoThumbnailPeople = (people, peopleText) => {
+        if (!activePhotoThumbnail) {
+            return;
+        }
+        const normalizedPeopleText = peopleText || peopleToText(people);
+        activePhotoThumbnail.dataset.photoPeople = normalizedPeopleText;
+        updatePeopleChips(activePhotoThumbnail, normalizedPeopleText);
+    };
+
     const updatePhotoThumbnailDetails = (photo) => {
         if (!activePhotoThumbnail) {
             return;
@@ -1496,6 +1558,15 @@ document.addEventListener("DOMContentLoaded", () => {
             privacyLabel || privacyLabelFromTag(tagsText),
             privacyHelpText || privacyHelpFromTag(tagsText)
         );
+    };
+
+    const updateTextThumbnailPeople = (people, peopleText) => {
+        if (!activeTextThumbnail) {
+            return;
+        }
+        const normalizedPeopleText = peopleText || peopleToText(people);
+        activeTextThumbnail.dataset.entryPeople = normalizedPeopleText;
+        updatePeopleChips(activeTextThumbnail, normalizedPeopleText);
     };
 
     const updatePhotoThumbnailLocation = (location) => {
@@ -1574,6 +1645,8 @@ document.addEventListener("DOMContentLoaded", () => {
         };
         setLocationSummary(photoLocationSummary, location);
         setLocationFields(photoLocationName, photoLatitude, photoLongitude, location);
+        setPeopleSummary(photoPeopleSummary, button.dataset.photoPeople || "");
+        photoPeopleInput.value = button.dataset.photoPeople || "";
         setPrivacySummary(
             photoPrivacySummary,
             button.dataset.privacyLabel || privacyLabelFromTag(button.dataset.photoTags || "private"),
@@ -1592,6 +1665,8 @@ document.addEventListener("DOMContentLoaded", () => {
         activePhotoId = null;
         activePhotoThumbnail = null;
         renderPhotoDetails({title: "", display_title: "Picture", caption: ""});
+        setPeopleSummary(photoPeopleSummary, "");
+        photoPeopleInput.value = "";
         setModalOpenState();
     };
 
@@ -1599,9 +1674,11 @@ document.addEventListener("DOMContentLoaded", () => {
         activeTextEntry = entry;
         textModalDate.textContent = entry.entry_date || "";
         setLocationSummary(textLocationSummary, entry);
+        setPeopleSummary(textPeopleSummary, entry.people_text || "");
         textEntryView.textContent = entry.body;
         textEntryEditBody.value = entry.body;
         textEntryEditDate.value = entry.entry_date || "";
+        textEntryPeopleInput.value = entry.people_text || "";
         setLocationFields(textEntryLocationName, textEntryLatitude, textEntryLongitude, entry);
         setPrivacySummary(
             textPrivacySummary,
@@ -1641,6 +1718,7 @@ document.addEventListener("DOMContentLoaded", () => {
             entry.privacy_label,
             entry.privacy_help
         );
+        updateTextThumbnailPeople(entry.people || [], entry.people_text || "");
         updateTextThumbnailLocation(entry);
     };
 
@@ -1778,6 +1856,26 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+    photoPeopleForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (activePhotoId === null) {
+            return;
+        }
+
+        const response = await csrfFetch(`/api/photo/${activePhotoId}/people`, {
+            method: "PATCH",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({people: photoPeopleInput.value}),
+        });
+
+        if (response.ok) {
+            const payload = await response.json();
+            photoPeopleInput.value = payload.people_text || "";
+            setPeopleSummary(photoPeopleSummary, payload.people_text || "");
+            updatePhotoThumbnailPeople(payload.people || [], payload.people_text || "");
+        }
+    });
+
     photoLocationForm.addEventListener("submit", async (event) => {
         event.preventDefault();
         if (activePhotoId === null) {
@@ -1862,6 +1960,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     textEntryLatitude,
                     textEntryLongitude
                 ),
+                people: textEntryPeopleInput.value,
                 tags: selectedTagValue(textEntryEditTagInputs),
             }),
         });

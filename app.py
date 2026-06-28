@@ -352,6 +352,31 @@ def init_db():
                 FOREIGN KEY (tag_id) REFERENCES tags (id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS people (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (user_id, name),
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS photo_people (
+                photo_id INTEGER NOT NULL,
+                person_id INTEGER NOT NULL,
+                PRIMARY KEY (photo_id, person_id),
+                FOREIGN KEY (photo_id) REFERENCES photos (id) ON DELETE CASCADE,
+                FOREIGN KEY (person_id) REFERENCES people (id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS text_entry_people (
+                entry_id INTEGER NOT NULL,
+                person_id INTEGER NOT NULL,
+                PRIMARY KEY (entry_id, person_id),
+                FOREIGN KEY (entry_id) REFERENCES text_entries (id) ON DELETE CASCADE,
+                FOREIGN KEY (person_id) REFERENCES people (id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS photo_import_batches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
@@ -504,6 +529,24 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS chapter_items_chapter_position
             ON chapter_items (chapter_id, position, id)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS people_user_name
+            ON people (user_id, name)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS photo_people_person
+            ON photo_people (person_id, photo_id)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS text_entry_people_person
+            ON text_entry_people (person_id, entry_id)
             """
         )
         db.execute(
@@ -1078,7 +1121,7 @@ def uploaded_photo_files():
     ]
 
 
-def insert_photo_record(db, filename, mime_type, image_data, image_hash, year, month, photo_date, title, caption, tags, location):
+def insert_photo_record(db, filename, mime_type, image_data, image_hash, year, month, photo_date, title, caption, tags, location, people=None):
     cursor = db.execute(
         """
         INSERT INTO photos (
@@ -1104,10 +1147,11 @@ def insert_photo_record(db, filename, mime_type, image_data, image_hash, year, m
         ),
     )
     set_tags_for_item(db, "photo", cursor.lastrowid, tags)
+    set_people_for_item(db, "photo", cursor.lastrowid, people or [])
     return cursor.lastrowid
 
 
-def insert_uploaded_photo(db, image, image_data, image_hash, year, month, photo_date, title, caption, tags, location):
+def insert_uploaded_photo(db, image, image_data, image_hash, year, month, photo_date, title, caption, tags, location, people=None):
     return insert_photo_record(
         db,
         image.filename,
@@ -1121,6 +1165,7 @@ def insert_uploaded_photo(db, image, image_data, image_hash, year, month, photo_
         caption,
         tags,
         location,
+        people,
     )
 
 
@@ -1590,6 +1635,114 @@ def get_all_tags(db):
     return list(TAG_CHOICES)
 
 
+def normalize_person_name(value):
+    return " ".join((value or "").strip().split())[:80]
+
+
+def parse_people(value):
+    if isinstance(value, (list, tuple, set)):
+        chunks = value
+    else:
+        chunks = (value or "").replace(";", ",").split(",")
+
+    people = []
+    seen = set()
+    for chunk in chunks:
+        name = normalize_person_name(chunk)
+        key = name.casefold()
+        if name and key not in seen:
+            people.append(name)
+            seen.add(key)
+    return people
+
+
+def people_to_text(people):
+    return ", ".join(parse_people(people))
+
+
+def get_or_create_person(db, name):
+    normalized_name = normalize_person_name(name)
+    existing = db.execute(
+        """
+        SELECT id
+        FROM people
+        WHERE user_id = ? AND lower(name) = lower(?)
+        """,
+        (g.user["id"], normalized_name),
+    ).fetchone()
+    if existing is not None:
+        return existing["id"]
+
+    db.execute(
+        "INSERT OR IGNORE INTO people (user_id, name) VALUES (?, ?)",
+        (g.user["id"], normalized_name),
+    )
+    return db.execute(
+        """
+        SELECT id
+        FROM people
+        WHERE user_id = ? AND lower(name) = lower(?)
+        """,
+        (g.user["id"], normalized_name),
+    ).fetchone()["id"]
+
+
+def person_join_for_kind(kind):
+    if kind == "photo":
+        return "photo_people", "photo_id"
+    if kind == "text":
+        return "text_entry_people", "entry_id"
+    raise ValueError("Unknown person-tag kind.")
+
+
+def set_people_for_item(db, kind, item_id, people):
+    join_table, id_column = person_join_for_kind(kind)
+    db.execute(f"DELETE FROM {join_table} WHERE {id_column} = ?", (item_id,))
+    for name in parse_people(people):
+        person_id = get_or_create_person(db, name)
+        db.execute(
+            f"INSERT OR IGNORE INTO {join_table} ({id_column}, person_id) VALUES (?, ?)",
+            (item_id, person_id),
+        )
+
+
+def load_people_for_items(db, kind, item_ids, owner_id=None):
+    if not item_ids:
+        return {}
+
+    person_owner_id = owner_id if owner_id is not None else g.user["id"]
+    join_table, id_column = person_join_for_kind(kind)
+    placeholders = ",".join(["?"] * len(item_ids))
+    rows = db.execute(
+        f"""
+        SELECT jp.{id_column} AS item_id, p.name
+        FROM {join_table} jp
+        JOIN people p ON p.id = jp.person_id
+        WHERE p.user_id = ? AND jp.{id_column} IN ({placeholders})
+        ORDER BY lower(p.name) ASC, p.name ASC
+        """,
+        (person_owner_id, *item_ids),
+    ).fetchall()
+    people_by_item = {item_id: [] for item_id in item_ids}
+    for row in rows:
+        name = normalize_person_name(row["name"])
+        if name and name not in people_by_item[row["item_id"]]:
+            people_by_item.setdefault(row["item_id"], []).append(name)
+    return people_by_item
+
+
+def get_people_for_item(db, kind, item_id, owner_id=None):
+    return load_people_for_items(db, kind, [item_id], owner_id).get(item_id, [])
+
+
+def people_payload(people):
+    parsed_people = parse_people(people)
+    return {
+        "people": parsed_people,
+        "people_text": people_to_text(parsed_people),
+    }
+
+
 def tags_visible_to_connection(tags, allowed_tags):
     if allowed_tags is None:
         return True
@@ -1965,9 +2118,12 @@ def build_on_this_day_items(db, owner_id, month, day, image_url_builder):
     ).fetchall()
     photo_tags = load_tags_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
     text_tags = load_tags_for_items(db, "text", [entry["id"] for entry in text_rows], owner_id)
+    photo_people = load_people_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
+    text_people = load_people_for_items(db, "text", [entry["id"] for entry in text_rows], owner_id)
     items = []
     for photo in photo_rows:
         tags = photo_tags.get(photo["id"], [])
+        people = photo_people.get(photo["id"], [])
         items.append(
             {
                 "kind": "photo",
@@ -1987,11 +2143,13 @@ def build_on_this_day_items(db, owner_id, month, day, image_url_builder):
                 "entry_ref": timeline_item_focus("photo", photo["id"]),
                 "tags": tags,
                 "tags_text": tags_to_text(tags),
+                **people_payload(people),
                 **privacy_payload_for_tags(tags),
             }
         )
     for entry in text_rows:
         tags = text_tags.get(entry["id"], [])
+        people = text_people.get(entry["id"], [])
         items.append(
             {
                 "kind": "text",
@@ -2007,6 +2165,7 @@ def build_on_this_day_items(db, owner_id, month, day, image_url_builder):
                 "entry_ref": timeline_item_focus("text", entry["id"]),
                 "tags": tags,
                 "tags_text": tags_to_text(tags),
+                **people_payload(people),
                 **privacy_payload_for_tags(tags),
             }
         )
@@ -2498,6 +2657,8 @@ def build_chapter_items(
 
     photo_tags = load_tags_for_items(db, "photo", photo_ids, owner_id)
     text_tags = load_tags_for_items(db, "text", text_ids, owner_id)
+    photo_people = load_people_for_items(db, "photo", photo_ids, owner_id)
+    text_people = load_people_for_items(db, "text", text_ids, owner_id)
     items = []
     for ref in refs:
         if ref["item_kind"] == "photo":
@@ -2505,6 +2666,7 @@ def build_chapter_items(
             if photo is None:
                 continue
             tags = photo_tags.get(photo["id"], [])
+            people = photo_people.get(photo["id"], [])
             messages_url = message_url_builder("photo", photo["id"]) if message_url_builder else ""
             item_url = (
                 item_url_builder("photo", photo["id"])
@@ -2531,6 +2693,7 @@ def build_chapter_items(
                     "can_message": can_message and bool(messages_url),
                     "tags": tags,
                     "tags_text": tags_to_text(tags),
+                    **people_payload(people),
                     **privacy_payload_for_tags(tags),
                     "title": photo_display_title(photo),
                 }
@@ -2540,6 +2703,7 @@ def build_chapter_items(
             if entry is None:
                 continue
             tags = text_tags.get(entry["id"], [])
+            people = text_people.get(entry["id"], [])
             messages_url = message_url_builder("text", entry["id"]) if message_url_builder else ""
             item_url = (
                 item_url_builder("text", entry["id"])
@@ -2565,6 +2729,7 @@ def build_chapter_items(
                     "can_message": can_message and bool(messages_url),
                     "tags": tags,
                     "tags_text": tags_to_text(tags),
+                    **people_payload(people),
                     **privacy_payload_for_tags(tags),
                     "title": "Text entry",
                 }
@@ -3625,10 +3790,12 @@ def timeline_search_item_matches(filters, kind, row, tags, message_count=0, chap
     return True
 
 
-def timeline_search_meta(row, tags, message_count=0, chapter_membership=None):
+def timeline_search_meta(row, tags, message_count=0, chapter_membership=None, people=None):
     meta = [f"Visible: {privacy_label_for_tags(tags)}"]
     if timeline_search_has_location(row):
         meta.append(row["location_name"] or "Mapped")
+    if people:
+        meta.append(f"People: {people_to_text(people)}")
     if message_count:
         message_word = "message" if message_count == 1 else "messages"
         meta.append(f"{message_count} {message_word}")
@@ -3690,9 +3857,11 @@ def search_timeline_content(db, filters):
     ).fetchall()
     photo_ids = [row["id"] for row in photo_rows]
     photo_tags = load_tags_for_items(db, "photo", photo_ids)
+    photo_people = load_people_for_items(db, "photo", photo_ids)
     photo_message_counts = load_timeline_search_message_counts(db, "photo", photo_ids)
     photo_chapters = load_timeline_search_chapter_memberships(db, "photo", photo_ids)
     for row in photo_rows:
+        people = photo_people.get(row["id"], [])
         if not timeline_search_query_matches(
             (
                 row["original_filename"],
@@ -3702,6 +3871,7 @@ def search_timeline_content(db, filters):
                 row["year"],
                 f"{row['year']:04d}-{row['month']:02d}",
                 row["location_name"],
+                *people,
             ),
             normalized_query,
         ):
@@ -3726,8 +3896,8 @@ def search_timeline_content(db, filters):
                 "kind_key": "photo",
                 "title": photo_display_title(row),
                 "context": timeline_search_context(row, date_label),
-                "preview": short_preview(row["caption"] or "Matched photo filename or date.", 180),
-                "meta": timeline_search_meta(row, tags, message_count, chapter_membership),
+                "preview": short_preview(row["caption"] or "Matched photo filename, date, or person.", 180),
+                "meta": timeline_search_meta(row, tags, message_count, chapter_membership, people),
                 "image_url": url_for("photo_image", photo_id=row["id"]),
                 "url": timeline_item_link(g.user["id"], row["year"], row["month"], "photo", row["id"]),
             },
@@ -3745,9 +3915,11 @@ def search_timeline_content(db, filters):
     ).fetchall()
     text_ids = [row["id"] for row in text_rows]
     text_tags = load_tags_for_items(db, "text", text_ids)
+    text_people = load_people_for_items(db, "text", text_ids)
     text_message_counts = load_timeline_search_message_counts(db, "text", text_ids)
     text_chapters = load_timeline_search_chapter_memberships(db, "text", text_ids)
     for row in text_rows:
+        people = text_people.get(row["id"], [])
         if not timeline_search_query_matches(
             (
                 row["body"],
@@ -3755,6 +3927,7 @@ def search_timeline_content(db, filters):
                 row["year"],
                 f"{row['year']:04d}-{row['month']:02d}",
                 row["location_name"],
+                *people,
             ),
             normalized_query,
         ):
@@ -3780,7 +3953,7 @@ def search_timeline_content(db, filters):
                 "title": "Text entry",
                 "context": timeline_search_context(row, date_label),
                 "preview": short_preview(row["body"], 180),
-                "meta": timeline_search_meta(row, tags, message_count, chapter_membership),
+                "meta": timeline_search_meta(row, tags, message_count, chapter_membership, people),
                 "url": timeline_item_link(g.user["id"], row["year"], row["month"], "text", row["id"]),
             },
         )
@@ -3817,7 +3990,8 @@ def search_timeline_content(db, filters):
             (g.user["id"],),
         ).fetchall()
         for row in photo_message_rows:
-            if not timeline_search_query_matches((row["body"], row["item_title"]), normalized_query):
+            people = photo_people.get(row["item_id"], [])
+            if not timeline_search_query_matches((row["body"], row["item_title"], *people), normalized_query):
                 continue
             tags = photo_tags.get(row["item_id"], get_tags_for_item(db, "photo", row["item_id"]))
             message_count = photo_message_counts.get(row["item_id"], 1)
@@ -3839,7 +4013,7 @@ def search_timeline_content(db, filters):
                     "title": row["item_title"] or "Photo message",
                     "context": f"Photo message by {message_author_name(row)}",
                     "preview": short_preview(row["body"], 180),
-                    "meta": timeline_search_meta(row, tags, message_count, chapter_membership),
+                    "meta": timeline_search_meta(row, tags, message_count, chapter_membership, people),
                     "image_url": url_for("photo_image", photo_id=row["item_id"]),
                     "url": timeline_item_link(g.user["id"], row["year"], row["month"], "photo", row["item_id"]),
                 },
@@ -3872,7 +4046,8 @@ def search_timeline_content(db, filters):
             (g.user["id"],),
         ).fetchall()
         for row in text_message_rows:
-            if not timeline_search_query_matches((row["body"], row["item_body"]), normalized_query):
+            people = text_people.get(row["item_id"], [])
+            if not timeline_search_query_matches((row["body"], row["item_body"], *people), normalized_query):
                 continue
             tags = text_tags.get(row["item_id"], get_tags_for_item(db, "text", row["item_id"]))
             message_count = text_message_counts.get(row["item_id"], 1)
@@ -3894,7 +4069,7 @@ def search_timeline_content(db, filters):
                     "title": "Text entry message",
                     "context": f"Text entry message by {message_author_name(row)}",
                     "preview": short_preview(row["body"], 180),
-                    "meta": timeline_search_meta(row, tags, message_count, chapter_membership),
+                    "meta": timeline_search_meta(row, tags, message_count, chapter_membership, people),
                     "url": timeline_item_link(g.user["id"], row["year"], row["month"], "text", row["item_id"]),
                 },
             )
@@ -4114,9 +4289,12 @@ def build_month_items(db, owner_id, year, month, image_url_builder, allowed_tags
     ).fetchall()
     photo_tags = load_tags_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
     text_tags = load_tags_for_items(db, "text", [entry["id"] for entry in text_rows], owner_id)
+    photo_people = load_people_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
+    text_people = load_people_for_items(db, "text", [entry["id"] for entry in text_rows], owner_id)
     items = []
     for photo in photo_rows:
         tags = photo_tags.get(photo["id"], [])
+        people = photo_people.get(photo["id"], [])
         if not tags_visible_to_connection(tags, allowed_tags):
             continue
         items.append(
@@ -4135,11 +4313,13 @@ def build_month_items(db, owner_id, year, month, image_url_builder, allowed_tags
                 "image_url": image_url_builder(photo["id"]),
                 "tags": tags,
                 "tags_text": tags_to_text(tags),
+                **people_payload(people),
                 **privacy_payload_for_tags(tags),
             }
         )
     for entry in text_rows:
         tags = text_tags.get(entry["id"], [])
+        people = text_people.get(entry["id"], [])
         if not tags_visible_to_connection(tags, allowed_tags):
             continue
         items.append(
@@ -4154,6 +4334,7 @@ def build_month_items(db, owner_id, year, month, image_url_builder, allowed_tags
                 "created_at": entry["created_at"],
                 "tags": tags,
                 "tags_text": tags_to_text(tags),
+                **people_payload(people),
                 **privacy_payload_for_tags(tags),
             }
         )
@@ -4195,6 +4376,8 @@ def build_timeline_api_items(
     ).fetchall()
     photo_tags = load_tags_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
     text_tags = load_tags_for_items(db, "text", [entry["id"] for entry in text_rows], owner_id)
+    photo_people = load_people_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
+    text_people = load_people_for_items(db, "text", [entry["id"] for entry in text_rows], owner_id)
     visible_photo_rows = [
         photo
         for photo in photo_rows
@@ -4243,6 +4426,7 @@ def build_timeline_api_items(
     for photo in visible_photo_rows:
         display_date = photo["photo_date"]
         tags = photo_tags.get(photo["id"], [])
+        people = photo_people.get(photo["id"], [])
         messages_url = message_url_builder("photo", photo["id"]) if message_url_builder else ""
         items.append(
             {
@@ -4261,6 +4445,7 @@ def build_timeline_api_items(
                 "can_message": can_message and bool(messages_url),
                 "tags": tags,
                 "tags_text": tags_to_text(tags),
+                **people_payload(people),
                 **privacy_payload_for_tags(tags),
                 "title": photo_display_title(photo),
             }
@@ -4269,6 +4454,7 @@ def build_timeline_api_items(
     for entry in visible_text_rows:
         display_date = entry["entry_date"]
         tags = text_tags.get(entry["id"], [])
+        people = text_people.get(entry["id"], [])
         messages_url = message_url_builder("text", entry["id"]) if message_url_builder else ""
         items.append(
             {
@@ -4286,6 +4472,7 @@ def build_timeline_api_items(
                 "can_message": can_message and bool(messages_url),
                 "tags": tags,
                 "tags_text": tags_to_text(tags),
+                **people_payload(people),
                 **privacy_payload_for_tags(tags),
                 "title": "Text entry",
             }
@@ -4316,10 +4503,13 @@ def build_pdf_export_items(db, owner_id, year, month=None):
     text_rows = db.execute(text_query, tuple(params)).fetchall()
     photo_tags = load_tags_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
     text_tags = load_tags_for_items(db, "text", [entry["id"] for entry in text_rows], owner_id)
+    photo_people = load_people_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
+    text_people = load_people_for_items(db, "text", [entry["id"] for entry in text_rows], owner_id)
 
     items = []
     for photo in photo_rows:
         tags = photo_tags.get(photo["id"], [])
+        people = photo_people.get(photo["id"], [])
         items.append(
             {
                 "kind": "photo",
@@ -4336,12 +4526,14 @@ def build_pdf_export_items(db, owner_id, year, month=None):
                 "messages": load_messages_for_timeline_item(db, "photo", photo["id"]),
                 "tags": tags,
                 "tags_text": tags_to_text(tags),
+                **people_payload(people),
                 **privacy_payload_for_tags(tags),
             }
         )
 
     for entry in text_rows:
         tags = text_tags.get(entry["id"], [])
+        people = text_people.get(entry["id"], [])
         items.append(
             {
                 "kind": "text",
@@ -4356,6 +4548,7 @@ def build_pdf_export_items(db, owner_id, year, month=None):
                 "messages": load_messages_for_timeline_item(db, "text", entry["id"]),
                 "tags": tags,
                 "tags_text": tags_to_text(tags),
+                **people_payload(people),
                 **privacy_payload_for_tags(tags),
             }
         )
@@ -4500,7 +4693,10 @@ def render_timeline_pdf(title, subtitle, items):
             story.append(Paragraph(f"{MONTH_NAMES[item['month'] - 1]} {item['year']}", month_style))
 
         item_title = item["title"] if item["kind"] == "photo" else "Text entry"
-        meta = f"{item['date_label']} | Visible: {item['privacy_label']}"
+        meta_parts = [item["date_label"], f"Visible: {item['privacy_label']}"]
+        if item.get("people_text"):
+            meta_parts.append(f"People: {item['people_text']}")
+        meta = " | ".join(meta_parts)
         story.append(Paragraph(pdf_paragraph(item_title), item_title_style))
         story.append(Paragraph(pdf_paragraph(meta), meta_style))
 
@@ -4713,6 +4909,8 @@ def build_account_backup_manifest(db):
 
     photo_tags = load_tags_for_items(db, "photo", [row["id"] for row in photo_rows])
     text_tags = load_tags_for_items(db, "text", [row["id"] for row in text_rows])
+    photo_people = load_people_for_items(db, "photo", [row["id"] for row in photo_rows])
+    text_people = load_people_for_items(db, "text", [row["id"] for row in text_rows])
     photo_messages = load_backup_message_map(db, "photo")
     text_messages = load_backup_message_map(db, "text")
     photo_reactions = load_backup_reaction_map(db, "photo")
@@ -4746,6 +4944,7 @@ def build_account_backup_manifest(db):
                     ("id", "year", "month", "original_filename", "title", "caption", "image_hash", "mime_type", "photo_date", "created_at"),
                 ),
                 "tags": photo_tags.get(row["id"], [DEFAULT_TAG]),
+                "people": photo_people.get(row["id"], []),
                 "image_path": backup_photo_path(row),
                 "messages": photo_messages.get(row["id"], []),
                 "reactions": photo_reactions.get(row["id"], []),
@@ -4759,6 +4958,7 @@ def build_account_backup_manifest(db):
                     ("id", "year", "month", "body", "entry_date", "created_at", "updated_at"),
                 ),
                 "tags": text_tags.get(row["id"], [DEFAULT_TAG]),
+                "people": text_people.get(row["id"], []),
                 "messages": text_messages.get(row["id"], []),
                 "reactions": text_reactions.get(row["id"], []),
             }
@@ -4940,6 +5140,7 @@ def import_photo_from_backup(db, archive, photo):
         ),
     )
     set_tags_for_item(db, "photo", cursor.lastrowid, photo.get("tags", [DEFAULT_TAG]))
+    set_people_for_item(db, "photo", cursor.lastrowid, photo.get("people", []))
     return {
         "id": cursor.lastrowid,
         "created": True,
@@ -4979,6 +5180,7 @@ def import_text_entry_from_backup(db, entry):
         ),
     )
     set_tags_for_item(db, "text", cursor.lastrowid, entry.get("tags", [DEFAULT_TAG]))
+    set_people_for_item(db, "text", cursor.lastrowid, entry.get("people", []))
     return cursor.lastrowid
 
 
@@ -5893,6 +6095,7 @@ def month_view(year, month):
         photo_title = normalize_photo_title(request.form.get("title", ""))
         photo_caption = normalize_photo_caption(request.form.get("caption", ""))
         tags = parse_tags(request.form.get("tags", ""))
+        people = parse_people(request.form.get("people", ""))
 
         if not images:
             flash("Choose at least one image to upload.", "error")
@@ -5954,6 +6157,7 @@ def month_view(year, month):
                 photo_caption,
                 tags,
                 location,
+                people,
             )
             uploaded_count += 1
             if used_auto_date:
@@ -6051,6 +6255,7 @@ def create_text_entry(year, month):
     body = request.form.get("body", "")
     entry_date = request.form.get("entry_date", "")
     tags = parse_tags(request.form.get("tags", ""))
+    people = parse_people(request.form.get("people", ""))
 
     if not body.strip():
         flash("Text entry cannot be empty.", "error")
@@ -6093,6 +6298,7 @@ def create_text_entry(year, month):
         ),
     )
     set_tags_for_item(db, "text", cursor.lastrowid, tags)
+    set_people_for_item(db, "text", cursor.lastrowid, people)
     db.commit()
     flash("Text entry saved.", "success")
     return redirect(url_for("month_view", year=year, month=month))
@@ -7032,6 +7238,7 @@ def delete_photo(photo_id):
     db = get_db()
     if request.method == "GET":
         tags = get_tags_for_item(db, "photo", photo_id)
+        people = get_people_for_item(db, "photo", photo_id)
         return jsonify(
             {
                 "id": photo["id"],
@@ -7043,6 +7250,7 @@ def delete_photo(photo_id):
                 "created_at": photo["created_at"],
                 "tags": tags,
                 "tags_text": tags_to_text(tags),
+                **people_payload(people),
                 **privacy_payload_for_tags(tags),
             }
         )
@@ -7062,6 +7270,7 @@ def delete_photo(photo_id):
         db.commit()
         photo = get_owned_photo(photo_id)
         tags = get_tags_for_item(db, "photo", photo_id)
+        people = get_people_for_item(db, "photo", photo_id)
         return jsonify(
             {
                 "id": photo["id"],
@@ -7073,6 +7282,7 @@ def delete_photo(photo_id):
                 "created_at": photo["created_at"],
                 "tags": tags,
                 "tags_text": tags_to_text(tags),
+                **people_payload(people),
                 **privacy_payload_for_tags(tags),
             }
         )
@@ -7112,6 +7322,22 @@ def photo_tags(photo_id):
 
     tags = get_tags_for_item(db, "photo", photo_id)
     return jsonify({"tags": tags, "tags_text": tags_to_text(tags), **privacy_payload_for_tags(tags)})
+
+
+@app.route("/api/photo/<int:photo_id>/people", methods=("GET", "PATCH"))
+@birthday_required
+def photo_people(photo_id):
+    get_owned_photo(photo_id)
+    db = get_db()
+
+    if request.method == "PATCH":
+        payload = request.get_json(silent=True) or request.form
+        people = parse_people(payload.get("people", ""))
+        set_people_for_item(db, "photo", photo_id, people)
+        db.commit()
+
+    people = get_people_for_item(db, "photo", photo_id)
+    return jsonify(people_payload(people))
 
 
 @app.route("/api/photo/<int:photo_id>/location", methods=("GET", "PATCH"))
@@ -7179,6 +7405,7 @@ def text_entry(entry_id):
         body = payload.get("body") or ""
         entry_date = payload.get("entry_date", "")
         tags = parse_tags(payload.get("tags", ""))
+        people = parse_people(payload.get("people", ""))
 
         if not body.strip():
             return jsonify({"error": "Text entry cannot be empty."}), 400
@@ -7216,10 +7443,12 @@ def text_entry(entry_id):
             ),
         )
         set_tags_for_item(db, "text", entry_id, tags)
+        set_people_for_item(db, "text", entry_id, people)
         db.commit()
         entry = get_owned_text_entry(entry_id)
 
     tags = get_tags_for_item(db, "text", entry_id)
+    people = get_people_for_item(db, "text", entry_id)
     return jsonify(
         {
             "id": entry["id"],
@@ -7230,6 +7459,7 @@ def text_entry(entry_id):
             "updated_at": entry["updated_at"],
             "tags": tags,
             "tags_text": tags_to_text(tags),
+            **people_payload(people),
             **privacy_payload_for_tags(tags),
         }
     )

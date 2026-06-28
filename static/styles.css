@@ -394,6 +394,7 @@ h3 {
 .upload-form,
 .message-form,
 .location-form,
+.people-form,
 .text-entry-form,
 .text-entry-edit-form {
     display: grid;
@@ -477,6 +478,39 @@ textarea {
     color: var(--primary);
     font-size: 0.86rem;
     font-weight: 800;
+}
+
+.people-field {
+    grid-column: 1 / -1;
+}
+
+.people-summary {
+    margin: 4px 0 0;
+    color: var(--primary);
+    font-size: 0.86rem;
+    font-weight: 900;
+}
+
+.people-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-width: 0;
+    padding: 0 2px;
+}
+
+.people-chip {
+    max-width: 100%;
+    overflow: hidden;
+    border: 1px solid rgba(22, 109, 103, 0.24);
+    border-radius: 999px;
+    padding: 3px 8px;
+    background: #f5fbfa;
+    color: var(--primary);
+    font-size: 0.76rem;
+    font-weight: 900;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .tag-radio-list,
@@ -2236,6 +2270,14 @@ details.privacy-toggle-panel {
 }
 
 .photo-details-form .button {
+    width: 100%;
+}
+
+.people-form {
+    gap: 10px;
+}
+
+.people-form .button {
     width: 100%;
 }
 

@@ -50,6 +50,7 @@
                     href="{{ url_for('search') }}"
                     {% if request.endpoint == 'search' %}aria-current="page"{% endif %}
                 >Search</a>
+<<<<<<< Updated upstream
                 <a
                     class="topbar-link{% if request.endpoint == 'profile' %} is-active{% endif %}"
                     href="{{ url_for('profile') }}"
@@ -60,6 +61,24 @@
                     {{ csrf_field() }}
                     <button class="button secondary small" type="submit">Log out</button>
                 </form>
+=======
+                <details class="account-menu{% if request.endpoint == 'profile' %} is-active{% endif %}">
+                    <summary aria-label="Account menu for {{ g.user['username'] }}" title="Account menu">
+                        <span aria-hidden="true">&#9881;</span>
+                    </summary>
+                    <div class="account-menu-panel">
+                        <span class="account-menu-name">{{ g.user["username"] }}</span>
+                        <a
+                            class="account-menu-link{% if request.endpoint == 'profile' %} is-active{% endif %}"
+                            href="{{ url_for('profile') }}"
+                            {% if request.endpoint == 'profile' %}aria-current="page"{% endif %}
+                        >Profile</a>
+                        <form action="{{ url_for('logout') }}" method="post">
+                            <button class="button secondary small" type="submit">Log out</button>
+                        </form>
+                    </div>
+                </details>
+>>>>>>> Stashed changes
             </div>
         {% endif %}
     </header>

@@ -4,11 +4,13 @@ from functools import wraps
 import calendar
 import hashlib
 import io
+import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import secrets
 import sqlite3
+import zipfile
 from xml.sax.saxutils import escape
 
 from flask import (
@@ -73,6 +75,9 @@ MONTH_NAMES = [
     "November",
     "December",
 ]
+BACKUP_FORMAT = "evertimeline.account_backup"
+BACKUP_FORMAT_VERSION = 1
+BACKUP_MANIFEST_NAME = "evertimeline-backup.json"
 
 
 def env_flag(name, default=False):
@@ -2782,6 +2787,613 @@ def pdf_export_response(title, subtitle, filename, items):
     return response
 
 
+def dict_from_row(row, fields):
+    return {field: row[field] for field in fields}
+
+
+def author_backup_payload(row):
+    return {
+        "id": row["user_id"],
+        "username": row["username"],
+        "first_name": row["first_name"],
+        "last_name": row["last_name"],
+        "email": row["email"] or "",
+        "display_name": user_full_name(row) or row["username"],
+        "is_owner": row["user_id"] == g.user["id"],
+    }
+
+
+def backup_photo_path(photo):
+    filename = secure_filename(photo["original_filename"] or "") or f"photo-{photo['id']}"
+    if "." not in filename:
+        extension = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/gif": ".gif",
+            "image/webp": ".webp",
+        }.get(photo["mime_type"], "")
+        filename = f"{filename}{extension}"
+    return f"photos/{photo['id']}-{filename}"
+
+
+def load_backup_message_map(db, item_kind):
+    if item_kind == "photo":
+        rows = db.execute(
+            """
+            SELECT
+                m.id,
+                m.photo_id AS item_id,
+                m.user_id,
+                m.body,
+                m.created_at,
+                u.username,
+                u.first_name,
+                u.last_name,
+                u.email
+            FROM messages m
+            JOIN photos p ON p.id = m.photo_id
+            JOIN users u ON u.id = m.user_id
+            WHERE p.user_id = ?
+            ORDER BY m.created_at ASC, m.id ASC
+            """,
+            (g.user["id"],),
+        ).fetchall()
+    else:
+        rows = db.execute(
+            """
+            SELECT
+                tem.id,
+                tem.entry_id AS item_id,
+                tem.user_id,
+                tem.body,
+                tem.created_at,
+                u.username,
+                u.first_name,
+                u.last_name,
+                u.email
+            FROM text_entry_messages tem
+            JOIN text_entries te ON te.id = tem.entry_id
+            JOIN users u ON u.id = tem.user_id
+            WHERE te.user_id = ?
+            ORDER BY tem.created_at ASC, tem.id ASC
+            """,
+            (g.user["id"],),
+        ).fetchall()
+
+    messages_by_item = {}
+    for row in rows:
+        messages_by_item.setdefault(row["item_id"], []).append(
+            {
+                "id": row["id"],
+                "body": row["body"],
+                "created_at": row["created_at"],
+                "author": author_backup_payload(row),
+            }
+        )
+    return messages_by_item
+
+
+def load_backup_reaction_map(db, item_kind):
+    owner_table = "photos" if item_kind == "photo" else "text_entries"
+    rows = db.execute(
+        f"""
+        SELECT
+            ir.id,
+            ir.item_id,
+            ir.user_id,
+            ir.reaction,
+            ir.created_at,
+            u.username,
+            u.first_name,
+            u.last_name,
+            u.email
+        FROM item_reactions ir
+        JOIN {owner_table} item ON item.id = ir.item_id
+        JOIN users u ON u.id = ir.user_id
+        WHERE ir.item_kind = ?
+          AND item.user_id = ?
+        ORDER BY ir.created_at ASC, ir.id ASC
+        """,
+        (item_kind, g.user["id"]),
+    ).fetchall()
+
+    reactions_by_item = {}
+    for row in rows:
+        reactions_by_item.setdefault(row["item_id"], []).append(
+            {
+                "id": row["id"],
+                "reaction": row["reaction"],
+                "created_at": row["created_at"],
+                "author": author_backup_payload(row),
+            }
+        )
+    return reactions_by_item
+
+
+def build_account_backup_manifest(db):
+    photo_rows = db.execute(
+        """
+        SELECT id, year, month, original_filename, mime_type, photo_date, created_at
+        FROM photos
+        WHERE user_id = ?
+        ORDER BY year ASC, month ASC, COALESCE(photo_date, ''), id ASC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    text_rows = db.execute(
+        """
+        SELECT id, year, month, body, entry_date, created_at, updated_at
+        FROM text_entries
+        WHERE user_id = ?
+        ORDER BY year ASC, month ASC, COALESCE(entry_date, ''), id ASC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    chapter_rows = db.execute(
+        """
+        SELECT id, title, description, created_at, updated_at
+        FROM chapters
+        WHERE user_id = ?
+        ORDER BY created_at ASC, id ASC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    chapter_item_rows = db.execute(
+        """
+        SELECT ci.id, ci.chapter_id, ci.item_kind, ci.item_id, ci.position, ci.created_at
+        FROM chapter_items ci
+        JOIN chapters c ON c.id = ci.chapter_id
+        WHERE c.user_id = ?
+        ORDER BY ci.chapter_id ASC, ci.position ASC, ci.id ASC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+
+    photo_tags = load_tags_for_items(db, "photo", [row["id"] for row in photo_rows])
+    text_tags = load_tags_for_items(db, "text", [row["id"] for row in text_rows])
+    photo_messages = load_backup_message_map(db, "photo")
+    text_messages = load_backup_message_map(db, "text")
+    photo_reactions = load_backup_reaction_map(db, "photo")
+    text_reactions = load_backup_reaction_map(db, "text")
+
+    chapter_items_by_chapter = {}
+    for row in chapter_item_rows:
+        chapter_items_by_chapter.setdefault(row["chapter_id"], []).append(
+            dict_from_row(
+                row,
+                ("id", "item_kind", "item_id", "position", "created_at"),
+            )
+        )
+
+    return {
+        "format": BACKUP_FORMAT,
+        "format_version": BACKUP_FORMAT_VERSION,
+        "exported_at": utc_now().isoformat(),
+        "user": {
+            "username": g.user["username"],
+            "first_name": g.user["first_name"],
+            "last_name": g.user["last_name"],
+            "email": g.user["email"] or "",
+            "birthday": g.user["birthday"],
+            "created_at": g.user["created_at"],
+        },
+        "photos": [
+            {
+                **dict_from_row(
+                    row,
+                    ("id", "year", "month", "original_filename", "mime_type", "photo_date", "created_at"),
+                ),
+                "tags": photo_tags.get(row["id"], [DEFAULT_TAG]),
+                "image_path": backup_photo_path(row),
+                "messages": photo_messages.get(row["id"], []),
+                "reactions": photo_reactions.get(row["id"], []),
+            }
+            for row in photo_rows
+        ],
+        "text_entries": [
+            {
+                **dict_from_row(
+                    row,
+                    ("id", "year", "month", "body", "entry_date", "created_at", "updated_at"),
+                ),
+                "tags": text_tags.get(row["id"], [DEFAULT_TAG]),
+                "messages": text_messages.get(row["id"], []),
+                "reactions": text_reactions.get(row["id"], []),
+            }
+            for row in text_rows
+        ],
+        "chapters": [
+            {
+                **dict_from_row(
+                    row,
+                    ("id", "title", "description", "created_at", "updated_at"),
+                ),
+                "items": chapter_items_by_chapter.get(row["id"], []),
+            }
+            for row in chapter_rows
+        ],
+    }
+
+
+def account_backup_response(db):
+    manifest = build_account_backup_manifest(db)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            BACKUP_MANIFEST_NAME,
+            json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"),
+        )
+        for photo in manifest["photos"]:
+            row = db.execute(
+                "SELECT image_data FROM photos WHERE id = ? AND user_id = ?",
+                (photo["id"], g.user["id"]),
+            ).fetchone()
+            if row is not None:
+                archive.writestr(photo["image_path"], row["image_data"])
+
+    backup_bytes = buffer.getvalue()
+    username = secure_filename(g.user["username"]) or "account"
+    exported_on = datetime.now().strftime("%Y%m%d")
+    filename = f"evertimeline-backup-{username}-{exported_on}.zip"
+    response = Response(backup_bytes, mimetype="application/zip")
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    response.headers["Content-Length"] = str(len(backup_bytes))
+    return response
+
+
+def backup_list(manifest, key):
+    value = manifest.get(key, [])
+    if not isinstance(value, list):
+        raise ValueError("Backup manifest is not valid.")
+    return value
+
+
+def validate_backup_item_date(year, month, day_value, field_name):
+    try:
+        year = int(year)
+        month = int(month)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Backup item has an invalid year or month.") from exc
+    if year < 1 or year > date.today().year or month < 1 or month > 12:
+        raise ValueError("Backup item has an invalid year or month.")
+    if day_value:
+        parsed_day = parse_iso_date(str(day_value), field_name)
+        if parsed_day.year != year or parsed_day.month != month:
+            raise ValueError(f"{field_name} must belong to the imported item month.")
+    return year, month
+
+
+def validate_backup_image_path(path):
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError("Backup photo entry is missing an image path.")
+    normalized = PurePosixPath(path)
+    if normalized.is_absolute() or ".." in normalized.parts or normalized.parts[0] != "photos":
+        raise ValueError("Backup photo entry has an unsafe image path.")
+    return str(normalized)
+
+
+def backup_text(value, default="", limit=None):
+    if value is None:
+        return default
+    text = str(value)
+    if limit is not None:
+        return text[:limit]
+    return text
+
+
+def backup_created_at(value):
+    text = backup_text(value, "", 64).strip()
+    return text or utc_now().isoformat()
+
+
+def read_backup_manifest(archive):
+    try:
+        manifest_data = archive.read(BACKUP_MANIFEST_NAME)
+    except KeyError as exc:
+        raise ValueError("Choose an EverTimeline backup zip.") from exc
+
+    try:
+        manifest = json.loads(manifest_data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Backup manifest could not be read.") from exc
+
+    if not isinstance(manifest, dict):
+        raise ValueError("Backup manifest is not valid.")
+    if manifest.get("format") != BACKUP_FORMAT:
+        raise ValueError("This zip is not an EverTimeline account backup.")
+    if manifest.get("format_version") != BACKUP_FORMAT_VERSION:
+        raise ValueError("This backup format is not supported by this version of EverTimeline.")
+    return manifest
+
+
+def restore_backup_birthday(db, manifest):
+    user = manifest.get("user") or {}
+    if not isinstance(user, dict):
+        raise ValueError("Backup user metadata is not valid.")
+    birthday = (user.get("birthday") or "").strip()
+    if not birthday:
+        return
+
+    birthday_date = parse_iso_date(birthday, "Backup birthday")
+    if birthday_date > date.today():
+        raise ValueError("Backup birthday cannot be in the future.")
+    db.execute(
+        "UPDATE users SET birthday = ? WHERE id = ?",
+        (birthday_date.isoformat(), g.user["id"]),
+    )
+
+
+def import_photo_from_backup(db, archive, photo):
+    if not isinstance(photo, dict):
+        raise ValueError("Backup photo entry is not valid.")
+
+    year, month = validate_backup_item_date(
+        photo.get("year"),
+        photo.get("month"),
+        photo.get("photo_date"),
+        "Photo date",
+    )
+    image_path = validate_backup_image_path(photo.get("image_path"))
+    try:
+        info = archive.getinfo(image_path)
+    except KeyError as exc:
+        raise ValueError("Backup photo image is missing from the zip.") from exc
+
+    if info.file_size > app.config["MAX_CONTENT_LENGTH"]:
+        raise ValueError("Backup contains a photo that is too large.")
+
+    image_data = archive.read(info)
+    mime_type = backup_text(photo.get("mime_type"), "image/png", 64)
+    if mime_type not in ALLOWED_IMAGE_MIMES:
+        raise ValueError("Backup contains an unsupported photo type.")
+
+    cursor = db.execute(
+        """
+        INSERT INTO photos (
+            user_id, year, month, original_filename, mime_type, image_data, photo_date, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            g.user["id"],
+            year,
+            month,
+            secure_filename(backup_text(photo.get("original_filename"), "", 255)) or None,
+            mime_type,
+            image_data,
+            photo.get("photo_date") or None,
+            backup_created_at(photo.get("created_at")),
+        ),
+    )
+    set_tags_for_item(db, "photo", cursor.lastrowid, photo.get("tags", [DEFAULT_TAG]))
+    return cursor.lastrowid
+
+
+def import_text_entry_from_backup(db, entry):
+    if not isinstance(entry, dict):
+        raise ValueError("Backup text entry is not valid.")
+
+    body = backup_text(entry.get("body"))
+    if not body.strip():
+        raise ValueError("Backup contains an empty text entry.")
+    year, month = validate_backup_item_date(
+        entry.get("year"),
+        entry.get("month"),
+        entry.get("entry_date"),
+        "Text entry date",
+    )
+
+    cursor = db.execute(
+        """
+        INSERT INTO text_entries (
+            user_id, year, month, body, entry_date, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            g.user["id"],
+            year,
+            month,
+            body,
+            entry.get("entry_date") or None,
+            backup_created_at(entry.get("created_at")),
+            entry.get("updated_at") or None,
+        ),
+    )
+    set_tags_for_item(db, "text", cursor.lastrowid, entry.get("tags", [DEFAULT_TAG]))
+    return cursor.lastrowid
+
+
+def import_messages_from_backup(db, item_kind, item_id, messages):
+    if not isinstance(messages, list):
+        raise ValueError("Backup messages are not valid.")
+
+    imported_count = 0
+    table = "messages" if item_kind == "photo" else "text_entry_messages"
+    id_column = "photo_id" if item_kind == "photo" else "entry_id"
+    for message in messages:
+        if not isinstance(message, dict):
+            raise ValueError("Backup message is not valid.")
+        body = backup_text(message.get("body")).strip()
+        if not body:
+            continue
+        db.execute(
+            f"""
+            INSERT INTO {table} ({id_column}, user_id, body, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (item_id, g.user["id"], body, backup_created_at(message.get("created_at"))),
+        )
+        imported_count += 1
+    return imported_count
+
+
+def import_owner_reactions_from_backup(db, item_kind, item_id, reactions):
+    if not isinstance(reactions, list):
+        raise ValueError("Backup reactions are not valid.")
+
+    imported_count = 0
+    for reaction_row in reactions:
+        if not isinstance(reaction_row, dict):
+            raise ValueError("Backup reaction is not valid.")
+        author = reaction_row.get("author") or {}
+        if not author.get("is_owner"):
+            continue
+        reaction = backup_text(reaction_row.get("reaction")).strip().lower()
+        if reaction not in REACTION_CHOICES:
+            continue
+        db.execute(
+            """
+            INSERT INTO item_reactions (user_id, item_kind, item_id, reaction, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, item_kind, item_id)
+            DO UPDATE SET reaction = excluded.reaction, created_at = excluded.created_at
+            """,
+            (
+                g.user["id"],
+                item_kind,
+                item_id,
+                reaction,
+                backup_created_at(reaction_row.get("created_at")),
+            ),
+        )
+        imported_count += 1
+    return imported_count
+
+
+def import_chapters_from_backup(db, chapters, photo_id_map, text_id_map):
+    if not isinstance(chapters, list):
+        raise ValueError("Backup chapters are not valid.")
+
+    imported_chapters = 0
+    imported_chapter_items = 0
+    for chapter in chapters:
+        if not isinstance(chapter, dict):
+            raise ValueError("Backup chapter is not valid.")
+        title = backup_text(chapter.get("title")).strip()
+        if not title:
+            continue
+
+        cursor = db.execute(
+            """
+            INSERT INTO chapters (user_id, title, description, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                g.user["id"],
+                title,
+                backup_text(chapter.get("description"), None),
+                backup_created_at(chapter.get("created_at")),
+                chapter.get("updated_at") or None,
+            ),
+        )
+        new_chapter_id = cursor.lastrowid
+        imported_chapters += 1
+
+        items = chapter.get("items", [])
+        if not isinstance(items, list):
+            raise ValueError("Backup chapter items are not valid.")
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError("Backup chapter item is not valid.")
+            item_kind = item.get("item_kind")
+            if item_kind == "photo":
+                new_item_id = photo_id_map.get(item.get("item_id"))
+            elif item_kind == "text":
+                new_item_id = text_id_map.get(item.get("item_id"))
+            else:
+                new_item_id = None
+            if not new_item_id:
+                continue
+
+            db.execute(
+                """
+                INSERT OR IGNORE INTO chapter_items (
+                    chapter_id, item_kind, item_id, position, created_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    new_chapter_id,
+                    item_kind,
+                    new_item_id,
+                    int(item.get("position") or next_chapter_position(db, new_chapter_id)),
+                    backup_created_at(item.get("created_at")),
+                ),
+            )
+            imported_chapter_items += 1
+        compact_chapter_positions(db, new_chapter_id)
+
+    return imported_chapters, imported_chapter_items
+
+
+def import_account_backup(backup_file):
+    data = backup_file.read()
+    if not data:
+        raise ValueError("Choose a backup zip to import.")
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            manifest = read_backup_manifest(archive)
+            db = get_db()
+            restore_backup_birthday(db, manifest)
+
+            photo_id_map = {}
+            text_id_map = {}
+            imported_messages = 0
+            imported_reactions = 0
+
+            for photo in backup_list(manifest, "photos"):
+                new_id = import_photo_from_backup(db, archive, photo)
+                photo_id_map[photo.get("id")] = new_id
+                imported_messages += import_messages_from_backup(
+                    db,
+                    "photo",
+                    new_id,
+                    photo.get("messages", []),
+                )
+                imported_reactions += import_owner_reactions_from_backup(
+                    db,
+                    "photo",
+                    new_id,
+                    photo.get("reactions", []),
+                )
+
+            for entry in backup_list(manifest, "text_entries"):
+                new_id = import_text_entry_from_backup(db, entry)
+                text_id_map[entry.get("id")] = new_id
+                imported_messages += import_messages_from_backup(
+                    db,
+                    "text",
+                    new_id,
+                    entry.get("messages", []),
+                )
+                imported_reactions += import_owner_reactions_from_backup(
+                    db,
+                    "text",
+                    new_id,
+                    entry.get("reactions", []),
+                )
+
+            imported_chapters, imported_chapter_items = import_chapters_from_backup(
+                db,
+                backup_list(manifest, "chapters"),
+                photo_id_map,
+                text_id_map,
+            )
+    except zipfile.BadZipFile as exc:
+        raise ValueError("Choose a valid zip file.") from exc
+
+    return {
+        "photos": len(photo_id_map),
+        "text_entries": len(text_id_map),
+        "messages": imported_messages,
+        "reactions": imported_reactions,
+        "chapters": imported_chapters,
+        "chapter_items": imported_chapter_items,
+    }
+
+
 @app.route("/")
 def index():
     if g.user is None:
@@ -2895,6 +3507,42 @@ def profile():
         return redirect(url_for("profile"))
 
     return render_template("profile.html", form=form_values)
+
+
+@app.route("/account/export.zip")
+@login_required
+def export_account_backup():
+    return account_backup_response(get_db())
+
+
+@app.route("/account/import", methods=("POST",))
+@login_required
+def import_account_backup_route():
+    backup_file = request.files.get("backup")
+    if backup_file is None or not backup_file.filename:
+        flash("Choose an EverTimeline backup zip to import.", "error")
+        return redirect(url_for("profile"))
+
+    db = get_db()
+    try:
+        counts = import_account_backup(backup_file)
+    except ValueError as exc:
+        db.rollback()
+        flash(str(exc), "error")
+        return redirect(url_for("profile"))
+
+    db.commit()
+    flash(
+        (
+            "Imported backup: "
+            f"{counts['photos']} photos, "
+            f"{counts['text_entries']} text entries, "
+            f"{counts['messages']} messages, "
+            f"{counts['chapters']} chapters."
+        ),
+        "success",
+    )
+    return redirect(url_for("profile"))
 
 
 @app.route("/login", methods=("GET", "POST"))

@@ -38,6 +38,13 @@
 </fieldset>
 {% endmacro %}
 
+{% macro people_field(value="") %}
+<label class="people-field">
+    <span>People</span>
+    <input name="people" value="{{ value }}" placeholder="Alice, Sam" maxlength="500" autocomplete="off">
+</label>
+{% endmacro %}
+
 {% macro chapter_add_form(item) %}
     {% if chapters %}
         <details class="chapter-add-panel">
@@ -130,6 +137,7 @@
                 <span>Caption</span>
                 <textarea name="caption" rows="3" maxlength="2000"></textarea>
             </label>
+            {{ people_field() }}
             {{ location_fields() }}
             {{ tag_radio_group() }}
             <button class="button primary" type="submit">Upload</button>
@@ -148,6 +156,7 @@
                 <span>Date</span>
                 <input name="entry_date" type="date" min="{{ month_start }}" max="{{ month_end }}">
             </label>
+            {{ people_field() }}
             {{ location_fields() }}
             {{ tag_radio_group() }}
             <button class="button primary" type="submit">Save</button>
@@ -173,6 +182,7 @@
                         data-location-name="{{ item['location_name'] or '' }}"
                         data-latitude="{{ item['latitude'] if item['latitude'] is not none else '' }}"
                         data-longitude="{{ item['longitude'] if item['longitude'] is not none else '' }}"
+                        data-photo-people="{{ item['people_text'] }}"
                         data-photo-tags="{{ item['tags_text'] }}"
                         data-privacy-label="{{ item['privacy_label'] }}"
                         data-privacy-help="{{ item['privacy_help'] }}"
@@ -195,6 +205,13 @@
                             {% endif %}
                         </div>
                     {% endif %}
+                    {% if item["people"] %}
+                        <div class="people-chip-list" aria-label="People">
+                            {% for person in item["people"] %}
+                                <span class="people-chip">{{ person }}</span>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
                     {{ reaction_bar(item) }}
                     {% if not privacy_preview %}
                         {{ chapter_add_form(item) }}
@@ -211,6 +228,7 @@
                         data-location-name="{{ item['location_name'] or '' }}"
                         data-latitude="{{ item['latitude'] if item['latitude'] is not none else '' }}"
                         data-longitude="{{ item['longitude'] if item['longitude'] is not none else '' }}"
+                        data-entry-people="{{ item['people_text'] }}"
                         data-entry-tags="{{ item['tags_text'] }}"
                         data-privacy-label="{{ item['privacy_label'] }}"
                         data-privacy-help="{{ item['privacy_help'] }}"
@@ -224,6 +242,13 @@
                             <span class="thumb-date">{{ item["display_date"] }}</span>
                         {% endif %}
                     </button>
+                    {% if item["people"] %}
+                        <div class="people-chip-list" aria-label="People">
+                            {% for person in item["people"] %}
+                                <span class="people-chip">{{ person }}</span>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
                     {{ reaction_bar(item) }}
                     {% if not privacy_preview %}
                         {{ chapter_add_form(item) }}
@@ -244,6 +269,7 @@
             <div>
                 <h2 id="readonly-text-modal-title">Text entry</h2>
                 <p id="readonly-text-modal-date" class="muted"></p>
+                <p id="readonly-text-people-summary" class="people-summary"></p>
                 <p id="readonly-text-privacy-summary" class="privacy-summary"></p>
             </div>
             <button class="icon-button" type="button" data-close-readonly-text-modal aria-label="Close popup">x</button>
@@ -262,6 +288,7 @@
                 <h2 id="readonly-photo-modal-title">Picture</h2>
                 <p id="readonly-photo-modal-date" class="muted"></p>
                 <p id="readonly-photo-caption-view" class="photo-caption-view"></p>
+                <p id="readonly-photo-people-summary" class="people-summary"></p>
                 <p id="readonly-photo-privacy-summary" class="privacy-summary"></p>
             </div>
             <button class="icon-button" type="button" data-close-readonly-photo-modal aria-label="Close popup">x</button>
@@ -284,6 +311,7 @@
                 <h2 id="text-modal-title">Text entry</h2>
                 <p id="text-modal-date" class="muted"></p>
                 <p id="text-location-summary" class="location-summary"></p>
+                <p id="text-people-summary" class="people-summary"></p>
                 <p id="text-privacy-summary" class="privacy-summary"></p>
             </div>
             <div class="modal-actions">
@@ -303,6 +331,7 @@
                     <span>Date</span>
                     <input name="entry_date" type="date" min="{{ month_start }}" max="{{ month_end }}">
                 </label>
+                {{ people_field() }}
                 {{ location_fields() }}
                 {{ tag_radio_group() }}
                 <div class="form-actions">
@@ -322,6 +351,7 @@
                 <h2 id="modal-title">Picture</h2>
                 <p id="modal-date" class="muted"></p>
                 <p id="photo-location-summary" class="location-summary"></p>
+                <p id="photo-people-summary" class="people-summary"></p>
                 <p id="photo-caption-view" class="photo-caption-view"></p>
                 <p id="photo-privacy-summary" class="privacy-summary"></p>
             </div>
@@ -347,6 +377,10 @@
                 <form id="photo-tags-form" class="tags-form">
                     {{ tag_radio_group() }}
                     <button class="button secondary small" type="submit">Save visibility</button>
+                </form>
+                <form id="photo-people-form" class="people-form">
+                    {{ people_field() }}
+                    <button class="button secondary small" type="submit">Save people</button>
                 </form>
                 <form id="photo-location-form" class="location-form">
                     {{ location_fields() }}

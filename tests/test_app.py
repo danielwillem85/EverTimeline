@@ -152,6 +152,66 @@ def test_uploads_text_entries_and_pdf_exports(client, helpers):
     assert month_pdf.data.startswith(b"%PDF")
 
 
+def test_manual_people_tagging_for_items_search_and_updates(app, client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="people-photo.png",
+        title="Tagged photo",
+        people="Alice Example, Bob Friend",
+    )
+    text_id = helpers.create_text(
+        client,
+        "Dinner after the show",
+        people="Carol Cousin, alice example",
+    )
+
+    month = client.get("/year/2020/5")
+    assert month.status_code == 200
+    assert b"Alice Example" in month.data
+    assert b"Bob Friend" in month.data
+    assert b"Carol Cousin" in month.data
+
+    timeline_items = client.get("/api/timeline-items?year=2020").get_json()
+    photo = next(item for item in timeline_items if item["kind"] == "photo" and item["id"] == photo_id)
+    text = next(item for item in timeline_items if item["kind"] == "text" and item["id"] == text_id)
+    assert photo["people"] == ["Alice Example", "Bob Friend"]
+    assert text["people"] == ["Alice Example", "Carol Cousin"]
+
+    search = client.get("/timeline/search?q=alice")
+    assert search.status_code == 200
+    assert b"Tagged photo" in search.data
+    assert b"Dinner after the show" in search.data
+
+    other = app.test_client()
+    helpers.create_user(other, "other")
+    helpers.create_text(other, "Hidden people memory", people="Forbidden Person")
+    hidden_search = client.get("/timeline/search?q=forbidden")
+    assert hidden_search.status_code == 200
+    assert b"Hidden people memory" not in hidden_search.data
+
+    photo_people_update = client.patch(
+        f"/api/photo/{photo_id}/people",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={"people": "Dana New, Bob Friend"},
+    )
+    assert photo_people_update.status_code == 200
+    assert photo_people_update.get_json()["people"] == ["Bob Friend", "Dana New"]
+
+    text_update = client.patch(
+        f"/api/text-entry/{text_id}",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={
+            "body": "Dinner after the show",
+            "entry_date": "2020-05-03",
+            "tags": "private",
+            "people": "Eve Mentor",
+        },
+    )
+    assert text_update.status_code == 200
+    assert text_update.get_json()["people"] == ["Eve Mentor"]
+
+
 def test_on_this_day_shows_matching_dated_memories(client, helpers):
     helpers.create_user(client, "owner")
     helpers.upload_photo(
@@ -310,12 +370,14 @@ def test_full_account_backup_export_and_import(client, helpers):
         caption="Standing together beside the lake",
         photo_date="2020-05-04",
         tag="family",
+        people="Maya Lake, Theo Lake",
     )
     text_id = helpers.create_text(
         client,
         "A text memory to preserve",
         entry_date="2020-05-05",
         tag="friends",
+        people="Nora Notes",
     )
 
     photo_message = client.post(
@@ -373,6 +435,8 @@ def test_full_account_backup_export_and_import(client, helpers):
         assert manifest["photos"][0]["title"] == "Family trip"
         assert manifest["photos"][0]["caption"] == "Standing together beside the lake"
         assert manifest["photos"][0]["tags"] == ["family"]
+        assert manifest["photos"][0]["people"] == ["Maya Lake", "Theo Lake"]
+        assert manifest["text_entries"][0]["people"] == ["Nora Notes"]
         assert manifest["photos"][0]["messages"][0]["body"] == "Photo message"
         assert manifest["text_entries"][0]["reactions"][0]["reaction"] == "love"
         assert archive.read(manifest["photos"][0]["image_path"]).startswith(b"\x89PNG")
@@ -452,6 +516,28 @@ def test_full_account_backup_export_and_import(client, helpers):
     )
     assert imported_photo["title"] == "Family trip"
     assert imported_photo["caption"] == "Standing together beside the lake"
+    assert [row["name"] for row in helpers.rows(
+        """
+        SELECT p.name
+        FROM photo_people pp
+        JOIN people p ON p.id = pp.person_id
+        JOIN photos ph ON ph.id = pp.photo_id
+        WHERE ph.user_id = ?
+        ORDER BY p.name
+        """,
+        (importer_id,),
+    )] == ["Maya Lake", "Theo Lake"]
+    assert [row["name"] for row in helpers.rows(
+        """
+        SELECT p.name
+        FROM text_entry_people tep
+        JOIN people p ON p.id = tep.person_id
+        JOIN text_entries te ON te.id = tep.entry_id
+        WHERE te.user_id = ?
+        ORDER BY p.name
+        """,
+        (importer_id,),
+    )] == ["Nora Notes"]
 
     duplicate_import_response = client.post(
         "/account/import",
@@ -655,7 +741,7 @@ def test_timeline_search_finds_owned_content_types_and_excludes_other_users(app,
 
     expectations = {
         "summit": b"summit-aurora.png",
-        "2020-05-04": b"Matched photo filename or date.",
+        "2020-05-04": b"Matched photo filename, date, or person.",
         "copper": b"A copper lantern memory",
         "silver": b"silver echo from a message",
         "harbor": b"Harbor years",

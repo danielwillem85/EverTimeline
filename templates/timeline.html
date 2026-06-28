@@ -14,12 +14,15 @@
     </div>
 </section>
 
+{% include "_privacy_preview.html" %}
+
+{% set carousel_items_url = preview_url('timeline_items') %}
 <section class="timeline-frame" aria-label="Year timeline">
     <button class="button primary view-all-button" id="view-all-button" type="button">View all</button>
     <button class="button secondary view-random-button" id="view-random-button" type="button">View random</button>
     <div class="year-grid">
         {% for year in years %}
-            <a class="timeline-button counted-button" href="{{ url_for('year_view', year=year) }}">
+            <a class="timeline-button counted-button" href="{{ preview_url('year_view', year=year) }}">
                 <span>{{ year }}</span>
                 {% if year_counts.get(year, 0) %}
                     <span class="count-badge">{{ year_counts[year] }}</span>

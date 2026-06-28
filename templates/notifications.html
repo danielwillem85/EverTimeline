@@ -53,6 +53,36 @@
 </section>
 
 <section class="connection-section">
+    <h2>Chapter invites</h2>
+    {% if chapter_invites %}
+        <div class="request-list">
+            {% for invite in chapter_invites %}
+                <article class="request-card">
+                    <div class="person-summary">
+                        <strong>{{ invite["title"] }}</strong>
+                        <span>From {{ invite["inviter_name"] }}</span>
+                        {% if invite["description"] %}
+                            <span>{{ invite["description"] }}</span>
+                        {% endif %}
+                    </div>
+                    <span class="status-badge">Chapter</span>
+                    <form class="inline-form" method="post" action="{{ url_for('accept_chapter_invite', invite_id=invite['id']) }}">
+                        {{ csrf_field() }}
+                        <button class="button primary small" type="submit">Accept</button>
+                    </form>
+                    <form class="inline-form" method="post" action="{{ url_for('decline_chapter_invite', invite_id=invite['id']) }}">
+                        {{ csrf_field() }}
+                        <button class="button secondary small" type="submit">Decline</button>
+                    </form>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty-state">No chapter invites.</p>
+    {% endif %}
+</section>
+
+<section class="connection-section">
     <h2>Connection requests</h2>
     {% if incoming_requests %}
         <div class="request-list">

@@ -89,6 +89,51 @@
     </details>
 </section>
 
+<section class="connection-section">
+    <h2>Shared album invites</h2>
+    <form method="post" action="{{ url_for('create_chapter_invite', chapter_id=chapter['id']) }}" class="chapter-invite-form">
+        {{ csrf_field() }}
+        <label>
+            <span>Invite connection</span>
+            <select name="recipient_id" {% if not invite_connections %}disabled{% endif %} required>
+                <option value="">Choose a connection</option>
+                {% for connection in invite_connections %}
+                    <option value="{{ connection['id'] }}">{{ connection["full_name"] or connection["username"] }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <button class="button primary" type="submit" {% if not invite_connections %}disabled{% endif %}>Send invite</button>
+    </form>
+    {% if not invite_connections and not chapter_invites %}
+        <p class="empty-state">Connect with someone first, then invite them to this chapter.</p>
+    {% endif %}
+    {% if chapter_invites %}
+        <div class="chapter-invite-list">
+            {% for invite in chapter_invites %}
+                {% set invite_name = (invite["first_name"] ~ " " ~ invite["last_name"]).strip() or invite["username"] %}
+                <article class="chapter-invite-card">
+                    <div>
+                        <strong>{{ invite_name }}</strong>
+                        <span>{{ invite["email"] or invite["username"] }} - {{ invite["status"] }}</span>
+                    </div>
+                    <form
+                        class="inline-form"
+                        method="post"
+                        action="{{ url_for('revoke_chapter_invite', chapter_id=chapter['id'], invite_id=invite['id']) }}"
+                        data-confirm
+                        data-confirm-title="Remove chapter invite?"
+                        data-confirm-message="This removes their access to this chapter album, but leaves your timeline and chapter untouched."
+                        data-confirm-action="Remove invite"
+                    >
+                        {{ csrf_field() }}
+                        <button class="button secondary small" type="submit">Remove</button>
+                    </form>
+                </article>
+            {% endfor %}
+        </div>
+    {% endif %}
+</section>
+
 {% set carousel_items_url = url_for('chapter_items', chapter_id=chapter['id']) %}
 {% set carousel_skip_tag_filter = true %}
 <section class="timeline-frame year-carousel-actions" aria-label="Chapter playback">

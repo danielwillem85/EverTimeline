@@ -448,6 +448,103 @@ def test_connection_requests_and_privacy_visibility_for_friend_and_family(app, c
     assert family_bodies == {"family memory", "friends memory", "public memory"}
 
 
+def test_shared_chapter_invite_allows_album_comments_without_timeline_access(app, client, helpers):
+    owner_id = helpers.create_user(client, "owner")
+    text_id = helpers.create_text(client, "Private chapter-only memory", tag="private")
+
+    friend = app.test_client()
+    friend_id = helpers.create_user(friend, "friend")
+    request_id = helpers.request_connection(friend, owner_id, relation="friend")
+    helpers.accept_connection(client, request_id)
+
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Private album",
+            "description": "Invite-only story",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row(
+        "SELECT id FROM chapters WHERE user_id = ? ORDER BY id DESC",
+        (owner_id,),
+    )["id"]
+    add_response = client.post(
+        "/chapters/items",
+        data={
+            **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+            "chapter_id": chapter_id,
+            "item_kind": "text",
+            "item_id": text_id,
+        },
+    )
+    assert add_response.status_code == 302
+
+    assert friend.get(f"/shared/chapters/{chapter_id}").status_code == 404
+    invite_response = client.post(
+        f"/chapters/{chapter_id}/invites",
+        data={
+            **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+            "recipient_id": friend_id,
+        },
+    )
+    assert invite_response.status_code == 302
+    invite = helpers.row(
+        "SELECT id, status FROM chapter_invites WHERE chapter_id = ? AND recipient_id = ?",
+        (chapter_id, friend_id),
+    )
+    assert invite["status"] == "pending"
+    assert friend.get("/api/notifications/count").get_json()["count"] == 1
+    assert friend.get(f"/shared/chapters/{chapter_id}").status_code == 404
+
+    accept_response = friend.post(
+        f"/chapter-invites/{invite['id']}/accept",
+        data=helpers.csrf_form_data(friend, "/notifications"),
+    )
+    assert accept_response.status_code == 302
+
+    shared_page = friend.get(f"/shared/chapters/{chapter_id}")
+    assert shared_page.status_code == 200
+    assert b"Private album" in shared_page.data
+    assert b"Private chapter-only memory" in shared_page.data
+
+    connection_items = friend.get(f"/connections/{owner_id}/api/timeline-items?year=2020")
+    assert connection_items.status_code == 200
+    assert all(
+        item.get("body") != "Private chapter-only memory"
+        for item in connection_items.get_json()
+    )
+    assert friend.get(f"/api/timeline-item/text/{text_id}/messages").status_code == 404
+
+    shared_items = friend.get(f"/shared/chapters/{chapter_id}/api/items")
+    assert shared_items.status_code == 200
+    item_payload = shared_items.get_json()[0]
+    assert item_payload["body"] == "Private chapter-only memory"
+    assert item_payload["can_message"] is True
+
+    message_response = friend.post(
+        f"/shared/chapters/{chapter_id}/api/timeline-item/text/{text_id}/messages",
+        headers=helpers.csrf_headers(friend, f"/shared/chapters/{chapter_id}"),
+        json={"body": "I can see just this album."},
+    )
+    assert message_response.status_code == 201
+
+    reaction_response = friend.put(
+        f"/shared/chapters/{chapter_id}/api/timeline-item/text/{text_id}/reaction",
+        headers=helpers.csrf_headers(friend, f"/shared/chapters/{chapter_id}"),
+        json={"reaction": "love"},
+    )
+    assert reaction_response.status_code == 200
+    assert reaction_response.get_json()["love_count"] == 1
+
+    assert client.get("/api/notifications/count").get_json()["count"] == 2
+    notifications = client.get("/notifications")
+    assert b"I can see just this album." in notifications.data
+    assert b"loved your text entry" in notifications.data
+
+
 def test_reactions_messages_and_notifications_for_connection(app, client, helpers):
     owner_id = helpers.create_user(client, "owner")
     text_id = helpers.create_text(client, "A memory worth sharing", tag="friends")

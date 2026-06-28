@@ -184,6 +184,7 @@
                         data-longitude="{{ item['longitude'] if item['longitude'] is not none else '' }}"
                         data-photo-people="{{ item['people_text'] }}"
                         data-photo-tags="{{ item['tags_text'] }}"
+                        data-photo-prompts="{{ item['guided_prompts']|tojson|forceescape }}"
                         data-privacy-label="{{ item['privacy_label'] }}"
                         data-privacy-help="{{ item['privacy_help'] }}"
                         data-full-src="{{ item['image_url'] }}"
@@ -230,6 +231,7 @@
                         data-longitude="{{ item['longitude'] if item['longitude'] is not none else '' }}"
                         data-entry-people="{{ item['people_text'] }}"
                         data-entry-tags="{{ item['tags_text'] }}"
+                        data-entry-prompts="{{ item['guided_prompts']|tojson|forceescape }}"
                         data-privacy-label="{{ item['privacy_label'] }}"
                         data-privacy-help="{{ item['privacy_help'] }}"
                         aria-label="Text entry{% if item['display_date'] %} from {{ item['display_date'] }}{% endif %}"
@@ -322,6 +324,10 @@
         </header>
         <div class="text-modal-body">
             <div id="text-entry-view" class="text-entry-view"></div>
+            <section class="guided-prompts" id="text-guided-prompts" hidden>
+                <h3>Memory prompts</h3>
+                <div class="guided-prompt-list"></div>
+            </section>
             <form id="text-entry-edit-form" class="text-entry-edit-form" hidden>
                 <label>
                     <span>Text entry</span>
@@ -372,6 +378,10 @@
                         <span>Caption</span>
                         <textarea name="caption" rows="3" maxlength="2000"></textarea>
                     </label>
+                    <section class="guided-prompts" id="photo-guided-prompts" hidden>
+                        <h3>Memory prompts</h3>
+                        <div class="guided-prompt-list"></div>
+                    </section>
                     <button class="button secondary small" type="submit">Save details</button>
                 </form>
                 <form id="photo-tags-form" class="tags-form">

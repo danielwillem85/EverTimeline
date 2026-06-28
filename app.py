@@ -913,6 +913,96 @@ def photo_display_title(photo):
     return (photo["title"] or "").strip() or photo["original_filename"] or "Photo"
 
 
+def item_has_location(item):
+    location_name = item["location_name"] if "location_name" in item.keys() else ""
+    latitude = item["latitude"] if "latitude" in item.keys() else None
+    longitude = item["longitude"] if "longitude" in item.keys() else None
+    return bool(
+        (location_name or "").strip()
+        or latitude is not None
+        or longitude is not None
+    )
+
+
+def guided_prompt(label, text, target):
+    return {
+        "label": label,
+        "text": text,
+        "target": target,
+    }
+
+
+def guided_prompts_for_item(kind, item, people=None):
+    people = people or []
+    prompts = []
+    if kind == "photo":
+        if not (item["caption"] or "").strip():
+            prompts.append(
+                guided_prompt(
+                    "What do you remember most?",
+                    "What I remember most about this moment is ",
+                    "caption",
+                )
+            )
+        if not people:
+            prompts.append(
+                guided_prompt(
+                    "Who was there?",
+                    "Add the people who were part of this memory.",
+                    "people",
+                )
+            )
+        if not item_has_location(item):
+            prompts.append(
+                guided_prompt(
+                    "Where was this?",
+                    "Add the city, venue, or place tied to this memory.",
+                    "location",
+                )
+            )
+        prompts.append(
+            guided_prompt(
+                "What happened before or after?",
+                "Before or after this photo, ",
+                "caption",
+            )
+        )
+    else:
+        body = (item["body"] or "").strip()
+        if len(body) < 140:
+            prompts.append(
+                guided_prompt(
+                    "Add why it mattered",
+                    "\n\nWhy this memory matters: ",
+                    "body",
+                )
+            )
+        if not people:
+            prompts.append(
+                guided_prompt(
+                    "Who was part of it?",
+                    "Add the people who were part of this memory.",
+                    "people",
+                )
+            )
+        if not item_has_location(item):
+            prompts.append(
+                guided_prompt(
+                    "Where did it happen?",
+                    "Add the city, venue, or place tied to this memory.",
+                    "location",
+                )
+            )
+        prompts.append(
+            guided_prompt(
+                "What happened next?",
+                "\n\nWhat happened next: ",
+                "body",
+            )
+        )
+    return prompts[:4]
+
+
 def photo_image_hash(image_data):
     return hashlib.sha256(image_data).hexdigest()
 
@@ -2153,6 +2243,7 @@ def build_on_this_day_items(db, owner_id, month, day, image_url_builder):
                 "tags_text": tags_to_text(tags),
                 **people_payload(people),
                 **privacy_payload_for_tags(tags),
+                "guided_prompts": guided_prompts_for_item("photo", photo, people),
             }
         )
     for entry in text_rows:
@@ -2175,6 +2266,7 @@ def build_on_this_day_items(db, owner_id, month, day, image_url_builder):
                 "tags_text": tags_to_text(tags),
                 **people_payload(people),
                 **privacy_payload_for_tags(tags),
+                "guided_prompts": guided_prompts_for_item("text", entry, people),
             }
         )
     items.sort(key=timeline_item_sort_key)
@@ -4389,6 +4481,7 @@ def build_month_items(db, owner_id, year, month, image_url_builder, allowed_tags
                 "tags_text": tags_to_text(tags),
                 **people_payload(people),
                 **privacy_payload_for_tags(tags),
+                "guided_prompts": guided_prompts_for_item("photo", photo, people),
             }
         )
     for entry in text_rows:
@@ -4410,6 +4503,7 @@ def build_month_items(db, owner_id, year, month, image_url_builder, allowed_tags
                 "tags_text": tags_to_text(tags),
                 **people_payload(people),
                 **privacy_payload_for_tags(tags),
+                "guided_prompts": guided_prompts_for_item("text", entry, people),
             }
         )
     items.sort(key=timeline_item_sort_key)
@@ -4522,6 +4616,7 @@ def build_timeline_api_items(
                 **people_payload(people),
                 **privacy_payload_for_tags(tags),
                 "title": photo_display_title(photo),
+                "guided_prompts": guided_prompts_for_item("photo", photo, people),
             }
         )
 
@@ -4549,6 +4644,7 @@ def build_timeline_api_items(
                 **people_payload(people),
                 **privacy_payload_for_tags(tags),
                 "title": "Text entry",
+                "guided_prompts": guided_prompts_for_item("text", entry, people),
             }
         )
 
@@ -4602,6 +4698,7 @@ def build_pdf_export_items(db, owner_id, year, month=None):
                 "tags_text": tags_to_text(tags),
                 **people_payload(people),
                 **privacy_payload_for_tags(tags),
+                "guided_prompts": guided_prompts_for_item("photo", photo, people),
             }
         )
 
@@ -4624,6 +4721,7 @@ def build_pdf_export_items(db, owner_id, year, month=None):
                 "tags_text": tags_to_text(tags),
                 **people_payload(people),
                 **privacy_payload_for_tags(tags),
+                "guided_prompts": guided_prompts_for_item("text", entry, people),
             }
         )
 
@@ -7359,6 +7457,7 @@ def delete_photo(photo_id):
     if request.method == "GET":
         tags = get_tags_for_item(db, "photo", photo_id)
         people = get_people_for_item(db, "photo", photo_id)
+        prompts = guided_prompts_for_item("photo", photo, people)
         return jsonify(
             {
                 "id": photo["id"],
@@ -7372,6 +7471,7 @@ def delete_photo(photo_id):
                 "tags_text": tags_to_text(tags),
                 **people_payload(people),
                 **privacy_payload_for_tags(tags),
+                "guided_prompts": prompts,
             }
         )
 
@@ -7391,6 +7491,7 @@ def delete_photo(photo_id):
         photo = get_owned_photo(photo_id)
         tags = get_tags_for_item(db, "photo", photo_id)
         people = get_people_for_item(db, "photo", photo_id)
+        prompts = guided_prompts_for_item("photo", photo, people)
         return jsonify(
             {
                 "id": photo["id"],
@@ -7404,6 +7505,7 @@ def delete_photo(photo_id):
                 "tags_text": tags_to_text(tags),
                 **people_payload(people),
                 **privacy_payload_for_tags(tags),
+                "guided_prompts": prompts,
             }
         )
 
@@ -7457,7 +7559,13 @@ def photo_people(photo_id):
         db.commit()
 
     people = get_people_for_item(db, "photo", photo_id)
-    return jsonify(people_payload(people))
+    photo = get_owned_photo(photo_id)
+    return jsonify(
+        {
+            **people_payload(people),
+            "guided_prompts": guided_prompts_for_item("photo", photo, people),
+        }
+    )
 
 
 @app.route("/api/photo/<int:photo_id>/location", methods=("GET", "PATCH"))
@@ -7490,7 +7598,13 @@ def photo_location(photo_id):
         db.commit()
         photo = get_owned_photo(photo_id)
 
-    return jsonify(timeline_location_payload(photo))
+    people = get_people_for_item(db, "photo", photo_id)
+    return jsonify(
+        {
+            **timeline_location_payload(photo),
+            "guided_prompts": guided_prompts_for_item("photo", photo, people),
+        }
+    )
 
 
 @app.route("/api/text-entry/<int:entry_id>", methods=("GET", "PATCH", "DELETE"))
@@ -7581,6 +7695,7 @@ def text_entry(entry_id):
             "tags_text": tags_to_text(tags),
             **people_payload(people),
             **privacy_payload_for_tags(tags),
+            "guided_prompts": guided_prompts_for_item("text", entry, people),
         }
     )
 

@@ -1335,6 +1335,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const photoDetailsForm = document.getElementById("photo-details-form");
     const photoDetailsTitle = photoDetailsForm.querySelector("input[name='title']");
     const photoDetailsCaption = photoDetailsForm.querySelector("textarea[name='caption']");
+    const photoGuidedPrompts = document.getElementById("photo-guided-prompts");
     const photoTagsForm = document.getElementById("photo-tags-form");
     const photoTagInputs = Array.from(photoTagsForm.querySelectorAll("input[name='tags']"));
     const photoPeopleForm = document.getElementById("photo-people-form");
@@ -1349,6 +1350,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const textPeopleSummary = document.getElementById("text-people-summary");
     const textPrivacySummary = document.getElementById("text-privacy-summary");
     const textEntryView = document.getElementById("text-entry-view");
+    const textGuidedPrompts = document.getElementById("text-guided-prompts");
     const textEntryEditForm = document.getElementById("text-entry-edit-form");
     const textEntryEditBody = textEntryEditForm.querySelector("textarea");
     const textEntryEditDate = textEntryEditForm.querySelector("input[name='entry_date']");
@@ -1468,6 +1470,91 @@ document.addEventListener("DOMContentLoaded", () => {
         element.hidden = !label;
     };
 
+    const parseGuidedPrompts = (value) => {
+        if (!value) {
+            return [];
+        }
+        try {
+            const prompts = JSON.parse(value);
+            return Array.isArray(prompts) ? prompts : [];
+        } catch (error) {
+            return [];
+        }
+    };
+
+    const setThumbnailGuidedPrompts = (thumbnail, prompts, datasetKey) => {
+        if (!thumbnail || !datasetKey) {
+            return;
+        }
+        thumbnail.dataset[datasetKey] = JSON.stringify(Array.isArray(prompts) ? prompts : []);
+    };
+
+    const appendPromptText = (field, text) => {
+        if (!field || !text) {
+            return;
+        }
+        const current = field.value || "";
+        const separator = current.trim() && !text.startsWith("\n") ? " " : "";
+        field.value = `${current}${separator}${text}`;
+        field.focus();
+        field.selectionStart = field.value.length;
+        field.selectionEnd = field.value.length;
+    };
+
+    const renderGuidedPrompts = (panel, prompts, handlers) => {
+        if (!panel) {
+            return;
+        }
+        const list = panel.querySelector(".guided-prompt-list");
+        list.innerHTML = "";
+        const usablePrompts = Array.isArray(prompts) ? prompts : [];
+        panel.hidden = usablePrompts.length === 0;
+        usablePrompts.forEach((prompt) => {
+            const button = document.createElement("button");
+            button.className = "guided-prompt-button";
+            button.type = "button";
+
+            const label = document.createElement("strong");
+            label.textContent = prompt.label || "Memory prompt";
+            const text = document.createElement("span");
+            text.textContent = prompt.text || "";
+            button.append(label, text);
+
+            button.addEventListener("click", () => {
+                const handler = handlers[prompt.target];
+                if (handler) {
+                    handler(prompt);
+                }
+            });
+            list.appendChild(button);
+        });
+    };
+
+    const renderPhotoGuidedPrompts = (prompts) => {
+        renderGuidedPrompts(photoGuidedPrompts, prompts, {
+            caption: (prompt) => appendPromptText(photoDetailsCaption, prompt.text || ""),
+            people: () => photoPeopleInput.focus(),
+            location: () => photoLocationName.focus(),
+        });
+    };
+
+    const renderTextGuidedPrompts = (prompts) => {
+        renderGuidedPrompts(textGuidedPrompts, prompts, {
+            body: (prompt) => {
+                showTextEditForm();
+                appendPromptText(textEntryEditBody, prompt.text || "");
+            },
+            people: () => {
+                showTextEditForm();
+                textEntryPeopleInput.focus();
+            },
+            location: () => {
+                showTextEditForm();
+                textEntryLocationName.focus();
+            },
+        });
+    };
+
     const updatePhotoThumbnailTags = (tags, tagsText, privacyLabel, privacyHelpText) => {
         if (!activePhotoThumbnail) {
             return;
@@ -1501,6 +1588,7 @@ document.addEventListener("DOMContentLoaded", () => {
         activePhotoThumbnail.dataset.photoTitle = title;
         activePhotoThumbnail.dataset.photoDisplayTitle = displayTitle;
         activePhotoThumbnail.dataset.photoCaption = caption;
+        setThumbnailGuidedPrompts(activePhotoThumbnail, photo.guided_prompts, "photoPrompts");
 
         const image = activePhotoThumbnail.querySelector("img");
         if (image) {
@@ -1545,6 +1633,7 @@ document.addEventListener("DOMContentLoaded", () => {
         photoCaptionView.textContent = photo.caption || "";
         photoDetailsTitle.value = photo.title || "";
         photoDetailsCaption.value = photo.caption || "";
+        renderPhotoGuidedPrompts(photo.guided_prompts || []);
     };
 
     const updateTextThumbnailTags = (tags, tagsText, privacyLabel, privacyHelpText) => {
@@ -1636,6 +1725,7 @@ document.addEventListener("DOMContentLoaded", () => {
             title: button.dataset.photoTitle || "",
             display_title: button.dataset.photoDisplayTitle || button.dataset.photoTitle || "Picture",
             caption: button.dataset.photoCaption || "",
+            guided_prompts: parseGuidedPrompts(button.dataset.photoPrompts || "[]"),
         });
         modalDate.textContent = button.dataset.photoDate || "";
         const location = {
@@ -1665,6 +1755,7 @@ document.addEventListener("DOMContentLoaded", () => {
         activePhotoId = null;
         activePhotoThumbnail = null;
         renderPhotoDetails({title: "", display_title: "Picture", caption: ""});
+        renderPhotoGuidedPrompts([]);
         setPeopleSummary(photoPeopleSummary, "");
         photoPeopleInput.value = "";
         setModalOpenState();
@@ -1686,6 +1777,7 @@ document.addEventListener("DOMContentLoaded", () => {
             entry.privacy_help || privacyHelpFromTag(entry.tags_text || "private")
         );
         setSelectedTagValue(textEntryEditTagInputs, entry.tags_text || "private");
+        renderTextGuidedPrompts(entry.guided_prompts || []);
     };
 
     const updateTextThumbnail = (entry) => {
@@ -1720,6 +1812,7 @@ document.addEventListener("DOMContentLoaded", () => {
         );
         updateTextThumbnailPeople(entry.people || [], entry.people_text || "");
         updateTextThumbnailLocation(entry);
+        setThumbnailGuidedPrompts(activeTextThumbnail, entry.guided_prompts, "entryPrompts");
     };
 
     const showTextView = () => {
@@ -1753,6 +1846,7 @@ document.addEventListener("DOMContentLoaded", () => {
         activeTextEntryId = null;
         activeTextThumbnail = null;
         activeTextEntry = null;
+        renderTextGuidedPrompts([]);
         showTextView();
         setModalOpenState();
     };
@@ -1873,6 +1967,8 @@ document.addEventListener("DOMContentLoaded", () => {
             photoPeopleInput.value = payload.people_text || "";
             setPeopleSummary(photoPeopleSummary, payload.people_text || "");
             updatePhotoThumbnailPeople(payload.people || [], payload.people_text || "");
+            renderPhotoGuidedPrompts(payload.guided_prompts || []);
+            setThumbnailGuidedPrompts(activePhotoThumbnail, payload.guided_prompts, "photoPrompts");
         }
     });
 
@@ -1893,6 +1989,8 @@ document.addEventListener("DOMContentLoaded", () => {
             setLocationFields(photoLocationName, photoLatitude, photoLongitude, location);
             setLocationSummary(photoLocationSummary, location);
             updatePhotoThumbnailLocation(location);
+            renderPhotoGuidedPrompts(location.guided_prompts || []);
+            setThumbnailGuidedPrompts(activePhotoThumbnail, location.guided_prompts, "photoPrompts");
         }
     });
 

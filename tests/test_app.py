@@ -212,6 +212,61 @@ def test_manual_people_tagging_for_items_search_and_updates(app, client, helpers
     assert text_update.get_json()["people"] == ["Eve Mentor"]
 
 
+def test_guided_memory_prompts_surface_missing_context_and_refresh(client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="prompt-photo.png",
+        title="Prompt photo",
+    )
+    text_id = helpers.create_text(client, "Short memory", people="")
+
+    photo = client.get(f"/api/photo/{photo_id}").get_json()
+    photo_prompt_targets = {prompt["target"] for prompt in photo["guided_prompts"]}
+    assert {"caption", "people", "location"}.issubset(photo_prompt_targets)
+    assert any(prompt["label"] == "What do you remember most?" for prompt in photo["guided_prompts"])
+
+    photo_update = client.patch(
+        f"/api/photo/{photo_id}",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={
+            "title": "Prompt photo",
+            "caption": "A richer caption from a prompt",
+        },
+    ).get_json()
+    assert not any(
+        prompt["label"] == "What do you remember most?"
+        for prompt in photo_update["guided_prompts"]
+    )
+
+    people_update = client.patch(
+        f"/api/photo/{photo_id}/people",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={"people": "Avery Guide"},
+    ).get_json()
+    assert "people" not in {prompt["target"] for prompt in people_update["guided_prompts"]}
+
+    timeline_items = client.get("/api/timeline-items?year=2020").get_json()
+    prompt_photo = next(item for item in timeline_items if item["kind"] == "photo" and item["id"] == photo_id)
+    assert "guided_prompts" in prompt_photo
+
+    text_entry = client.get(f"/api/text-entry/{text_id}").get_json()
+    text_prompt_targets = {prompt["target"] for prompt in text_entry["guided_prompts"]}
+    assert {"body", "people", "location"}.issubset(text_prompt_targets)
+
+    text_update = client.patch(
+        f"/api/text-entry/{text_id}",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={
+            "body": "This memory now has more context about what happened and why it mattered.",
+            "entry_date": "2020-05-03",
+            "tags": "private",
+            "people": "Riley Reader",
+        },
+    ).get_json()
+    assert "people" not in {prompt["target"] for prompt in text_update["guided_prompts"]}
+
+
 def test_on_this_day_shows_matching_dated_memories(client, helpers):
     helpers.create_user(client, "owner")
     helpers.upload_photo(
@@ -862,11 +917,16 @@ def test_timeline_map_shows_owned_locations_and_updates_photo_place(app, client,
         json={"location_name": "Porto", "latitude": "41.1579", "longitude": "-8.6291"},
     )
     assert update_response.status_code == 200
-    assert update_response.get_json() == {
+    update_payload = update_response.get_json()
+    assert {
+        key: update_payload[key]
+        for key in ("location_name", "latitude", "longitude")
+    } == {
         "location_name": "Porto",
         "latitude": 41.1579,
         "longitude": -8.6291,
     }
+    assert "guided_prompts" in update_payload
 
     updated_map = client.get("/timeline/map")
     assert b"Porto" in updated_map.data

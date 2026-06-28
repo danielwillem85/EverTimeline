@@ -2209,8 +2209,10 @@ details.privacy-toggle-panel {
 }
 
 .text-modal-body {
+    display: grid;
+    gap: 12px;
     max-height: calc(90vh - 76px);
-    overflow: hidden;
+    overflow-y: auto;
     padding: 18px;
 }
 
@@ -2262,6 +2264,62 @@ details.privacy-toggle-panel {
 .photo-details-form {
     display: grid;
     gap: 10px;
+}
+
+.guided-prompts {
+    display: grid;
+    gap: 8px;
+    border: 1px solid rgba(22, 109, 103, 0.22);
+    border-radius: 8px;
+    padding: 10px;
+    background: #f7fbfa;
+}
+
+.guided-prompts[hidden] {
+    display: none;
+}
+
+.guided-prompts h3 {
+    margin-bottom: 0;
+    color: var(--ink);
+    font-size: 0.88rem;
+}
+
+.guided-prompt-list {
+    display: grid;
+    gap: 7px;
+}
+
+.guided-prompt-button {
+    display: grid;
+    gap: 3px;
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    background: #fff;
+    color: var(--ink);
+    cursor: pointer;
+    text-align: left;
+}
+
+.guided-prompt-button:hover,
+.guided-prompt-button:focus-visible {
+    border-color: rgba(22, 109, 103, 0.46);
+    outline: none;
+}
+
+.guided-prompt-button strong {
+    font-size: 0.84rem;
+}
+
+.guided-prompt-button span {
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .photo-details-form textarea {

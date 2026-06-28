@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Import assistant - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
+        <h1>Import assistant</h1>
+    </div>
+</section>
+
+<section class="upload-panel import-upload-panel">
+    <form method="post" enctype="multipart/form-data" class="import-upload-form">
+        {{ csrf_field() }}
+        <label class="file-field">
+            <span>Photos</span>
+            <input name="photo" type="file" accept="image/*" multiple required>
+        </label>
+        <button class="button primary" type="submit">Review detected dates</button>
+    </form>
+</section>
+{% endblock %}

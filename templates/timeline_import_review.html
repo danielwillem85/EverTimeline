@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block title %}Review import - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline_import') }}">Import assistant</a>
+        <h1>Review import</h1>
+    </div>
+    <div class="page-actions">
+        <form method="post">
+            {{ csrf_field() }}
+            <input type="hidden" name="action" value="discard">
+            <button class="button secondary" type="submit">Discard batch</button>
+        </form>
+    </div>
+</section>
+
+<form method="post" class="import-review-form">
+    {{ csrf_field() }}
+    <div class="import-review-list">
+        {% for item in items %}
+            <article class="import-review-card">
+                <img
+                    src="{{ url_for('timeline_import_item_image', token=token, item_id=item['id']) }}"
+                    alt="{{ item['original_filename'] }}"
+                    loading="lazy"
+                >
+                <div class="import-review-main">
+                    <div class="import-review-title-row">
+                        <h2>{{ item["original_filename"] }}</h2>
+                        <span class="status-badge">{{ item["detected_label"] }}</span>
+                    </div>
+                    <div class="import-review-fields">
+                        <label>
+                            <span>Date</span>
+                            <input
+                                name="photo_date_{{ item['id'] }}"
+                                type="date"
+                                value="{{ item['review_date'] }}"
+                            >
+                        </label>
+                        <fieldset class="tag-radio-group import-tag-group">
+                            <legend>Visibility</legend>
+                            <div class="tag-radio-list">
+                                {% for tag in tag_choices %}
+                                    <label class="tag-radio">
+                                        <input
+                                            type="radio"
+                                            name="tags_{{ item['id'] }}"
+                                            value="{{ tag }}"
+                                            {% if tag == item["review_tag"] %}checked{% endif %}
+                                        >
+                                        <span>
+                                            <strong>{{ tag }}</strong>
+                                            <small>{{ privacy_labels[tag] }}</small>
+                                        </span>
+                                    </label>
+                                {% endfor %}
+                            </div>
+                        </fieldset>
+                        <label class="checkbox-row import-skip-row">
+                            <input
+                                name="skip_{{ item['id'] }}"
+                                type="checkbox"
+                                value="1"
+                                {% if item["skip_checked"] %}checked{% endif %}
+                            >
+                            <span>Skip</span>
+                        </label>
+                    </div>
+                </div>
+            </article>
+        {% else %}
+            <p class="empty-state">No photos in this import batch.</p>
+        {% endfor %}
+    </div>
+    <div class="form-actions import-review-actions">
+        <button class="button primary" type="submit">Import photos</button>
+        <a class="button secondary" href="{{ url_for('timeline_import') }}">Upload another batch</a>
+    </div>
+</form>
+{% endblock %}

@@ -166,6 +166,13 @@
                         {% if selected_cover_ref == item_cover_ref %}
                             <span class="chapter-cover-note">Chapter cover</span>
                         {% endif %}
+                        {% if item["people"] %}
+                            <div class="people-chip-list" aria-label="People">
+                                {% for person in item["people"] %}
+                                    <span class="people-chip">{{ person }}</span>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
                         {% if item["kind"] == "text" %}
                             <p>{{ item["body"] }}</p>
                         {% endif %}

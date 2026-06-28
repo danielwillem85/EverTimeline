@@ -24,6 +24,7 @@
                         data-photo-display-title="{{ item['display_title'] }}"
                         data-photo-caption="{{ item['caption'] or '' }}"
                         data-photo-date="{{ item['display_date'] or '' }}"
+                        data-photo-people="{{ item['people_text'] }}"
                         data-privacy-label="{{ item['privacy_label'] }}"
                         data-privacy-help="{{ item['privacy_help'] }}"
                         data-full-src="{{ item['image_url'] }}"
@@ -45,6 +46,13 @@
                             {% endif %}
                         </div>
                     {% endif %}
+                    {% if item["people"] %}
+                        <div class="people-chip-list" aria-label="People">
+                            {% for person in item["people"] %}
+                                <span class="people-chip">{{ person }}</span>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
                     {{ reaction_bar(item) }}
                 </article>
             {% else %}
@@ -55,6 +63,7 @@
                         data-entry-ref="text-{{ item['id'] }}"
                         data-entry-date="{{ item['display_date'] or '' }}"
                         data-entry-body="{{ item['body'] }}"
+                        data-entry-people="{{ item['people_text'] }}"
                         data-privacy-label="{{ item['privacy_label'] }}"
                         data-privacy-help="{{ item['privacy_help'] }}"
                         aria-label="Text entry{% if item['display_date'] %} from {{ item['display_date'] }}{% endif %}"
@@ -67,6 +76,13 @@
                             <span class="thumb-date">{{ item["display_date"] }}</span>
                         {% endif %}
                     </button>
+                    {% if item["people"] %}
+                        <div class="people-chip-list" aria-label="People">
+                            {% for person in item["people"] %}
+                                <span class="people-chip">{{ person }}</span>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
                     {{ reaction_bar(item) }}
                 </article>
             {% endif %}
@@ -83,6 +99,7 @@
             <div>
                 <h2 id="readonly-text-modal-title">Text entry</h2>
                 <p id="readonly-text-modal-date" class="muted"></p>
+                <p id="readonly-text-people-summary" class="people-summary"></p>
                 <p id="readonly-text-privacy-summary" class="privacy-summary"></p>
             </div>
             <button class="icon-button" type="button" data-close-readonly-text-modal aria-label="Close popup">x</button>
@@ -101,6 +118,7 @@
                 <h2 id="readonly-photo-modal-title">Picture</h2>
                 <p id="readonly-photo-modal-date" class="muted"></p>
                 <p id="readonly-photo-caption-view" class="photo-caption-view"></p>
+                <p id="readonly-photo-people-summary" class="people-summary"></p>
                 <p id="readonly-photo-privacy-summary" class="privacy-summary"></p>
             </div>
             <button class="icon-button" type="button" data-close-readonly-photo-modal aria-label="Close popup">x</button>

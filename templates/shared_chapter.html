@@ -61,6 +61,13 @@
                     <div class="chapter-item-main">
                         <strong>{{ item["title"] }}</strong>
                         <span>{{ item["date_label"] }} - {{ item["source_label"] }}</span>
+                        {% if item["people"] %}
+                            <div class="people-chip-list" aria-label="People">
+                                {% for person in item["people"] %}
+                                    <span class="people-chip">{{ person }}</span>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
                         {% if item["kind"] == "photo" and item["caption"] %}
                             <p>{{ item["caption"] }}</p>
                         {% endif %}

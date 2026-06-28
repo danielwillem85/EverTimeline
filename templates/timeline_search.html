@@ -16,8 +16,75 @@
             <span>Search your timeline</span>
             <input name="q" value="{{ query }}" placeholder="Text, photo title, caption, date, message, or chapter" autocomplete="off" autofocus>
         </label>
-        <button class="button primary" type="submit">Search</button>
+        <div class="search-filter-grid">
+            <label>
+                <span>Type</span>
+                <select name="kind">
+                    {% for value, label in kind_options %}
+                        <option value="{{ value }}" {% if filters["kind"] == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                <span>Visibility</span>
+                <select name="visibility">
+                    <option value="all" {% if filters["visibility"] == "all" %}selected{% endif %}>Any</option>
+                    {% for tag in tag_choices %}
+                        <option value="{{ tag }}" {% if filters["visibility"] == tag %}selected{% endif %}>{{ privacy_labels[tag] }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                <span>From year</span>
+                <input name="year_from" inputmode="numeric" value="{{ filters['year_from'] or '' }}" placeholder="Any">
+            </label>
+            <label>
+                <span>To year</span>
+                <input name="year_to" inputmode="numeric" value="{{ filters['year_to'] or '' }}" placeholder="Any">
+            </label>
+            <label>
+                <span>Place</span>
+                <select name="location">
+                    {% for value, label in tri_options %}
+                        <option value="{{ value }}" {% if filters["location"] == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                <span>Captions</span>
+                <select name="caption">
+                    {% for value, label in tri_options %}
+                        <option value="{{ value }}" {% if filters["caption"] == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                <span>Messages</span>
+                <select name="messages">
+                    {% for value, label in tri_options %}
+                        <option value="{{ value }}" {% if filters["messages"] == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                <span>Chapters</span>
+                <select name="chapter">
+                    {% for value, label in chapter_options %}
+                        <option value="{{ value }}" {% if filters["chapter"] == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+        <div class="search-actions">
+            <button class="button primary" type="submit">Search</button>
+            <a class="button secondary" href="{{ url_for('timeline_search') }}">Reset</a>
+        </div>
     </form>
+    <div class="search-quick-links" aria-label="Quick searches">
+        {% for quick_search in quick_searches %}
+            <a href="{{ quick_search.url }}">{{ quick_search.label }}</a>
+        {% endfor %}
+    </div>
 </section>
 
 <section class="search-results">
@@ -26,11 +93,23 @@
             <div class="timeline-search-list">
                 {% for result in results %}
                     <article class="timeline-search-card">
-                        <div class="timeline-search-main">
-                            <span class="status-badge">{{ result["kind"] }}</span>
-                            <h2>{{ result["title"] }}</h2>
-                            <span>{{ result["context"] }}</span>
-                            <p>{{ result["preview"] }}</p>
+                        <div class="timeline-search-content">
+                            {% if result.get("image_url") %}
+                                <img class="timeline-search-thumb" src="{{ result['image_url'] }}" alt="">
+                            {% endif %}
+                            <div class="timeline-search-main">
+                                <span class="status-badge">{{ result["kind"] }}</span>
+                                <h2>{{ result["title"] }}</h2>
+                                <span>{{ result["context"] }}</span>
+                                <p>{{ result["preview"] }}</p>
+                                {% if result.get("meta") %}
+                                    <div class="timeline-search-meta">
+                                        {% for item in result["meta"] %}
+                                            <span>{{ item }}</span>
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
                         </div>
                         <a class="button primary small" href="{{ result['url'] }}">Open</a>
                     </article>

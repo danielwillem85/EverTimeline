@@ -103,6 +103,7 @@ BACKUP_FORMAT = "evertimeline.account_backup"
 BACKUP_FORMAT_VERSION = 1
 BACKUP_MANIFEST_NAME = "evertimeline-backup.json"
 DEFAULT_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
+ADMIN_USERNAME = "Daniel"
 
 
 def env_flag(name, default=False):
@@ -261,6 +262,7 @@ def inject_tag_choices():
         "preview_mode_url": preview_mode_url,
         "notification_count": notification_count,
         "static_version": static_version,
+        "is_admin_user": current_user_is_admin,
         "csrf_token": csrf_token,
         "csrf_field": csrf_field,
     }
@@ -1097,6 +1099,104 @@ def storage_jpeg_from_image(image_data):
             return buffer.getvalue()
     except Exception as exc:
         raise ValueError("Image could not be converted to JPEG.") from exc
+
+
+def current_user_is_admin():
+    return getattr(g, "user", None) is not None and g.user["username"] == ADMIN_USERNAME
+
+
+def admin_required(view):
+    @wraps(view)
+    @login_required
+    def wrapped_view(**kwargs):
+        if not current_user_is_admin():
+            abort(404)
+        return view(**kwargs)
+
+    return wrapped_view
+
+
+def admin_image_storage_summary(db):
+    photos = db.execute(
+        """
+        SELECT
+            COUNT(*) AS total_count,
+            SUM(CASE WHEN mime_type = ? THEN 1 ELSE 0 END) AS jpeg_count
+        FROM photos
+        """,
+        (JPEG_STORAGE_MIME,),
+    ).fetchone()
+    imports = db.execute(
+        """
+        SELECT
+            COUNT(*) AS total_count,
+            SUM(CASE WHEN mime_type = ? THEN 1 ELSE 0 END) AS jpeg_count
+        FROM photo_import_items
+        """,
+        (JPEG_STORAGE_MIME,),
+    ).fetchone()
+    photo_total = photos["total_count"] or 0
+    import_total = imports["total_count"] or 0
+    photo_jpeg = photos["jpeg_count"] or 0
+    import_jpeg = imports["jpeg_count"] or 0
+    return {
+        "photo_total": photo_total,
+        "photo_jpeg": photo_jpeg,
+        "photo_non_jpeg": photo_total - photo_jpeg,
+        "import_total": import_total,
+        "import_jpeg": import_jpeg,
+        "import_non_jpeg": import_total - import_jpeg,
+    }
+
+
+def convert_image_rows_to_jpeg(db, table_name, id_column, hash_column=True):
+    rows = db.execute(
+        f"""
+        SELECT {id_column} AS row_id, image_data
+        FROM {table_name}
+        ORDER BY {id_column} ASC
+        """
+    ).fetchall()
+    converted_count = 0
+    skipped_count = 0
+    for row in rows:
+        try:
+            image_data = storage_jpeg_from_image(row["image_data"])
+        except ValueError:
+            skipped_count += 1
+            continue
+
+        if hash_column:
+            db.execute(
+                f"""
+                UPDATE {table_name}
+                SET image_data = ?, mime_type = ?, image_hash = ?
+                WHERE {id_column} = ?
+                """,
+                (image_data, JPEG_STORAGE_MIME, photo_image_hash(image_data), row["row_id"]),
+            )
+        else:
+            db.execute(
+                f"""
+                UPDATE {table_name}
+                SET image_data = ?, mime_type = ?
+                WHERE {id_column} = ?
+                """,
+                (image_data, JPEG_STORAGE_MIME, row["row_id"]),
+            )
+        converted_count += 1
+    return {"converted": converted_count, "skipped": skipped_count}
+
+
+def convert_all_database_images_to_jpeg(db):
+    photo_result = convert_image_rows_to_jpeg(db, "photos", "id", True)
+    import_result = convert_image_rows_to_jpeg(db, "photo_import_items", "id", True)
+    return {
+        "converted": photo_result["converted"] + import_result["converted"],
+        "skipped": photo_result["skipped"] + import_result["skipped"],
+        "photos_converted": photo_result["converted"],
+        "import_items_converted": import_result["converted"],
+    }
 
 
 def filename_date_candidate(filename):
@@ -6312,6 +6412,37 @@ def import_account_backup_route():
         "success",
     )
     return redirect(url_for("profile"))
+
+
+@app.route("/admin")
+@admin_required
+def admin():
+    db = get_db()
+    return render_template(
+        "admin.html",
+        image_summary=admin_image_storage_summary(db),
+    )
+
+
+@app.route("/admin/images/convert-jpeg", methods=("POST",))
+@admin_required
+def admin_convert_images_to_jpeg():
+    db = get_db()
+    result = convert_all_database_images_to_jpeg(db)
+    db.commit()
+    if result["converted"]:
+        flash(
+            (
+                f"Converted {result['converted']} image rows to JPEG "
+                f"({result['photos_converted']} photos, {result['import_items_converted']} import items)."
+            ),
+            "success",
+        )
+    else:
+        flash("No image rows were converted.", "success")
+    if result["skipped"]:
+        flash(f"Skipped {result['skipped']} image rows that could not be converted.", "error")
+    return redirect(url_for("admin"))
 
 
 @app.route("/login", methods=("GET", "POST"))

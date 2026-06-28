@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block title %}Admin - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
+        <h1>Admin</h1>
+    </div>
+</section>
+
+<section class="auth-panel admin-panel">
+    <h2>Image storage</h2>
+    <div class="admin-stat-grid">
+        <article>
+            <strong>{{ image_summary["photo_total"] }}</strong>
+            <span>Photos</span>
+            <small>{{ image_summary["photo_non_jpeg"] }} not JPEG</small>
+        </article>
+        <article>
+            <strong>{{ image_summary["import_total"] }}</strong>
+            <span>Import items</span>
+            <small>{{ image_summary["import_non_jpeg"] }} not JPEG</small>
+        </article>
+    </div>
+    <form
+        method="post"
+        action="{{ url_for('admin_convert_images_to_jpeg') }}"
+        data-confirm
+        data-confirm-title="Convert all stored images?"
+        data-confirm-message="This rewrites stored image bytes as compressed JPEG. Timeline entries remain in place."
+        data-confirm-action="Convert images"
+    >
+        {{ csrf_field() }}
+        <button class="button primary" type="submit">Convert all images to JPEG</button>
+    </form>
+</section>
+{% endblock %}

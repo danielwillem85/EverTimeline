@@ -312,6 +312,37 @@ body.nav-open {
     gap: 10px;
 }
 
+.admin-panel {
+    display: grid;
+    gap: 18px;
+}
+
+.admin-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.admin-stat-grid article {
+    display: grid;
+    gap: 4px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    background: var(--surface-strong);
+}
+
+.admin-stat-grid strong {
+    color: var(--primary);
+    font-size: 1.45rem;
+}
+
+.admin-stat-grid span,
+.admin-stat-grid small {
+    color: var(--muted);
+    font-weight: 800;
+}
+
 .birthday-panel {
     position: relative;
     width: min(560px, 100%);

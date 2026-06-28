@@ -10,9 +10,25 @@
 </head>
 <body>
     <header class="topbar">
-        <a class="brand" href="{{ url_for('index') }}">EverTimeline</a>
+        <div class="topbar-main">
+            <a class="brand" href="{{ url_for('index') }}">EverTimeline</a>
+            {% if g.user %}
+                <button
+                    class="nav-toggle"
+                    type="button"
+                    aria-controls="primary-navigation"
+                    aria-expanded="false"
+                    aria-label="Open navigation"
+                    data-nav-toggle
+                >
+                    <span class="nav-toggle-line" aria-hidden="true"></span>
+                    <span class="nav-toggle-line" aria-hidden="true"></span>
+                    <span class="nav-toggle-line" aria-hidden="true"></span>
+                </button>
+            {% endif %}
+        </div>
         {% if g.user %}
-            <div class="topbar-actions">
+            <nav class="topbar-actions" id="primary-navigation" aria-label="Primary navigation" data-primary-navigation>
                 <a
                     class="topbar-link{% if request.endpoint == 'home' %} is-active{% endif %}"
                     href="{{ url_for('home') }}"
@@ -67,7 +83,7 @@
                         </form>
                     </div>
                 </details>
-            </div>
+            </nav>
         {% endif %}
     </header>
 

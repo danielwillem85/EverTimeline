@@ -153,6 +153,48 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    const navToggle = document.querySelector("[data-nav-toggle]");
+    const primaryNavigation = document.querySelector("[data-primary-navigation]");
+    if (navToggle && primaryNavigation) {
+        const setNavOpen = (isOpen) => {
+            navToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
+            navToggle.setAttribute("aria-label", isOpen ? "Close navigation" : "Open navigation");
+            primaryNavigation.classList.toggle("is-open", isOpen);
+            document.body.classList.toggle("nav-open", isOpen);
+        };
+
+        navToggle.addEventListener("click", () => {
+            setNavOpen(navToggle.getAttribute("aria-expanded") !== "true");
+        });
+
+        primaryNavigation.querySelectorAll("a, button").forEach((item) => {
+            item.addEventListener("click", () => setNavOpen(false));
+        });
+
+        document.addEventListener("click", (event) => {
+            if (
+                navToggle.getAttribute("aria-expanded") === "true"
+                && !primaryNavigation.contains(event.target)
+                && !navToggle.contains(event.target)
+            ) {
+                setNavOpen(false);
+            }
+        });
+
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") {
+                setNavOpen(false);
+                navToggle.focus();
+            }
+        });
+
+        window.addEventListener("resize", () => {
+            if (window.matchMedia("(min-width: 761px)").matches) {
+                setNavOpen(false);
+            }
+        });
+    }
+
     const birthdayConfirmInput = document.querySelector("[data-birthday-confirm-input]");
     const birthdayConfirmButton = document.querySelector("[data-birthday-confirm-button]");
     if (birthdayConfirmInput && birthdayConfirmButton) {

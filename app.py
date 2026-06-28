@@ -30,12 +30,14 @@ from markupsafe import Markup, escape as html_escape
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
-from PIL import Image
+from PIL import Image, ImageOps
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DATABASE = Path(os.environ.get("EVERTIMELINE_DATABASE", BASE_DIR / "evertimeline.sqlite3"))
 ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+JPEG_STORAGE_MIME = "image/jpeg"
+JPEG_STORAGE_QUALITY = 82
 EXIF_DATE_TAGS = (36867, 36868, 306)
 TAG_CHOICES = ("private", "family", "friends", "public")
 REACTION_CHOICES = ("like", "love")
@@ -1065,6 +1067,31 @@ def photo_image_hash(image_data):
     return hashlib.sha256(image_data).hexdigest()
 
 
+def storage_jpeg_from_image(image_data):
+    try:
+        with Image.open(io.BytesIO(image_data)) as image:
+            image = ImageOps.exif_transpose(image)
+            if image.mode in ("RGBA", "LA") or "transparency" in image.info:
+                rgba_image = image.convert("RGBA")
+                background = Image.new("RGB", rgba_image.size, (255, 255, 255))
+                background.paste(rgba_image, mask=rgba_image.getchannel("A"))
+                image = background
+            elif image.mode != "RGB":
+                image = image.convert("RGB")
+
+            buffer = io.BytesIO()
+            image.save(
+                buffer,
+                format="JPEG",
+                quality=JPEG_STORAGE_QUALITY,
+                optimize=True,
+                progressive=True,
+            )
+            return buffer.getvalue()
+    except Exception as exc:
+        raise ValueError("Image could not be converted to JPEG.") from exc
+
+
 def filename_date_candidate(filename):
     normalized = Path(filename or "").stem
     patterns = (
@@ -1303,7 +1330,7 @@ def insert_uploaded_photo(db, image, image_data, image_hash, year, month, photo_
     return insert_photo_record(
         db,
         image.filename,
-        image.mimetype,
+        JPEG_STORAGE_MIME,
         image_data,
         image_hash,
         year,
@@ -5841,12 +5868,17 @@ def import_photo_from_backup(db, archive, photo):
     if info.file_size > app.config["MAX_CONTENT_LENGTH"]:
         raise ValueError("Backup contains a photo that is too large.")
 
-    image_data = archive.read(info)
+    original_image_data = archive.read(info)
     mime_type = backup_text(photo.get("mime_type"), "image/png", 64)
     if mime_type not in ALLOWED_IMAGE_MIMES:
         raise ValueError("Backup contains an unsupported photo type.")
 
-    image_hash = photo_image_hash(image_data)
+    try:
+        storage_image_data = storage_jpeg_from_image(original_image_data)
+    except ValueError as exc:
+        raise ValueError("Backup contains a photo that could not be converted.") from exc
+
+    image_hash = photo_image_hash(storage_image_data)
     duplicate = find_duplicate_photo(db, g.user["id"], image_hash)
     if duplicate is not None:
         return {
@@ -5870,8 +5902,8 @@ def import_photo_from_backup(db, archive, photo):
             normalize_photo_title(photo.get("title", "")),
             normalize_photo_caption(photo.get("caption", "")),
             image_hash,
-            mime_type,
-            image_data,
+            JPEG_STORAGE_MIME,
+            storage_image_data,
             photo.get("photo_date") or None,
             backup_created_at(photo.get("created_at")),
         ),
@@ -6485,19 +6517,25 @@ def timeline_import():
                 skipped_count += 1
                 continue
 
-            image_data = image.read()
-            if not image_data:
+            original_image_data = image.read()
+            if not original_image_data:
                 skipped_count += 1
                 continue
 
-            image_hash = photo_image_hash(image_data)
+            try:
+                storage_image_data = storage_jpeg_from_image(original_image_data)
+            except ValueError:
+                skipped_count += 1
+                continue
+
+            image_hash = photo_image_hash(storage_image_data)
             duplicate = find_duplicate_photo(db, g.user["id"], image_hash)
             duplicate_import_item_id = seen_hashes.get(image_hash)
             duplicate_photo_id = duplicate["id"] if duplicate is not None else None
             if duplicate_photo_id or duplicate_import_item_id:
                 duplicate_count += 1
 
-            detected_date, detected_source = detect_import_photo_date(image_data, image.filename)
+            detected_date, detected_source = detect_import_photo_date(original_image_data, image.filename)
             cursor = db.execute(
                 """
                 INSERT INTO photo_import_items (
@@ -6510,8 +6548,8 @@ def timeline_import():
                 (
                     batch.lastrowid,
                     secure_filename(image.filename) or "photo",
-                    image.mimetype,
-                    image_data,
+                    JPEG_STORAGE_MIME,
+                    storage_image_data,
                     image_hash,
                     detected_date,
                     detected_source,
@@ -7007,18 +7045,24 @@ def month_view(year, month):
                 skipped_count += 1
                 continue
 
-            image_data = image.read()
-            if not image_data:
+            original_image_data = image.read()
+            if not original_image_data:
                 skipped_count += 1
                 continue
 
-            image_hash = photo_image_hash(image_data)
+            try:
+                storage_image_data = storage_jpeg_from_image(original_image_data)
+            except ValueError:
+                skipped_count += 1
+                continue
+
+            image_hash = photo_image_hash(storage_image_data)
             if find_duplicate_photo(db, g.user["id"], image_hash):
                 duplicate_count += 1
                 continue
 
             normalized_photo_date, used_auto_date, ignored_exif_date = photo_date_from_upload(
-                image_data,
+                original_image_data,
                 year,
                 month,
                 manual_photo_date,
@@ -7026,7 +7070,7 @@ def month_view(year, month):
             insert_uploaded_photo(
                 db,
                 image,
-                image_data,
+                storage_image_data,
                 image_hash,
                 year,
                 month,

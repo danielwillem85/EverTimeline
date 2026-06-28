@@ -135,8 +135,11 @@ def test_uploads_text_entries_and_pdf_exports(client, helpers):
 
     image_response = client.get(f"/photo/{photo_id}/image")
     assert image_response.status_code == 200
-    assert image_response.mimetype == "image/png"
-    assert image_response.data.startswith(b"\x89PNG")
+    assert image_response.mimetype == "image/jpeg"
+    assert image_response.data.startswith(b"\xff\xd8")
+    stored_photo = helpers.row("SELECT mime_type, image_data FROM photos WHERE id = ?", (photo_id,))
+    assert stored_photo["mime_type"] == "image/jpeg"
+    assert stored_photo["image_data"].startswith(b"\xff\xd8")
 
     text_response = client.get(f"/api/text-entry/{text_id}")
     assert text_response.status_code == 200
@@ -539,7 +542,7 @@ def test_full_account_backup_export_and_import(client, helpers):
         assert manifest["text_entries"][0]["people"] == ["Nora Notes"]
         assert manifest["photos"][0]["messages"][0]["body"] == "Photo message"
         assert manifest["text_entries"][0]["reactions"][0]["reaction"] == "love"
-        assert archive.read(manifest["photos"][0]["image_path"]).startswith(b"\x89PNG")
+        assert archive.read(manifest["photos"][0]["image_path"]).startswith(b"\xff\xd8")
 
     assert client.post(
         "/logout",

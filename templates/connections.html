@@ -41,27 +41,52 @@
         <table class="connection-table">
             <thead>
                 <tr>
-                        <th>Username</th>
-                        <th>Full name</th>
-                        <th>Email address</th>
-                        <th>Visit</th>
-                    </tr>
-                </thead>
-                <tbody>
+                    <th>Username</th>
+                    <th>Full name</th>
+                    <th>Email address</th>
+                    <th>Connection type</th>
+                    <th>Visit</th>
+                    <th>Manage</th>
+                </tr>
+            </thead>
+            <tbody>
                 {% if connections %}
                     {% for connection in connections %}
                         <tr>
                             <td>{{ connection["username"] }}</td>
                             <td>{{ connection["full_name"] or "No name entered" }}</td>
                             <td>{{ connection["email"] }}</td>
+                            <td><span class="status-badge">{{ connection["relation"] }}</span></td>
                             <td>
                                 <a class="button secondary small" href="{{ url_for('connection_timeline', connection_id=connection['id']) }}">Visit</a>
+                            </td>
+                            <td>
+                                <details class="connection-actions-menu">
+                                    <summary aria-label="Manage connection with {{ connection['username'] }}" title="Manage connection">
+                                        <span aria-hidden="true">&#9881;</span>
+                                    </summary>
+                                    <div class="connection-actions-panel">
+                                        <form class="connection-type-form" method="post" action="{{ url_for('update_connection_relation', request_id=connection['request_id']) }}">
+                                            <label>
+                                                <span>Change type</span>
+                                                <select name="relation" aria-label="Connection type for {{ connection['username'] }}">
+                                                    <option value="friend" {% if connection["relation"] == "friend" %}selected{% endif %}>Friend</option>
+                                                    <option value="family" {% if connection["relation"] == "family" %}selected{% endif %}>Family</option>
+                                                </select>
+                                            </label>
+                                            <button class="button secondary small" type="submit">Save</button>
+                                        </form>
+                                        <form class="inline-form" method="post" action="{{ url_for('remove_connection', request_id=connection['request_id']) }}">
+                                            <button class="button danger small" type="submit">Remove connection</button>
+                                        </form>
+                                    </div>
+                                </details>
                             </td>
                         </tr>
                     {% endfor %}
                 {% else %}
                     <tr>
-                        <td colspan="4" class="empty-table-cell">No connections yet.</td>
+                        <td colspan="6" class="empty-table-cell">No connections yet.</td>
                     </tr>
                 {% endif %}
             </tbody>

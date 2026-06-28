@@ -74,37 +74,39 @@
     </div>
 </section>
 
-<details class="upload-panel form-toggle-panel">
-    <summary class="form-toggle-summary">Add picture(s)</summary>
-    <form method="post" enctype="multipart/form-data" class="upload-form">
-        <label class="file-field">
-            <span>Pictures</span>
-            <input name="photo" type="file" accept="image/*" multiple required>
-        </label>
-        <label>
-            <span>Date</span>
-            <input name="photo_date" type="date" min="{{ month_start }}" max="{{ month_end }}">
-        </label>
-        {{ tag_radio_group() }}
-        <button class="button primary" type="submit">Upload</button>
-    </form>
-</details>
+<section class="month-entry-actions" aria-label="Add timeline entries">
+    <details class="upload-panel form-toggle-panel">
+        <summary class="form-toggle-summary">Add picture(s)</summary>
+        <form method="post" enctype="multipart/form-data" class="upload-form">
+            <label class="file-field">
+                <span>Pictures</span>
+                <input name="photo" type="file" accept="image/*" multiple required>
+            </label>
+            <label>
+                <span>Date</span>
+                <input name="photo_date" type="date" min="{{ month_start }}" max="{{ month_end }}">
+            </label>
+            {{ tag_radio_group() }}
+            <button class="button primary" type="submit">Upload</button>
+        </form>
+    </details>
 
-<details class="upload-panel form-toggle-panel text-entry-panel">
-    <summary class="form-toggle-summary">Text entry</summary>
-    <form method="post" action="{{ url_for('create_text_entry', year=year, month=month) }}" class="text-entry-form">
-        <label class="text-entry-field">
-            <span>Text entry</span>
-            <textarea name="body" rows="5" required></textarea>
-        </label>
-        <label>
-            <span>Date</span>
-            <input name="entry_date" type="date" min="{{ month_start }}" max="{{ month_end }}">
-        </label>
-        {{ tag_radio_group() }}
-        <button class="button primary" type="submit">Save</button>
-    </form>
-</details>
+    <details class="upload-panel form-toggle-panel text-entry-panel">
+        <summary class="form-toggle-summary">Text entry</summary>
+        <form method="post" action="{{ url_for('create_text_entry', year=year, month=month) }}" class="text-entry-form">
+            <label class="text-entry-field">
+                <span>Text entry</span>
+                <textarea name="body" rows="5" required></textarea>
+            </label>
+            <label>
+                <span>Date</span>
+                <input name="entry_date" type="date" min="{{ month_start }}" max="{{ month_end }}">
+            </label>
+            {{ tag_radio_group() }}
+            <button class="button primary" type="submit">Save</button>
+        </form>
+    </details>
+</section>
 
 <section class="photo-section">
     <div class="photo-grid">

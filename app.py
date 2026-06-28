@@ -1845,6 +1845,7 @@ def get_accepted_connections(db):
     rows = db.execute(
         """
         SELECT
+            cr.id AS request_id,
             u.id AS user_id,
             cr.relation,
             u.username,
@@ -1856,6 +1857,7 @@ def get_accepted_connections(db):
         WHERE cr.requester_id = ? AND cr.status = 'accepted'
         UNION ALL
         SELECT
+            cr.id AS request_id,
             u.id AS user_id,
             cr.relation,
             u.username,
@@ -1871,6 +1873,7 @@ def get_accepted_connections(db):
     ).fetchall()
     return [
         {
+            "request_id": row["request_id"],
             "id": row["user_id"],
             "username": row["username"],
             "full_name": user_full_name(row),
@@ -3572,6 +3575,7 @@ def notifications():
         incoming_requests=get_incoming_connection_requests(db),
         message_notifications=message_notifications,
         reaction_notifications=reaction_notifications,
+        feed_items=get_activity_feed(db),
     )
 
 
@@ -3584,7 +3588,7 @@ def notification_count():
 @app.route("/activity")
 @login_required
 def activity():
-    return render_template("activity.html", feed_items=get_activity_feed(get_db()))
+    return redirect(url_for("notifications"))
 
 
 @app.route("/connections/request", methods=("POST",))
@@ -3693,6 +3697,64 @@ def decline_connection_request(request_id):
     db.commit()
     flash("Connection request declined.", "success")
     return redirect(url_for(redirect_target))
+
+
+@app.route("/connections/<int:request_id>/relation", methods=("POST",))
+@login_required
+def update_connection_relation(request_id):
+    relation = request.form.get("relation", "")
+    if relation not in CONNECTION_RELATIONS:
+        flash("Choose friend or family.", "error")
+        return redirect(url_for("connections"))
+
+    db = get_db()
+    request_row = db.execute(
+        """
+        SELECT id
+        FROM connection_requests
+        WHERE id = ?
+            AND status = 'accepted'
+            AND (requester_id = ? OR recipient_id = ?)
+        """,
+        (request_id, g.user["id"], g.user["id"]),
+    ).fetchone()
+    if request_row is None:
+        abort(404)
+
+    db.execute(
+        """
+        UPDATE connection_requests
+        SET relation = ?
+        WHERE id = ?
+        """,
+        (relation, request_id),
+    )
+    db.commit()
+    flash("Connection type updated.", "success")
+    return redirect(url_for("connections"))
+
+
+@app.route("/connections/<int:request_id>/remove", methods=("POST",))
+@login_required
+def remove_connection(request_id):
+    db = get_db()
+    request_row = db.execute(
+        """
+        SELECT id
+        FROM connection_requests
+        WHERE id = ?
+            AND status = 'accepted'
+            AND (requester_id = ? OR recipient_id = ?)
+        """,
+        (request_id, g.user["id"], g.user["id"]),
+    ).fetchone()
+    if request_row is None:
+        abort(404)
+
+    db.execute("DELETE FROM connection_requests WHERE id = ?", (request_id,))
+    db.commit()
+    flash("Connection removed.", "success")
+    return redirect(url_for("connections"))
 
 
 @app.route("/photo/<int:photo_id>/image")

@@ -8,10 +8,6 @@
         <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
         <h1>Notifications</h1>
     </div>
-    <div class="page-actions">
-        <a class="button secondary" href="{{ url_for('activity') }}">Activity feed</a>
-        <a class="button secondary" href="{{ url_for('connections') }}">Connections</a>
-    </div>
 </section>
 
 <section class="connection-section">
@@ -81,6 +77,28 @@
         </div>
     {% else %}
         <p class="empty-state">No connection requests.</p>
+    {% endif %}
+</section>
+
+<section class="connection-section">
+    <h2>Recent activity</h2>
+    {% if feed_items %}
+        <div class="activity-list">
+            {% for item in feed_items %}
+                <article class="activity-card">
+                    <div class="activity-main">
+                        <strong>{{ item["summary"] }}</strong>
+                        <span>{{ item["item_date"] }} &middot; {{ item["created_at"] }}</span>
+                        {% if item["preview"] %}
+                            <p>{{ item["preview"] }}</p>
+                        {% endif %}
+                    </div>
+                    <a class="button secondary small" href="{{ item['url'] }}">Open</a>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty-state">No activity yet.</p>
     {% endif %}
 </section>
 {% endblock %}

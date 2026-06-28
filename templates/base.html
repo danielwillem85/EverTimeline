@@ -45,11 +45,6 @@
                     >{{ notification_count }}</span>
                 </a>
                 <a
-                    class="topbar-link{% if request.endpoint == 'activity' %} is-active{% endif %}"
-                    href="{{ url_for('activity') }}"
-                    {% if request.endpoint == 'activity' %}aria-current="page"{% endif %}
-                >Activity</a>
-                <a
                     class="topbar-link{% if request.endpoint == 'search' %} is-active{% endif %}"
                     href="{{ url_for('search') }}"
                     {% if request.endpoint == 'search' %}aria-current="page"{% endif %}

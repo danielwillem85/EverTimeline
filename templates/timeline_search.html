@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Timeline search - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
+        <h1>Search timeline</h1>
+    </div>
+</section>
+
+<section class="search-panel">
+    <form class="search-form" method="get">
+        <label>
+            <span>Search your timeline</span>
+            <input name="q" value="{{ query }}" placeholder="Text, photo filename, date, message, or chapter" autocomplete="off" autofocus>
+        </label>
+        <button class="button primary" type="submit">Search</button>
+    </form>
+</section>
+
+<section class="search-results">
+    {% if has_query %}
+        {% if results %}
+            <div class="timeline-search-list">
+                {% for result in results %}
+                    <article class="timeline-search-card">
+                        <div class="timeline-search-main">
+                            <span class="status-badge">{{ result["kind"] }}</span>
+                            <h2>{{ result["title"] }}</h2>
+                            <span>{{ result["context"] }}</span>
+                            <p>{{ result["preview"] }}</p>
+                        </div>
+                        <a class="button primary small" href="{{ result['url'] }}">Open</a>
+                    </article>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p class="empty-state">No timeline matches.</p>
+        {% endif %}
+    {% else %}
+        <p class="empty-state">Search text entries, photo filenames, dates, messages, and chapters.</p>
+    {% endif %}
+</section>
+{% endblock %}

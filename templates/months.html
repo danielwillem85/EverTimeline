@@ -44,6 +44,7 @@
                         data-confirm-message="This will update who can see every photo and text entry in {{ year }}."
                         data-confirm-action="Apply to year"
                     >
+                        {{ csrf_field() }}
                         {{ tag_radio_group() }}
                         <button class="button secondary" type="submit">Apply to year</button>
                     </form>

@@ -6,6 +6,7 @@
 <section class="auth-panel">
     <h1>Create account</h1>
     <form method="post" class="form-stack">
+        {{ csrf_field() }}
         <label>
             <span>Username</span>
             <input name="username" value="{{ form.get('username', '') }}" autocomplete="username" required>

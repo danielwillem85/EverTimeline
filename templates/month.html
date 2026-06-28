@@ -25,6 +25,7 @@
         <details class="chapter-add-panel">
             <summary>Chapter</summary>
             <form method="post" action="{{ url_for('add_chapter_item') }}" class="chapter-add-form">
+                {{ csrf_field() }}
                 <input type="hidden" name="item_kind" value="{{ item['kind'] }}">
                 <input type="hidden" name="item_id" value="{{ item['id'] }}">
                 <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
@@ -70,6 +71,7 @@
                         data-confirm-message="This will update who can see every photo and text entry in {{ month_name }} {{ year }}."
                         data-confirm-action="Apply to month"
                     >
+                        {{ csrf_field() }}
                         {{ tag_radio_group() }}
                         <button class="button secondary" type="submit">Apply to month</button>
                     </form>
@@ -86,6 +88,7 @@
     <details class="upload-panel form-toggle-panel">
         <summary class="form-toggle-summary">Add picture(s)</summary>
         <form method="post" enctype="multipart/form-data" class="upload-form">
+            {{ csrf_field() }}
             <label class="file-field">
                 <span>Pictures</span>
                 <input name="photo" type="file" accept="image/*" multiple required>
@@ -102,6 +105,7 @@
     <details class="upload-panel form-toggle-panel text-entry-panel">
         <summary class="form-toggle-summary">Text entry</summary>
         <form method="post" action="{{ url_for('create_text_entry', year=year, month=month) }}" class="text-entry-form">
+            {{ csrf_field() }}
             <label class="text-entry-field">
                 <span>Text entry</span>
                 <textarea name="body" rows="5" required></textarea>

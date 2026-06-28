@@ -24,9 +24,11 @@
                     </div>
                     <span class="status-badge">{{ request["relation"] }}</span>
                     <form class="inline-form" method="post" action="{{ url_for('accept_connection_request', request_id=request['id']) }}">
+                        {{ csrf_field() }}
                         <button class="button primary small" type="submit">Accept</button>
                     </form>
                     <form class="inline-form" method="post" action="{{ url_for('decline_connection_request', request_id=request['id']) }}">
+                        {{ csrf_field() }}
                         <button class="button secondary small" type="submit">Decline</button>
                     </form>
                 </article>
@@ -75,6 +77,7 @@
                                             data-confirm-message="This can change which private timeline items this connection is allowed to see."
                                             data-confirm-action="Save change"
                                         >
+                                            {{ csrf_field() }}
                                             <label>
                                                 <span>Change type</span>
                                                 <select name="relation" aria-label="Connection type for {{ connection['username'] }}">
@@ -94,6 +97,7 @@
                                             data-confirm-action="Remove connection"
                                             data-confirm-danger="true"
                                         >
+                                            {{ csrf_field() }}
                                             <button class="button danger small" type="submit">Remove connection</button>
                                         </form>
                                     </div>

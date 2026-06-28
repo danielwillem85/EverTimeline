@@ -11,6 +11,16 @@ document.addEventListener("DOMContentLoaded", () => {
         friends: "Friend and family connections can see this item.",
         public: "All accepted connections can see this item.",
     };
+    const csrfToken = document.querySelector("meta[name='csrf-token']")?.content || "";
+    const csrfFetch = (url, options = {}) => {
+        const method = (options.method || "GET").toUpperCase();
+        if (csrfToken && !["GET", "HEAD", "OPTIONS", "TRACE"].includes(method)) {
+            const headers = new Headers(options.headers || {});
+            headers.set("X-CSRF-Token", csrfToken);
+            return fetch(url, {...options, headers});
+        }
+        return fetch(url, options);
+    };
     const privacyLabelFromTag = (tag) => privacyLabels[tag] || privacyLabels.private;
     const privacyHelpFromTag = (tag) => privacyHelp[tag] || privacyHelp.private;
     const setPrivacySummary = (summary, label, help) => {
@@ -143,6 +153,48 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    const navToggle = document.querySelector("[data-nav-toggle]");
+    const primaryNavigation = document.querySelector("[data-primary-navigation]");
+    if (navToggle && primaryNavigation) {
+        const setNavOpen = (isOpen) => {
+            navToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
+            navToggle.setAttribute("aria-label", isOpen ? "Close navigation" : "Open navigation");
+            primaryNavigation.classList.toggle("is-open", isOpen);
+            document.body.classList.toggle("nav-open", isOpen);
+        };
+
+        navToggle.addEventListener("click", () => {
+            setNavOpen(navToggle.getAttribute("aria-expanded") !== "true");
+        });
+
+        primaryNavigation.querySelectorAll("a, button").forEach((item) => {
+            item.addEventListener("click", () => setNavOpen(false));
+        });
+
+        document.addEventListener("click", (event) => {
+            if (
+                navToggle.getAttribute("aria-expanded") === "true"
+                && !primaryNavigation.contains(event.target)
+                && !navToggle.contains(event.target)
+            ) {
+                setNavOpen(false);
+            }
+        });
+
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") {
+                setNavOpen(false);
+                navToggle.focus();
+            }
+        });
+
+        window.addEventListener("resize", () => {
+            if (window.matchMedia("(min-width: 761px)").matches) {
+                setNavOpen(false);
+            }
+        });
+    }
+
     const birthdayConfirmInput = document.querySelector("[data-birthday-confirm-input]");
     const birthdayConfirmButton = document.querySelector("[data-birthday-confirm-button]");
     if (birthdayConfirmInput && birthdayConfirmButton) {
@@ -216,7 +268,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const refreshNotificationCount = async () => {
             try {
-                const response = await fetch("/api/notifications/count", {
+                const response = await csrfFetch("/api/notifications/count", {
                     cache: "no-store",
                     headers: {"Accept": "application/json"},
                 });
@@ -409,7 +461,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
 
                 submit.disabled = true;
-                const response = await fetch(item.messages_url, {
+                const response = await csrfFetch(item.messages_url, {
                     method: "POST",
                     headers: {"Content-Type": "application/json"},
                     body: JSON.stringify({body}),
@@ -628,7 +680,7 @@ document.addEventListener("DOMContentLoaded", () => {
             updateCarouselControl();
 
             const itemsUrl = allItemsModal.dataset.itemsUrl || "/api/timeline-items";
-            const response = await fetch(itemsUrl);
+            const response = await csrfFetch(itemsUrl);
             const fetchedItems = response.ok ? await response.json() : [];
             const filteredItems = skipTagFilter
                 ? fetchedItems
@@ -793,7 +845,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const reactionValue = button.dataset.reactionValue;
             const alreadySelected = bar.dataset.userReaction === reactionValue;
-            const response = await fetch(bar.dataset.reactionUrl, {
+            const response = await csrfFetch(bar.dataset.reactionUrl, {
                 method: alreadySelected ? "DELETE" : "PUT",
                 headers: {"Content-Type": "application/json"},
                 body: alreadySelected ? null : JSON.stringify({reaction: reactionValue}),
@@ -965,7 +1017,7 @@ document.addEventListener("DOMContentLoaded", () => {
             document.body.classList.add("modal-open");
 
             try {
-                const response = await fetch(button.dataset.messagesUrl);
+                const response = await csrfFetch(button.dataset.messagesUrl);
                 renderHomePhotoMessages(response.ok ? await response.json() : []);
             } catch (error) {
                 renderHomePhotoMessages([]);
@@ -1047,7 +1099,7 @@ document.addEventListener("DOMContentLoaded", () => {
             setReadonlyModalOpenState();
 
             try {
-                const response = await fetch(button.dataset.messagesUrl);
+                const response = await csrfFetch(button.dataset.messagesUrl);
                 renderReadonlyMessages(response.ok ? await response.json() : []);
             } catch (error) {
                 renderReadonlyMessages([]);
@@ -1273,7 +1325,7 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     const loadMessages = async () => {
-        const response = await fetch(`/api/photo/${activePhotoId}/messages`);
+        const response = await csrfFetch(`/api/photo/${activePhotoId}/messages`);
         if (!response.ok) {
             renderMessages([]);
             return;
@@ -1367,7 +1419,7 @@ document.addEventListener("DOMContentLoaded", () => {
         activeTextEntryId = button.dataset.entryId;
         activeTextThumbnail = button;
 
-        const response = await fetch(`/api/text-entry/${activeTextEntryId}`);
+        const response = await csrfFetch(`/api/text-entry/${activeTextEntryId}`);
         if (!response.ok) {
             return;
         }
@@ -1423,7 +1475,7 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
-        const response = await fetch(`/api/photo/${activePhotoId}/messages`, {
+        const response = await csrfFetch(`/api/photo/${activePhotoId}/messages`, {
             method: "POST",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({body}),
@@ -1441,7 +1493,7 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
-        const response = await fetch(`/api/photo/${activePhotoId}/tags`, {
+        const response = await csrfFetch(`/api/photo/${activePhotoId}/tags`, {
             method: "PATCH",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({tags: selectedTagValue(photoTagInputs)}),
@@ -1480,7 +1532,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         deletePhotoButton.disabled = true;
-        const response = await fetch(`/api/photo/${activePhotoId}`, {
+        const response = await csrfFetch(`/api/photo/${activePhotoId}`, {
             method: "DELETE",
         });
 
@@ -1517,7 +1569,7 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
-        const response = await fetch(`/api/text-entry/${activeTextEntryId}`, {
+        const response = await csrfFetch(`/api/text-entry/${activeTextEntryId}`, {
             method: "PATCH",
             headers: {"Content-Type": "application/json"},
             body: JSON.stringify({
@@ -1551,7 +1603,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         deleteTextButton.disabled = true;
-        const response = await fetch(`/api/text-entry/${activeTextEntryId}`, {
+        const response = await csrfFetch(`/api/text-entry/${activeTextEntryId}`, {
             method: "DELETE",
         });
 

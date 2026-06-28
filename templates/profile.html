@@ -3,26 +3,54 @@
 {% block title %}Profile - EverTimeline{% endblock %}
 
 {% block content %}
-<section class="auth-panel">
-    <h1>Profile</h1>
-    <form method="post" class="form-stack">
-        <label>
-            <span>Username</span>
-            <input class="readonly-input" value="{{ g.user['username'] }}" readonly>
-        </label>
-        <label>
-            <span>First name</span>
-            <input name="first_name" value="{{ form.get('first_name', '') }}" autocomplete="given-name" required>
-        </label>
-        <label>
-            <span>Last name</span>
-            <input name="last_name" value="{{ form.get('last_name', '') }}" autocomplete="family-name" required>
-        </label>
-        <label>
-            <span>Email address</span>
-            <input name="email" type="email" value="{{ form.get('email', '') }}" autocomplete="email" required>
-        </label>
-        <button class="button primary" type="submit">Save profile</button>
-    </form>
-</section>
+<div class="profile-stack">
+    <section class="auth-panel profile-panel">
+        <h1>Profile</h1>
+        <form method="post" class="form-stack">
+            {{ csrf_field() }}
+            <label>
+                <span>Username</span>
+                <input class="readonly-input" value="{{ g.user['username'] }}" readonly>
+            </label>
+            <label>
+                <span>First name</span>
+                <input name="first_name" value="{{ form.get('first_name', '') }}" autocomplete="given-name" required>
+            </label>
+            <label>
+                <span>Last name</span>
+                <input name="last_name" value="{{ form.get('last_name', '') }}" autocomplete="family-name" required>
+            </label>
+            <label>
+                <span>Email address</span>
+                <input name="email" type="email" value="{{ form.get('email', '') }}" autocomplete="email" required>
+            </label>
+            <button class="button primary" type="submit">Save profile</button>
+        </form>
+    </section>
+
+    <section class="auth-panel profile-panel backup-panel">
+        <h2>Account backup</h2>
+        <p class="muted">Download your timeline photos, text entries, messages, chapters, visibility tags, and metadata as a zip.</p>
+        <div class="backup-actions">
+            <a class="button secondary" href="{{ url_for('export_account_backup') }}">Download backup</a>
+        </div>
+        <form
+            method="post"
+            action="{{ url_for('import_account_backup_route') }}"
+            enctype="multipart/form-data"
+            class="form-stack"
+            data-confirm
+            data-confirm-title="Import account backup?"
+            data-confirm-message="This adds the backup contents to your current account and restores the backup birthday. Existing timeline items are kept."
+            data-confirm-action="Import backup"
+        >
+            {{ csrf_field() }}
+            <label>
+                <span>Backup zip</span>
+                <input name="backup" type="file" accept=".zip,application/zip" required>
+            </label>
+            <button class="button primary" type="submit">Import backup</button>
+        </form>
+    </section>
+</div>
 {% endblock %}

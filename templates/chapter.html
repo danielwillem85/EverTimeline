@@ -42,6 +42,7 @@
         data-confirm-action="Delete chapter"
         data-confirm-danger="true"
     >
+        {{ csrf_field() }}
         <button class="button danger small" type="submit">Delete chapter</button>
     </form>
 </section>
@@ -61,6 +62,7 @@
     <details class="chapter-settings-panel">
         <summary>Chapter settings</summary>
         <form method="post" action="{{ url_for('update_chapter_settings', chapter_id=chapter['id']) }}" class="chapter-settings-form">
+            {{ csrf_field() }}
             <label>
                 <span>Title</span>
                 <input name="title" value="{{ chapter['title'] }}" required>
@@ -125,14 +127,17 @@
                     </div>
                     <div class="chapter-item-actions">
                         <form class="inline-form" method="post" action="{{ url_for('reorder_chapter_item', chapter_id=chapter['id'], chapter_item_id=item['chapter_item_id']) }}">
+                            {{ csrf_field() }}
                             <input type="hidden" name="direction" value="up">
                             <button class="button secondary small" type="submit" {% if loop.first %}disabled{% endif %}>Up</button>
                         </form>
                         <form class="inline-form" method="post" action="{{ url_for('reorder_chapter_item', chapter_id=chapter['id'], chapter_item_id=item['chapter_item_id']) }}">
+                            {{ csrf_field() }}
                             <input type="hidden" name="direction" value="down">
                             <button class="button secondary small" type="submit" {% if loop.last %}disabled{% endif %}>Down</button>
                         </form>
                         <form class="inline-form" method="post" action="{{ url_for('remove_chapter_item', chapter_id=chapter['id'], chapter_item_id=item['chapter_item_id']) }}">
+                            {{ csrf_field() }}
                             <button class="button danger small" type="submit">Remove</button>
                         </form>
                     </div>

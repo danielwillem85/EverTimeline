@@ -4,23 +4,40 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}EverTimeline{% endblock %}</title>
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css', v=static_version('styles.css')) }}">
     <script src="{{ url_for('static', filename='app.js', v=static_version('app.js')) }}" defer></script>
 </head>
 <body>
     <header class="topbar">
-        <a class="brand" href="{{ url_for('index') }}">EverTimeline</a>
+        <div class="topbar-main">
+            <a class="brand" href="{{ url_for('index') }}">EverTimeline</a>
+            {% if g.user %}
+                <button
+                    class="nav-toggle"
+                    type="button"
+                    aria-controls="primary-navigation"
+                    aria-expanded="false"
+                    aria-label="Open navigation"
+                    data-nav-toggle
+                >
+                    <span class="nav-toggle-line" aria-hidden="true"></span>
+                    <span class="nav-toggle-line" aria-hidden="true"></span>
+                    <span class="nav-toggle-line" aria-hidden="true"></span>
+                </button>
+            {% endif %}
+        </div>
         {% if g.user %}
-            <div class="topbar-actions">
+            <nav class="topbar-actions" id="primary-navigation" aria-label="Primary navigation" data-primary-navigation>
                 <a
                     class="topbar-link{% if request.endpoint == 'home' %} is-active{% endif %}"
                     href="{{ url_for('home') }}"
                     {% if request.endpoint == 'home' %}aria-current="page"{% endif %}
                 >Home</a>
                 <a
-                    class="topbar-link{% if request.endpoint in ('timeline', 'year_view', 'month_view', 'birthday') %} is-active{% endif %}"
+                    class="topbar-link{% if request.endpoint in ('timeline', 'timeline_search', 'year_view', 'month_view', 'birthday') %} is-active{% endif %}"
                     href="{{ url_for('timeline') }}"
-                    {% if request.endpoint in ('timeline', 'year_view', 'month_view', 'birthday') %}aria-current="page"{% endif %}
+                    {% if request.endpoint in ('timeline', 'timeline_search', 'year_view', 'month_view', 'birthday') %}aria-current="page"{% endif %}
                 >Timeline</a>
                 <a
                     class="topbar-link{% if request.endpoint in ('chapters', 'chapter_detail') %} is-active{% endif %}"
@@ -48,7 +65,7 @@
                     class="topbar-link{% if request.endpoint == 'search' %} is-active{% endif %}"
                     href="{{ url_for('search') }}"
                     {% if request.endpoint == 'search' %}aria-current="page"{% endif %}
-                >Search</a>
+                >People</a>
                 <details class="account-menu{% if request.endpoint == 'profile' %} is-active{% endif %}">
                     <summary aria-label="Account menu for {{ g.user['username'] }}" title="Account menu">
                         <span aria-hidden="true">&#9881;</span>
@@ -61,11 +78,12 @@
                             {% if request.endpoint == 'profile' %}aria-current="page"{% endif %}
                         >Profile</a>
                         <form action="{{ url_for('logout') }}" method="post">
+                            {{ csrf_field() }}
                             <button class="button secondary small" type="submit">Log out</button>
                         </form>
                     </div>
                 </details>
-            </div>
+            </nav>
         {% endif %}
     </header>
 

@@ -43,6 +43,7 @@
             data-confirm-action="Confirm change"
             data-confirm-danger="true"
         >
+            {{ csrf_field() }}
             <input type="hidden" name="birthday" value="{{ pending_birthday }}">
             <input type="hidden" name="action" value="confirm">
             <label>
@@ -63,6 +64,7 @@
     {% else %}
         <h1>Birthday</h1>
         <form method="post" class="form-stack">
+            {{ csrf_field() }}
             <label>
                 <span>Date of birth</span>
                 <input

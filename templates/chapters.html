@@ -30,6 +30,7 @@
 <section class="connection-section">
     <h2>Create chapter</h2>
     <form class="chapter-form" method="post">
+        {{ csrf_field() }}
         <label>
             <span>Title</span>
             <input name="title" placeholder="College, First job, Family trip" required>
@@ -79,6 +80,7 @@
                             data-confirm-action="Delete chapter"
                             data-confirm-danger="true"
                         >
+                            {{ csrf_field() }}
                             <button class="button danger small" type="submit">Delete</button>
                         </form>
                     </div>

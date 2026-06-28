@@ -104,6 +104,8 @@ BACKUP_FORMAT_VERSION = 1
 BACKUP_MANIFEST_NAME = "evertimeline-backup.json"
 DEFAULT_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
 ADMIN_USERNAME = "Daniel"
+SQLITE_BUSY_TIMEOUT_MS = 30000
+IMAGE_CONVERSION_COMMIT_INTERVAL = 5
 
 
 def env_flag(name, default=False):
@@ -210,9 +212,9 @@ def validate_csrf_token():
 
 def get_db():
     if "db" not in g:
-        g.db = sqlite3.connect(DATABASE)
+        g.db = sqlite3.connect(DATABASE, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
         g.db.row_factory = sqlite3.Row
-        g.db.execute("PRAGMA foreign_keys = ON")
+        configure_db_connection(g.db)
     return g.db
 
 
@@ -221,6 +223,16 @@ def close_db(error=None):
     db = g.pop("db", None)
     if db is not None:
         db.close()
+
+
+def configure_db_connection(db):
+    db.execute("PRAGMA foreign_keys = ON")
+    db.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+    try:
+        db.execute("PRAGMA journal_mode = WAL")
+        db.execute("PRAGMA synchronous = NORMAL")
+    except sqlite3.OperationalError:
+        pass
 
 
 @app.context_processor
@@ -269,9 +281,9 @@ def inject_tag_choices():
 
 
 def init_db():
-    with closing(sqlite3.connect(DATABASE)) as db:
+    with closing(sqlite3.connect(DATABASE, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)) as db:
         db.row_factory = sqlite3.Row
-        db.execute("PRAGMA foreign_keys = ON")
+        configure_db_connection(db)
         db.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -1152,16 +1164,30 @@ def admin_image_storage_summary(db):
 def convert_image_rows_to_jpeg(db, table_name, id_column, hash_column=True):
     rows = db.execute(
         f"""
-        SELECT {id_column} AS row_id, image_data
+        SELECT {id_column} AS row_id
         FROM {table_name}
+        WHERE mime_type IS NULL OR mime_type != ?
         ORDER BY {id_column} ASC
-        """
+        """,
+        (JPEG_STORAGE_MIME,),
     ).fetchall()
     converted_count = 0
     skipped_count = 0
     for row in rows:
+        image_row = db.execute(
+            f"""
+            SELECT image_data
+            FROM {table_name}
+            WHERE {id_column} = ?
+            """,
+            (row["row_id"],),
+        ).fetchone()
+        if image_row is None:
+            skipped_count += 1
+            continue
+
         try:
-            image_data = storage_jpeg_from_image(row["image_data"])
+            image_data = storage_jpeg_from_image(image_row["image_data"])
         except ValueError:
             skipped_count += 1
             continue
@@ -1185,6 +1211,8 @@ def convert_image_rows_to_jpeg(db, table_name, id_column, hash_column=True):
                 (image_data, JPEG_STORAGE_MIME, row["row_id"]),
             )
         converted_count += 1
+        if converted_count % IMAGE_CONVERSION_COMMIT_INTERVAL == 0:
+            db.commit()
     return {"converted": converted_count, "skipped": skipped_count}
 
 

@@ -56,6 +56,26 @@ CONNECTION_VISIBLE_TAGS = {
     "friend": ("friends", "public"),
     "family": ("family", "friends", "public"),
 }
+PRIVACY_PREVIEW_OPTIONS = {
+    "friend": {
+        "mode": "friend",
+        "label": "Friend",
+        "description": "Friend connections can see friends and public items.",
+        "allowed_tags": CONNECTION_VISIBLE_TAGS["friend"],
+    },
+    "family": {
+        "mode": "family",
+        "label": "Family",
+        "description": "Family connections can see family, friends, and public items.",
+        "allowed_tags": CONNECTION_VISIBLE_TAGS["family"],
+    },
+    "public": {
+        "mode": "public",
+        "label": "All connections",
+        "description": "All accepted connections can see public items.",
+        "allowed_tags": ("public",),
+    },
+}
 PASSWORD_RESET_TTL = timedelta(hours=1)
 CSRF_SESSION_KEY = "_csrf_token"
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
@@ -175,11 +195,31 @@ def inject_tag_choices():
         except OSError:
             return 0
 
+    def privacy_preview():
+        return current_privacy_preview()
+
+    def preview_url(endpoint, **values):
+        preview = current_privacy_preview()
+        if preview is not None and "preview" not in values:
+            values["preview"] = preview["mode"]
+        return url_for(endpoint, **values)
+
+    def preview_mode_url(mode=None):
+        endpoint = request.endpoint or "timeline"
+        values = dict(request.view_args or {})
+        if mode:
+            values["preview"] = mode
+        return url_for(endpoint, **values)
+
     return {
         "tag_choices": TAG_CHOICES,
         "default_tag": DEFAULT_TAG,
         "privacy_labels": PRIVACY_AUDIENCE_LABELS,
         "privacy_help": PRIVACY_AUDIENCE_HELP,
+        "privacy_preview": privacy_preview(),
+        "privacy_preview_options": PRIVACY_PREVIEW_OPTIONS,
+        "preview_url": preview_url,
+        "preview_mode_url": preview_mode_url,
         "notification_count": notification_count,
         "static_version": static_version,
         "csrf_token": csrf_token,
@@ -1301,6 +1341,21 @@ def tags_visible_to_connection(tags, allowed_tags):
     if allowed_tags is None:
         return True
     return bool(set(parse_tags(tags)) & set(allowed_tags))
+
+
+def current_privacy_preview():
+    mode = (request.args.get("preview") or "").strip().lower()
+    option = PRIVACY_PREVIEW_OPTIONS.get(mode)
+    if option is None:
+        return None
+    return dict(option)
+
+
+def privacy_preview_allowed_tags(preview=None):
+    preview = preview if preview is not None else current_privacy_preview()
+    if preview is None:
+        return None
+    return preview["allowed_tags"]
 
 
 def reaction_payload(kind, item_id, counts=None, user_reaction=None):
@@ -4662,8 +4717,9 @@ def birthday():
 @birthday_required
 def timeline():
     db = get_db()
+    preview = current_privacy_preview()
     years = list(user_years())
-    year_counts = get_year_counts(db)
+    year_counts = get_year_counts(db, allowed_tags=privacy_preview_allowed_tags(preview))
     return render_template("timeline.html", years=years, year_counts=year_counts)
 
 
@@ -4727,7 +4783,8 @@ def timeline_map():
 def year_view(year):
     validate_year_month(year, 1)
     db = get_db()
-    month_counts = get_month_counts(db, year)
+    preview = current_privacy_preview()
+    month_counts = get_month_counts(db, year, allowed_tags=privacy_preview_allowed_tags(preview))
     months = [(index + 1, month) for index, month in enumerate(MONTH_NAMES)]
     return render_template(
         "months.html",
@@ -4879,12 +4936,14 @@ def month_view(year, month):
         )
         return redirect(url_for("month_view", year=year, month=month))
 
+    preview = current_privacy_preview()
     items = build_month_items(
         db,
         g.user["id"],
         year,
         month,
         lambda photo_id: url_for("photo_image", photo_id=photo_id),
+        privacy_preview_allowed_tags(preview),
     )
     return render_template(
         "month.html",
@@ -4995,6 +5054,7 @@ def create_text_entry(year, month):
 @birthday_required
 def timeline_items():
     db = get_db()
+    preview = current_privacy_preview()
     selected_year = request.args.get("year", type=int)
     if selected_year is not None:
         if selected_year not in user_years():
@@ -5005,6 +5065,7 @@ def timeline_items():
             g.user["id"],
             lambda photo_id: url_for("photo_image", photo_id=photo_id),
             selected_year,
+            privacy_preview_allowed_tags(preview),
             message_url_builder=lambda item_kind, item_id: url_for(
                 "timeline_item_messages",
                 item_kind=item_kind,

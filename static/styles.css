@@ -1557,6 +1557,42 @@ details.privacy-toggle-panel {
     font-weight: 900;
 }
 
+.privacy-preview-panel {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    margin-bottom: 18px;
+    border: 1px solid rgba(22, 109, 103, 0.26);
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: #f7fbfa;
+}
+
+.privacy-preview-panel > div {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+}
+
+.privacy-preview-panel strong {
+    color: var(--ink);
+    font-size: 0.96rem;
+}
+
+.privacy-preview-panel span {
+    color: var(--muted);
+    font-size: 0.88rem;
+    font-weight: 700;
+}
+
+.privacy-preview-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
 .photo-caption-view {
     margin: 6px 0 0;
     color: var(--ink);

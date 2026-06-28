@@ -67,9 +67,10 @@
 {% block content %}
 <section class="page-heading">
     <div>
-        <a class="back-link" href="{{ url_for('year_view', year=year) }}">{{ year }}</a>
+        <a class="back-link" href="{{ preview_url('year_view', year=year) }}">{{ year }}</a>
         <div class="month-heading-row">
             <h1>{{ month_name }}</h1>
+            {% if not privacy_preview %}
             <details class="local-settings-menu">
                 <summary aria-label="Local settings" title="Local settings">
                     <span class="local-settings-icon" aria-hidden="true">&#9881;</span>
@@ -95,13 +96,19 @@
                     </form>
                 </section>
             </details>
+            {% endif %}
         </div>
     </div>
-    <div class="page-actions">
-        <a class="button secondary" href="{{ url_for('export_month_pdf', year=year, month=month) }}">Export month PDF</a>
-    </div>
+    {% if not privacy_preview %}
+        <div class="page-actions">
+            <a class="button secondary" href="{{ url_for('export_month_pdf', year=year, month=month) }}">Export month PDF</a>
+        </div>
+    {% endif %}
 </section>
 
+{% include "_privacy_preview.html" %}
+
+{% if not privacy_preview %}
 <section class="month-entry-actions" aria-label="Add timeline entries">
     <details class="upload-panel form-toggle-panel">
         <summary class="form-toggle-summary">Add picture(s)</summary>
@@ -147,6 +154,7 @@
         </form>
     </details>
 </section>
+{% endif %}
 
 <section class="photo-section">
     <div class="photo-grid">
@@ -154,9 +162,9 @@
             {% if item["kind"] == "photo" %}
                 <article class="entry-card">
                     <button
-                        class="entry-thumb photo-thumb"
+                        class="entry-thumb {{ 'readonly-photo-thumb' if privacy_preview else 'photo-thumb' }}"
                         type="button"
-                        data-photo-id="{{ item['id'] }}"
+                        {% if not privacy_preview %}data-photo-id="{{ item['id'] }}"{% endif %}
                         data-entry-ref="photo-{{ item['id'] }}"
                         data-photo-title="{{ item['title'] or '' }}"
                         data-photo-display-title="{{ item['display_title'] }}"
@@ -169,6 +177,7 @@
                         data-privacy-label="{{ item['privacy_label'] }}"
                         data-privacy-help="{{ item['privacy_help'] }}"
                         data-full-src="{{ item['image_url'] }}"
+                        {% if privacy_preview %}data-messages-url="{{ url_for('photo_messages', photo_id=item['id']) }}"{% endif %}
                     >
                         <img src="{{ item['image_url'] }}" alt="{{ item['display_title'] }}" loading="lazy">
                         <span class="privacy-badge" title="{{ item['privacy_help'] }}">Visible: {{ item["privacy_label"] }}</span>
@@ -187,15 +196,18 @@
                         </div>
                     {% endif %}
                     {{ reaction_bar(item) }}
-                    {{ chapter_add_form(item) }}
+                    {% if not privacy_preview %}
+                        {{ chapter_add_form(item) }}
+                    {% endif %}
                 </article>
             {% else %}
                 <article class="entry-card">
                     <button
-                        class="entry-thumb text-thumb"
+                        class="entry-thumb text-thumb{% if privacy_preview %} readonly-text-thumb{% endif %}"
                         type="button"
-                        data-entry-id="{{ item['id'] }}"
+                        {% if not privacy_preview %}data-entry-id="{{ item['id'] }}"{% endif %}
                         data-entry-ref="text-{{ item['id'] }}"
+                        {% if privacy_preview %}data-entry-date="{{ item['display_date'] or '' }}" data-entry-body="{{ item['body'] }}"{% endif %}
                         data-location-name="{{ item['location_name'] or '' }}"
                         data-latitude="{{ item['latitude'] if item['latitude'] is not none else '' }}"
                         data-longitude="{{ item['longitude'] if item['longitude'] is not none else '' }}"
@@ -213,7 +225,9 @@
                         {% endif %}
                     </button>
                     {{ reaction_bar(item) }}
-                    {{ chapter_add_form(item) }}
+                    {% if not privacy_preview %}
+                        {{ chapter_add_form(item) }}
+                    {% endif %}
                 </article>
             {% endif %}
         {% else %}
@@ -222,6 +236,46 @@
     </div>
 </section>
 
+{% if privacy_preview %}
+<div class="modal" id="readonly-text-modal" hidden>
+    <div class="modal-backdrop" data-close-readonly-text-modal></div>
+    <section class="modal-panel text-modal-panel" role="dialog" aria-modal="true" aria-labelledby="readonly-text-modal-title">
+        <header class="modal-header">
+            <div>
+                <h2 id="readonly-text-modal-title">Text entry</h2>
+                <p id="readonly-text-modal-date" class="muted"></p>
+                <p id="readonly-text-privacy-summary" class="privacy-summary"></p>
+            </div>
+            <button class="icon-button" type="button" data-close-readonly-text-modal aria-label="Close popup">x</button>
+        </header>
+        <div class="text-modal-body">
+            <div id="readonly-text-entry-view" class="text-entry-view"></div>
+        </div>
+    </section>
+</div>
+
+<div class="modal" id="readonly-photo-modal" hidden>
+    <div class="modal-backdrop" data-close-readonly-photo-modal></div>
+    <section class="modal-panel photo-modal-panel" role="dialog" aria-modal="true" aria-labelledby="readonly-photo-modal-title">
+        <header class="modal-header">
+            <div>
+                <h2 id="readonly-photo-modal-title">Picture</h2>
+                <p id="readonly-photo-modal-date" class="muted"></p>
+                <p id="readonly-photo-caption-view" class="photo-caption-view"></p>
+                <p id="readonly-photo-privacy-summary" class="privacy-summary"></p>
+            </div>
+            <button class="icon-button" type="button" data-close-readonly-photo-modal aria-label="Close popup">x</button>
+        </header>
+        <div class="modal-body">
+            <img id="readonly-modal-image" alt="Selected timeline picture">
+            <aside class="message-panel readonly-message-panel">
+                <h3>Messages</h3>
+                <div id="readonly-message-list" class="message-list"></div>
+            </aside>
+        </div>
+    </section>
+</div>
+{% else %}
 <div class="modal" id="text-modal" hidden>
     <div class="modal-backdrop" data-close-text-modal></div>
     <section class="modal-panel text-modal-panel" role="dialog" aria-modal="true" aria-labelledby="text-modal-title">
@@ -311,4 +365,5 @@
         </div>
     </section>
 </div>
+{% endif %}
 {% endblock %}

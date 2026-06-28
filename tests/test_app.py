@@ -451,6 +451,63 @@ def test_chapter_items_can_be_reordered_with_json_api(client, helpers):
     assert bad_response.status_code == 400
 
 
+def test_privacy_preview_filters_owner_timeline_views(client, helpers):
+    helpers.create_user(client, "owner")
+    helpers.create_text(
+        client,
+        "private memory",
+        entry_date="2020-05-01",
+        tag="private",
+    )
+    helpers.create_text(
+        client,
+        "family memory",
+        entry_date="2020-05-02",
+        tag="family",
+    )
+    helpers.create_text(
+        client,
+        "friends memory",
+        entry_date="2020-05-03",
+        tag="friends",
+    )
+    helpers.create_text(
+        client,
+        "public memory",
+        entry_date="2020-05-04",
+        tag="public",
+    )
+
+    timeline = client.get("/timeline?preview=friend")
+    assert timeline.status_code == 200
+    assert b"Friend view" in timeline.data
+    assert b'href="/year/2020?preview=friend"' in timeline.data
+    assert b'<span class="count-badge">2</span>' in timeline.data
+
+    year = client.get("/year/2020?preview=public")
+    assert year.status_code == 200
+    assert b"All connections view" in year.data
+    assert b'href="/year/2020/5?preview=public"' in year.data
+    assert b'<span class="count-badge">1</span>' in year.data
+
+    friend_month = client.get("/year/2020/5?preview=friend")
+    assert friend_month.status_code == 200
+    assert b"friends memory" in friend_month.data
+    assert b"public memory" in friend_month.data
+    assert b"private memory" not in friend_month.data
+    assert b"family memory" not in friend_month.data
+    assert b"Add timeline entries" not in friend_month.data
+    assert b"readonly-text-modal" in friend_month.data
+
+    family_items = client.get("/api/timeline-items?year=2020&preview=family").get_json()
+    family_bodies = {item["body"] for item in family_items if item["kind"] == "text"}
+    assert family_bodies == {"family memory", "friends memory", "public memory"}
+
+    public_items = client.get("/api/timeline-items?year=2020&preview=public").get_json()
+    public_bodies = {item["body"] for item in public_items if item["kind"] == "text"}
+    assert public_bodies == {"public memory"}
+
+
 def test_timeline_search_finds_owned_content_types_and_excludes_other_users(app, client, helpers):
     helpers.create_user(client, "owner")
     helpers.upload_photo(

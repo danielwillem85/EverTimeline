@@ -2186,6 +2186,52 @@ details.privacy-toggle-panel {
     white-space: nowrap;
 }
 
+.timeline-search-list {
+    display: grid;
+    gap: 12px;
+}
+
+.timeline-search-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    background: #fff;
+}
+
+.timeline-search-main {
+    display: grid;
+    min-width: 0;
+    gap: 5px;
+}
+
+.timeline-search-main h2 {
+    overflow: hidden;
+    margin-bottom: 0;
+    color: var(--ink);
+    font-size: 1rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.timeline-search-main span:not(.status-badge) {
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 0.86rem;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.timeline-search-main p {
+    margin-bottom: 0;
+    color: var(--ink);
+    line-height: 1.4;
+}
+
 .message-form {
     min-height: 0;
 }
@@ -2342,7 +2388,8 @@ details.privacy-toggle-panel {
 
     .person-row,
     .request-card,
-    .activity-card {
+    .activity-card,
+    .timeline-search-card {
         grid-template-columns: 1fr;
         align-items: stretch;
     }
@@ -2350,8 +2397,14 @@ details.privacy-toggle-panel {
     .person-actions,
     .request-card .button,
     .activity-card .button,
+    .timeline-search-card .button,
     .inline-form {
         width: 100%;
+    }
+
+    .timeline-search-main h2,
+    .timeline-search-main span:not(.status-badge) {
+        white-space: normal;
     }
 
     .chapter-card,

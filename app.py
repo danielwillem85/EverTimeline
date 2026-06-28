@@ -357,6 +357,21 @@ def init_db():
                 UNIQUE (chapter_id, item_kind, item_id),
                 FOREIGN KEY (chapter_id) REFERENCES chapters (id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS chapter_invites (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chapter_id INTEGER NOT NULL,
+                inviter_id INTEGER NOT NULL,
+                recipient_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined')),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                responded_at TEXT,
+                UNIQUE (chapter_id, recipient_id),
+                CHECK (inviter_id <> recipient_id),
+                FOREIGN KEY (chapter_id) REFERENCES chapters (id) ON DELETE CASCADE,
+                FOREIGN KEY (inviter_id) REFERENCES users (id) ON DELETE CASCADE,
+                FOREIGN KEY (recipient_id) REFERENCES users (id) ON DELETE CASCADE
+            );
             """
         )
         ensure_user_profile_columns(db)
@@ -422,6 +437,18 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS chapter_items_chapter_position
             ON chapter_items (chapter_id, position, id)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS chapter_invites_recipient_status
+            ON chapter_invites (recipient_id, status, created_at)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS chapter_invites_chapter_status
+            ON chapter_invites (chapter_id, status, recipient_id)
             """
         )
         db.execute(
@@ -1387,6 +1414,22 @@ def get_timeline_item_for_reaction(item_kind, item_id):
     ):
         return item
 
+    shared_chapter = db.execute(
+        """
+        SELECT ci.id
+        FROM chapter_invites ci
+        JOIN chapter_items ch_item ON ch_item.chapter_id = ci.chapter_id
+        WHERE ci.recipient_id = ?
+          AND ci.status = 'accepted'
+          AND ch_item.item_kind = ?
+          AND ch_item.item_id = ?
+        LIMIT 1
+        """,
+        (g.user["id"], item_kind, item_id),
+    ).fetchone()
+    if shared_chapter is not None:
+        return item
+
     abort(404)
 
 
@@ -1734,7 +1777,8 @@ def chapter_cover_exists(db, chapter_id, item_kind, item_id):
     return row is not None
 
 
-def get_chapter_cover(db, chapter, image_url_builder):
+def get_chapter_cover(db, chapter, image_url_builder, owner_id=None):
+    owner_id = owner_id if owner_id is not None else g.user["id"]
     selected_kind = chapter["cover_item_kind"] if "cover_item_kind" in chapter.keys() else None
     selected_id = chapter["cover_item_id"] if "cover_item_id" in chapter.keys() else None
     row = None
@@ -1768,7 +1812,7 @@ def get_chapter_cover(db, chapter, image_url_builder):
             FROM photos
             WHERE id = ? AND user_id = ?
             """,
-            (row["item_id"], g.user["id"]),
+            (row["item_id"], owner_id),
         ).fetchone()
         if photo is None:
             return None
@@ -1784,7 +1828,7 @@ def get_chapter_cover(db, chapter, image_url_builder):
         FROM text_entries
         WHERE id = ? AND user_id = ?
         """,
-        (row["item_id"], g.user["id"]),
+        (row["item_id"], owner_id),
     ).fetchone()
     if entry is None:
         return None
@@ -1821,6 +1865,175 @@ def get_chapters_with_counts(db):
         )
         chapters.append(chapter)
     return chapters
+
+
+def accepted_connection_between(db, user_id, other_user_id):
+    return db.execute(
+        """
+        SELECT id, relation
+        FROM connection_requests
+        WHERE status = 'accepted'
+          AND (
+            (requester_id = ? AND recipient_id = ?)
+            OR (requester_id = ? AND recipient_id = ?)
+          )
+        ORDER BY responded_at DESC, created_at DESC, id DESC
+        LIMIT 1
+        """,
+        (user_id, other_user_id, other_user_id, user_id),
+    ).fetchone()
+
+
+def chapter_invites_for_chapter(db, chapter_id):
+    return db.execute(
+        """
+        SELECT
+            ci.*,
+            u.username,
+            u.first_name,
+            u.last_name,
+            u.email
+        FROM chapter_invites ci
+        JOIN users u ON u.id = ci.recipient_id
+        WHERE ci.chapter_id = ?
+        ORDER BY
+            CASE ci.status WHEN 'pending' THEN 0 WHEN 'accepted' THEN 1 ELSE 2 END,
+            lower(u.username) ASC
+        """,
+        (chapter_id,),
+    ).fetchall()
+
+
+def invitable_chapter_connections(db, chapter_id):
+    invited_ids = {
+        row["recipient_id"]
+        for row in db.execute(
+            "SELECT recipient_id FROM chapter_invites WHERE chapter_id = ?",
+            (chapter_id,),
+        ).fetchall()
+    }
+    return [
+        connection
+        for connection in get_accepted_connections(db)
+        if connection["id"] not in invited_ids
+    ]
+
+
+def get_incoming_chapter_invites(db):
+    rows = db.execute(
+        """
+        SELECT
+            ci.*,
+            c.title,
+            c.description,
+            u.username,
+            u.first_name,
+            u.last_name
+        FROM chapter_invites ci
+        JOIN chapters c ON c.id = ci.chapter_id
+        JOIN users u ON u.id = ci.inviter_id
+        WHERE ci.recipient_id = ? AND ci.status = 'pending'
+        ORDER BY ci.created_at ASC, ci.id ASC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    return [
+        {
+            **dict(row),
+            "inviter_name": user_full_name(row) or row["username"],
+        }
+        for row in rows
+    ]
+
+
+def get_shared_chapters(db):
+    rows = db.execute(
+        """
+        SELECT
+            ci.id AS invite_id,
+            ci.created_at AS invited_at,
+            c.*,
+            u.username,
+            u.first_name,
+            u.last_name
+        FROM chapter_invites ci
+        JOIN chapters c ON c.id = ci.chapter_id
+        JOIN users u ON u.id = c.user_id
+        WHERE ci.recipient_id = ? AND ci.status = 'accepted'
+        ORDER BY COALESCE(c.updated_at, ci.responded_at, ci.created_at) DESC, ci.id DESC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    chapters = []
+    for row in rows:
+        chapter = dict(row)
+        chapter["owner_name"] = user_full_name(row) or row["username"]
+        chapter["cover"] = get_chapter_cover(
+            db,
+            row,
+            lambda photo_id, chapter_id=row["id"]: url_for(
+                "shared_chapter_photo_image",
+                chapter_id=chapter_id,
+                photo_id=photo_id,
+            ),
+            owner_id=row["user_id"],
+        )
+        chapters.append(chapter)
+    return chapters
+
+
+def get_shared_chapter(chapter_id):
+    row = get_db().execute(
+        """
+        SELECT
+            ci.id AS invite_id,
+            c.*,
+            u.username,
+            u.first_name,
+            u.last_name
+        FROM chapter_invites ci
+        JOIN chapters c ON c.id = ci.chapter_id
+        JOIN users u ON u.id = c.user_id
+        WHERE ci.chapter_id = ?
+          AND ci.recipient_id = ?
+          AND ci.status = 'accepted'
+        """,
+        (chapter_id, g.user["id"]),
+    ).fetchone()
+    if row is None:
+        abort(404)
+    chapter = dict(row)
+    chapter["owner_name"] = user_full_name(row) or row["username"]
+    return chapter
+
+
+def shared_chapter_contains_item(db, chapter_id, item_kind, item_id, recipient_id=None):
+    recipient_id = recipient_id if recipient_id is not None else g.user["id"]
+    row = db.execute(
+        """
+        SELECT c.*
+        FROM chapter_invites ci
+        JOIN chapters c ON c.id = ci.chapter_id
+        JOIN chapter_items ch_item ON ch_item.chapter_id = c.id
+        WHERE ci.chapter_id = ?
+          AND ci.recipient_id = ?
+          AND ci.status = 'accepted'
+          AND ch_item.item_kind = ?
+          AND ch_item.item_id = ?
+        """,
+        (chapter_id, recipient_id, item_kind, item_id),
+    ).fetchone()
+    return row
+
+
+def get_shared_chapter_item_access(chapter_id, item_kind, item_id):
+    if item_kind not in ("photo", "text"):
+        abort(404)
+    db = get_db()
+    chapter = shared_chapter_contains_item(db, chapter_id, item_kind, item_id)
+    if chapter is None:
+        abort(404)
+    return chapter
 
 
 def get_owned_chapter(chapter_id):
@@ -1923,7 +2136,17 @@ def item_source_label(year, month):
     return f"{MONTH_NAMES[month - 1]} {year}"
 
 
-def build_chapter_items(db, chapter_id, image_url_builder, message_url_builder=None, can_message=False):
+def build_chapter_items(
+    db,
+    chapter_id,
+    image_url_builder,
+    message_url_builder=None,
+    can_message=False,
+    owner_id=None,
+    item_url_builder=None,
+    reaction_url_builder=None,
+):
+    owner_id = owner_id if owner_id is not None else g.user["id"]
     refs = db.execute(
         """
         SELECT id, item_kind, item_id, position
@@ -1948,7 +2171,7 @@ def build_chapter_items(db, chapter_id, image_url_builder, message_url_builder=N
             FROM photos
             WHERE user_id = ? AND id IN ({placeholders})
             """,
-            (g.user["id"], *photo_ids),
+            (owner_id, *photo_ids),
         ).fetchall()
         photo_map = {row["id"]: row for row in rows}
 
@@ -1961,12 +2184,12 @@ def build_chapter_items(db, chapter_id, image_url_builder, message_url_builder=N
             FROM text_entries
             WHERE user_id = ? AND id IN ({placeholders})
             """,
-            (g.user["id"], *text_ids),
+            (owner_id, *text_ids),
         ).fetchall()
         text_map = {row["id"]: row for row in rows}
 
-    photo_tags = load_tags_for_items(db, "photo", photo_ids, g.user["id"])
-    text_tags = load_tags_for_items(db, "text", text_ids, g.user["id"])
+    photo_tags = load_tags_for_items(db, "photo", photo_ids, owner_id)
+    text_tags = load_tags_for_items(db, "text", text_ids, owner_id)
     items = []
     for ref in refs:
         if ref["item_kind"] == "photo":
@@ -1975,6 +2198,11 @@ def build_chapter_items(db, chapter_id, image_url_builder, message_url_builder=N
                 continue
             tags = photo_tags.get(photo["id"], [])
             messages_url = message_url_builder("photo", photo["id"]) if message_url_builder else ""
+            item_url = (
+                item_url_builder("photo", photo["id"])
+                if item_url_builder
+                else timeline_item_link(owner_id, photo["year"], photo["month"], "photo", photo["id"])
+            )
             items.append(
                 {
                     "kind": "photo",
@@ -1987,7 +2215,7 @@ def build_chapter_items(db, chapter_id, image_url_builder, message_url_builder=N
                     "date_label": format_timeline_date_label(photo["year"], photo["month"], photo["photo_date"]),
                     "created_at": photo["created_at"],
                     "source_label": item_source_label(photo["year"], photo["month"]),
-                    "url": timeline_item_link(g.user["id"], photo["year"], photo["month"], "photo", photo["id"]),
+                    "url": item_url,
                     "image_url": image_url_builder(photo["id"]),
                     "caption": photo["caption"] or "",
                     "messages": load_messages_for_timeline_item(db, "photo", photo["id"]) if message_url_builder else [],
@@ -2005,6 +2233,11 @@ def build_chapter_items(db, chapter_id, image_url_builder, message_url_builder=N
                 continue
             tags = text_tags.get(entry["id"], [])
             messages_url = message_url_builder("text", entry["id"]) if message_url_builder else ""
+            item_url = (
+                item_url_builder("text", entry["id"])
+                if item_url_builder
+                else timeline_item_link(owner_id, entry["year"], entry["month"], "text", entry["id"])
+            )
             items.append(
                 {
                     "kind": "text",
@@ -2017,7 +2250,7 @@ def build_chapter_items(db, chapter_id, image_url_builder, message_url_builder=N
                     "date_label": format_timeline_date_label(entry["year"], entry["month"], entry["entry_date"]),
                     "created_at": entry["created_at"],
                     "source_label": item_source_label(entry["year"], entry["month"]),
-                    "url": timeline_item_link(g.user["id"], entry["year"], entry["month"], "text", entry["id"]),
+                    "url": item_url,
                     "body": entry["body"],
                     "messages": load_messages_for_timeline_item(db, "text", entry["id"]) if message_url_builder else [],
                     "messages_url": messages_url,
@@ -2028,7 +2261,11 @@ def build_chapter_items(db, chapter_id, image_url_builder, message_url_builder=N
                     "title": "Text entry",
                 }
             )
-    return attach_reactions(db, items)
+    attach_reactions(db, items)
+    if reaction_url_builder:
+        for item in items:
+            item["reactions"]["reaction_url"] = reaction_url_builder(item["kind"], item["id"])
+    return items
 
 
 def get_unread_message_notifications(db):
@@ -2565,8 +2802,18 @@ def get_notification_count(db):
         (g.user["id"],),
     ).fetchone()
     connection_count = row["notification_count"] if row is not None else 0
+    row = db.execute(
+        """
+        SELECT COUNT(*) AS invite_count
+        FROM chapter_invites
+        WHERE recipient_id = ? AND status = 'pending'
+        """,
+        (g.user["id"],),
+    ).fetchone()
+    chapter_invite_count = row["invite_count"] if row is not None else 0
     return (
         connection_count
+        + chapter_invite_count
         + get_unread_message_notification_count(db)
         + get_unread_reaction_notification_count(db)
     )
@@ -4791,7 +5038,11 @@ def chapters():
         flash("Chapter created.", "success")
         return redirect(url_for("chapter_detail", chapter_id=cursor.lastrowid))
 
-    return render_template("chapters.html", chapters=get_chapters_with_counts(db))
+    return render_template(
+        "chapters.html",
+        chapters=get_chapters_with_counts(db),
+        shared_chapters=get_shared_chapters(db),
+    )
 
 
 @app.route("/chapters/<int:chapter_id>")
@@ -4817,6 +5068,8 @@ def chapter_detail(chapter_id):
         chapter=chapter,
         items=items,
         cover_options=items,
+        invite_connections=invitable_chapter_connections(db, chapter_id),
+        chapter_invites=chapter_invites_for_chapter(db, chapter_id),
         selected_cover_ref=(
             f"{chapter['cover_item_kind']}:{chapter['cover_item_id']}"
             if chapter.get("cover_item_kind") and chapter.get("cover_item_id")
@@ -4867,6 +5120,133 @@ def update_chapter_settings(chapter_id):
     db.commit()
     flash("Chapter settings saved.", "success")
     return redirect(url_for("chapter_detail", chapter_id=chapter_id))
+
+
+@app.route("/chapters/<int:chapter_id>/invites", methods=("POST",))
+@birthday_required
+def create_chapter_invite(chapter_id):
+    db = get_db()
+    get_owned_chapter(chapter_id)
+    recipient_id = request.form.get("recipient_id", type=int)
+    if recipient_id is None or recipient_id == g.user["id"]:
+        flash("Choose a connection to invite.", "error")
+        return redirect(url_for("chapter_detail", chapter_id=chapter_id))
+
+    recipient = db.execute(
+        """
+        SELECT id
+        FROM users
+        WHERE id = ?
+        """,
+        (recipient_id,),
+    ).fetchone()
+    if recipient is None or accepted_connection_between(db, g.user["id"], recipient_id) is None:
+        flash("Invite an accepted connection to share this chapter.", "error")
+        return redirect(url_for("chapter_detail", chapter_id=chapter_id))
+
+    existing = db.execute(
+        """
+        SELECT id, status
+        FROM chapter_invites
+        WHERE chapter_id = ? AND recipient_id = ?
+        """,
+        (chapter_id, recipient_id),
+    ).fetchone()
+    if existing is not None:
+        flash("That connection already has an invite for this chapter.", "error")
+        return redirect(url_for("chapter_detail", chapter_id=chapter_id))
+
+    db.execute(
+        """
+        INSERT INTO chapter_invites (chapter_id, inviter_id, recipient_id)
+        VALUES (?, ?, ?)
+        """,
+        (chapter_id, g.user["id"], recipient_id),
+    )
+    db.commit()
+    flash("Chapter invite sent.", "success")
+    return redirect(url_for("chapter_detail", chapter_id=chapter_id))
+
+
+@app.route("/chapters/<int:chapter_id>/invites/<int:invite_id>/revoke", methods=("POST",))
+@birthday_required
+def revoke_chapter_invite(chapter_id, invite_id):
+    db = get_db()
+    get_owned_chapter(chapter_id)
+    invite = db.execute(
+        """
+        SELECT id
+        FROM chapter_invites
+        WHERE id = ? AND chapter_id = ?
+        """,
+        (invite_id, chapter_id),
+    ).fetchone()
+    if invite is None:
+        abort(404)
+
+    db.execute(
+        "DELETE FROM chapter_invites WHERE id = ? AND chapter_id = ?",
+        (invite_id, chapter_id),
+    )
+    db.commit()
+    flash("Chapter invite removed.", "success")
+    return redirect(url_for("chapter_detail", chapter_id=chapter_id))
+
+
+@app.route("/chapter-invites/<int:invite_id>/accept", methods=("POST",))
+@birthday_required
+def accept_chapter_invite(invite_id):
+    db = get_db()
+    invite = db.execute(
+        """
+        SELECT *
+        FROM chapter_invites
+        WHERE id = ? AND recipient_id = ? AND status = 'pending'
+        """,
+        (invite_id, g.user["id"]),
+    ).fetchone()
+    if invite is None:
+        abort(404)
+
+    db.execute(
+        """
+        UPDATE chapter_invites
+        SET status = 'accepted', responded_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (invite_id,),
+    )
+    db.commit()
+    flash("Chapter invite accepted.", "success")
+    return redirect(url_for("shared_chapter_detail", chapter_id=invite["chapter_id"]))
+
+
+@app.route("/chapter-invites/<int:invite_id>/decline", methods=("POST",))
+@birthday_required
+def decline_chapter_invite(invite_id):
+    db = get_db()
+    invite = db.execute(
+        """
+        SELECT id
+        FROM chapter_invites
+        WHERE id = ? AND recipient_id = ? AND status = 'pending'
+        """,
+        (invite_id, g.user["id"]),
+    ).fetchone()
+    if invite is None:
+        abort(404)
+
+    db.execute(
+        """
+        UPDATE chapter_invites
+        SET status = 'declined', responded_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (invite_id,),
+    )
+    db.commit()
+    flash("Chapter invite declined.", "success")
+    return redirect(url_for("notifications"))
 
 
 @app.route("/chapters/<int:chapter_id>/delete", methods=("POST",))
@@ -5023,6 +5403,128 @@ def chapter_items(chapter_id):
             can_message=True,
         )
     )
+
+
+@app.route("/shared/chapters/<int:chapter_id>")
+@birthday_required
+def shared_chapter_detail(chapter_id):
+    db = get_db()
+    chapter = get_shared_chapter(chapter_id)
+    items = build_chapter_items(
+        db,
+        chapter_id,
+        lambda photo_id: url_for(
+            "shared_chapter_photo_image",
+            chapter_id=chapter_id,
+            photo_id=photo_id,
+        ),
+        owner_id=chapter["user_id"],
+        item_url_builder=lambda item_kind, item_id: url_for(
+            "shared_chapter_detail",
+            chapter_id=chapter_id,
+            _anchor=f"{item_kind}-{item_id}",
+        ),
+        reaction_url_builder=lambda item_kind, item_id: url_for(
+            "shared_chapter_item_reaction",
+            chapter_id=chapter_id,
+            item_kind=item_kind,
+            item_id=item_id,
+        ),
+    )
+    chapter["cover"] = get_chapter_cover(
+        db,
+        chapter,
+        lambda photo_id: url_for(
+            "shared_chapter_photo_image",
+            chapter_id=chapter_id,
+            photo_id=photo_id,
+        ),
+        owner_id=chapter["user_id"],
+    )
+    return render_template(
+        "shared_chapter.html",
+        chapter=chapter,
+        items=items,
+    )
+
+
+@app.route("/shared/chapters/<int:chapter_id>/photo/<int:photo_id>/image")
+@birthday_required
+def shared_chapter_photo_image(chapter_id, photo_id):
+    chapter = get_shared_chapter_item_access(chapter_id, "photo", photo_id)
+    photo = get_db().execute(
+        """
+        SELECT image_data, mime_type
+        FROM photos
+        WHERE id = ? AND user_id = ?
+        """,
+        (photo_id, chapter["user_id"]),
+    ).fetchone()
+    if photo is None:
+        abort(404)
+    return Response(photo["image_data"], mimetype=photo["mime_type"])
+
+
+@app.route("/shared/chapters/<int:chapter_id>/api/items")
+@birthday_required
+def shared_chapter_items(chapter_id):
+    db = get_db()
+    chapter = get_shared_chapter(chapter_id)
+    return jsonify(
+        build_chapter_items(
+            db,
+            chapter_id,
+            lambda photo_id: url_for(
+                "shared_chapter_photo_image",
+                chapter_id=chapter_id,
+                photo_id=photo_id,
+            ),
+            message_url_builder=lambda item_kind, item_id: url_for(
+                "shared_chapter_item_messages",
+                chapter_id=chapter_id,
+                item_kind=item_kind,
+                item_id=item_id,
+            ),
+            can_message=True,
+            owner_id=chapter["user_id"],
+            item_url_builder=lambda item_kind, item_id: url_for(
+                "shared_chapter_detail",
+                chapter_id=chapter_id,
+                _anchor=f"{item_kind}-{item_id}",
+            ),
+            reaction_url_builder=lambda item_kind, item_id: url_for(
+                "shared_chapter_item_reaction",
+                chapter_id=chapter_id,
+                item_kind=item_kind,
+                item_id=item_id,
+            ),
+        )
+    )
+
+
+@app.route("/shared/chapters/<int:chapter_id>/api/timeline-item/<item_kind>/<int:item_id>/messages", methods=("GET", "POST"))
+@birthday_required
+def shared_chapter_item_messages(chapter_id, item_kind, item_id):
+    get_shared_chapter_item_access(chapter_id, item_kind, item_id)
+    db = get_db()
+
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or request.form
+        body = (payload.get("body") or "").strip()
+        if not body:
+            return jsonify({"error": "Message cannot be empty."}), 400
+
+        message = create_timeline_item_message(db, item_kind, item_id, body)
+        return jsonify(message), 201
+
+    return jsonify(load_messages_for_timeline_item(db, item_kind, item_id))
+
+
+@app.route("/shared/chapters/<int:chapter_id>/api/timeline-item/<item_kind>/<int:item_id>/reaction", methods=("GET", "PUT", "DELETE"))
+@birthday_required
+def shared_chapter_item_reaction(chapter_id, item_kind, item_id):
+    get_shared_chapter_item_access(chapter_id, item_kind, item_id)
+    return timeline_item_reaction_response(get_db(), item_kind, item_id)
 
 
 @app.route("/connections/<int:connection_id>/timeline")
@@ -5191,6 +5693,7 @@ def notifications():
     return render_template(
         "notifications.html",
         incoming_requests=get_incoming_connection_requests(db),
+        chapter_invites=get_incoming_chapter_invites(db),
         message_notifications=message_notifications,
         reaction_notifications=reaction_notifications,
         feed_items=get_activity_feed(db),
@@ -5646,6 +6149,12 @@ def timeline_item_messages(item_kind, item_id):
 def timeline_item_reaction(item_kind, item_id):
     get_timeline_item_for_reaction(item_kind, item_id)
     db = get_db()
+    return timeline_item_reaction_response(db, item_kind, item_id)
+
+
+def timeline_item_reaction_response(db, item_kind, item_id):
+    if item_kind not in ("photo", "text"):
+        abort(404)
 
     if request.method == "PUT":
         payload = request.get_json(silent=True) or request.form

@@ -45,9 +45,9 @@
                     {% if request.endpoint in ('timeline', 'timeline_search', 'timeline_map', 'year_view', 'month_view', 'birthday') %}aria-current="page"{% endif %}
                 >Timeline</a>
                 <a
-                    class="topbar-link{% if request.endpoint in ('chapters', 'chapter_detail') %} is-active{% endif %}"
+                    class="topbar-link{% if request.endpoint in ('chapters', 'chapter_detail', 'shared_chapter_detail') %} is-active{% endif %}"
                     href="{{ url_for('chapters') }}"
-                    {% if request.endpoint in ('chapters', 'chapter_detail') %}aria-current="page"{% endif %}
+                    {% if request.endpoint in ('chapters', 'chapter_detail', 'shared_chapter_detail') %}aria-current="page"{% endif %}
                 >Chapters</a>
                 <a
                     class="topbar-link{% if request.endpoint == 'connections' %} is-active{% endif %}"

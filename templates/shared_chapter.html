@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% from "_reactions.html" import reaction_bar %}
+
+{% block title %}{{ chapter["title"] }} - Shared chapter - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('chapters') }}">Chapters</a>
+        <div class="chapter-title-row">
+            <h1>{{ chapter["title"] }}</h1>
+            <span class="status-badge">Shared by {{ chapter["owner_name"] }}</span>
+        </div>
+        {% if chapter["description"] %}
+            <p class="muted">{{ chapter["description"] }}</p>
+        {% endif %}
+    </div>
+</section>
+
+<section class="chapter-hero-panel shared-chapter-hero">
+    <div class="chapter-hero-cover">
+        {% if chapter["cover"] %}
+            {% if chapter["cover"]["kind"] == "photo" %}
+                <img src="{{ chapter['cover']['image_url'] }}" alt="{{ chapter['cover']['label'] }}" loading="lazy">
+            {% else %}
+                <div class="chapter-hero-text-cover">{{ chapter["cover"]["body"] }}</div>
+            {% endif %}
+        {% else %}
+            <div class="chapter-hero-empty-cover">No cover</div>
+        {% endif %}
+    </div>
+    <div class="shared-chapter-summary">
+        <h2>Shared album</h2>
+        <p>Only the items in this chapter are shared with you.</p>
+    </div>
+</section>
+
+{% set carousel_items_url = url_for('shared_chapter_items', chapter_id=chapter['id']) %}
+{% set carousel_skip_tag_filter = true %}
+<section class="timeline-frame year-carousel-actions" aria-label="Shared chapter playback">
+    <button class="button primary view-all-button" id="view-all-button" type="button" data-carousel-title="{{ chapter['title'] }}">Play chapter</button>
+</section>
+
+<section class="connection-section">
+    <h2>Album sequence</h2>
+    {% if items %}
+        <div class="chapter-sequence shared-chapter-sequence">
+            {% for item in items %}
+                <article class="chapter-sequence-item" id="{{ item['kind'] }}-{{ item['id'] }}">
+                    <div class="chapter-position">{{ loop.index }}</div>
+                    <div class="chapter-preview-wrap">
+                        <div class="chapter-preview">
+                            {% if item["kind"] == "photo" %}
+                                <img src="{{ item['image_url'] }}" alt="{{ item['title'] }}" loading="lazy">
+                            {% else %}
+                                <div class="chapter-text-preview">{{ item["body"] }}</div>
+                            {% endif %}
+                        </div>
+                        {{ reaction_bar(item, "chapter-reactions") }}
+                    </div>
+                    <div class="chapter-item-main">
+                        <strong>{{ item["title"] }}</strong>
+                        <span>{{ item["date_label"] }} - {{ item["source_label"] }}</span>
+                        {% if item["kind"] == "photo" and item["caption"] %}
+                            <p>{{ item["caption"] }}</p>
+                        {% endif %}
+                        {% if item["kind"] == "text" %}
+                            <p>{{ item["body"] }}</p>
+                        {% endif %}
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty-state">This shared chapter has no items yet.</p>
+    {% endif %}
+</section>
+
+{% include "carousel_modal.html" %}
+{% endblock %}

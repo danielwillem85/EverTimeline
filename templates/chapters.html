@@ -45,6 +45,41 @@
 </section>
 
 <section class="connection-section">
+    <h2>Shared with you</h2>
+    {% if shared_chapters %}
+        <div class="chapter-grid">
+            {% for chapter in shared_chapters %}
+                <article class="chapter-card">
+                    <div class="chapter-card-cover">
+                        {% if chapter["cover"] %}
+                            {% if chapter["cover"]["kind"] == "photo" %}
+                                <img src="{{ chapter['cover']['image_url'] }}" alt="{{ chapter['cover']['label'] }}" loading="lazy">
+                            {% else %}
+                                <div class="chapter-card-text-cover">{{ chapter["cover"]["body"] }}</div>
+                            {% endif %}
+                        {% else %}
+                            <div class="chapter-card-empty-cover">No cover</div>
+                        {% endif %}
+                    </div>
+                    <div class="chapter-card-main">
+                        <h3>{{ chapter["title"] }}</h3>
+                        {% if chapter["description"] %}
+                            <p>{{ chapter["description"] }}</p>
+                        {% endif %}
+                        <span>From {{ chapter["owner_name"] }}</span>
+                    </div>
+                    <div class="chapter-card-actions">
+                        <a class="button primary small" href="{{ url_for('shared_chapter_detail', chapter_id=chapter['id']) }}">Open</a>
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty-state">No shared chapters yet.</p>
+    {% endif %}
+</section>
+
+<section class="connection-section">
     <h2>Your chapters</h2>
     {% if chapters %}
         <div class="chapter-grid">

@@ -2239,6 +2239,45 @@ details.privacy-toggle-panel {
     max-height: 140px;
 }
 
+.chapter-invite-form {
+    display: grid;
+    grid-template-columns: minmax(220px, 360px) auto;
+    align-items: end;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.chapter-invite-list {
+    display: grid;
+    gap: 10px;
+}
+
+.chapter-invite-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    background: #fff;
+}
+
+.chapter-invite-card div {
+    display: grid;
+    min-width: 0;
+    gap: 4px;
+}
+
+.chapter-invite-card span {
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 0.84rem;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .chapter-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -2354,6 +2393,25 @@ details.privacy-toggle-panel {
     border-radius: 8px;
     background: var(--surface);
     box-shadow: var(--shadow);
+}
+
+.shared-chapter-hero {
+    align-items: stretch;
+}
+
+.shared-chapter-summary {
+    display: grid;
+    align-content: center;
+    gap: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+    background: #fff;
+}
+
+.shared-chapter-summary h2,
+.shared-chapter-summary p {
+    margin-bottom: 0;
 }
 
 .chapter-hero-cover {
@@ -2959,7 +3017,8 @@ details.privacy-toggle-panel {
     .tags-form,
     .location-form,
     .privacy-bulk-form,
-    .chapter-form {
+    .chapter-form,
+    .chapter-invite-form {
         grid-template-columns: 1fr;
     }
 
@@ -2971,7 +3030,8 @@ details.privacy-toggle-panel {
     .request-card,
     .activity-card,
     .timeline-search-card,
-    .map-place-card {
+    .map-place-card,
+    .chapter-invite-card {
         grid-template-columns: 1fr;
         align-items: stretch;
     }
@@ -2981,6 +3041,7 @@ details.privacy-toggle-panel {
     .activity-card .button,
     .timeline-search-card .button,
     .map-place-card .button,
+    .chapter-invite-card .button,
     .inline-form {
         width: 100%;
     }
@@ -2988,7 +3049,8 @@ details.privacy-toggle-panel {
     .timeline-search-main h2,
     .timeline-search-main span:not(.status-badge),
     .map-place-main span:not(.status-badge),
-    .map-place-main small {
+    .map-place-main small,
+    .chapter-invite-card span {
         white-space: normal;
     }
 

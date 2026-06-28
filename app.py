@@ -377,6 +377,22 @@ def init_db():
                 FOREIGN KEY (person_id) REFERENCES people (id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS saved_timeline_views (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                query_text TEXT NOT NULL DEFAULT '',
+                item_kind TEXT NOT NULL DEFAULT '' CHECK (item_kind IN ('', 'photo', 'text')),
+                people_text TEXT NOT NULL DEFAULT '',
+                location_text TEXT NOT NULL DEFAULT '',
+                privacy_tag TEXT NOT NULL DEFAULT '',
+                date_start TEXT NOT NULL DEFAULT '',
+                date_end TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS photo_import_batches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
@@ -547,6 +563,12 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS text_entry_people_person
             ON text_entry_people (person_id, entry_id)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS saved_timeline_views_user_updated
+            ON saved_timeline_views (user_id, updated_at, created_at)
             """
         )
         db.execute(
@@ -3838,6 +3860,312 @@ def search_timeline_content(db, query):
     return results[:80]
 
 
+COLLECTION_KIND_CHOICES = ("", "photo", "text")
+
+
+def normalize_collection_date(value):
+    text = (value or "").strip()
+    if not text:
+        return ""
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        raise ValueError("Choose valid collection dates.")
+
+
+def collection_filters_from_source(source):
+    item_kind = (source.get("item_kind") or "").strip().lower()
+    if item_kind not in COLLECTION_KIND_CHOICES:
+        item_kind = ""
+    privacy_tag = normalize_tag_choice(source.get("privacy_tag", ""))
+
+    date_start = normalize_collection_date(source.get("date_start", ""))
+    date_end = normalize_collection_date(source.get("date_end", ""))
+    if date_start and date_end and date_start > date_end:
+        raise ValueError("Start date must be before end date.")
+
+    return {
+        "q": " ".join((source.get("q") or source.get("query_text") or "").strip().split())[:200],
+        "item_kind": item_kind,
+        "people": people_to_text(source.get("people") or source.get("people_text") or ""),
+        "location": " ".join((source.get("location") or source.get("location_text") or "").strip().split())[:160],
+        "privacy_tag": privacy_tag,
+        "date_start": date_start,
+        "date_end": date_end,
+    }
+
+
+def collection_filters_have_values(filters):
+    return any(filters.get(key) for key in ("q", "item_kind", "people", "location", "privacy_tag", "date_start", "date_end"))
+
+
+def collection_query_values(filters):
+    values = {}
+    for key, value in filters.items():
+        if value:
+            values[key] = value
+    return values
+
+
+def saved_view_filters(row):
+    return {
+        "q": row["query_text"],
+        "item_kind": row["item_kind"],
+        "people": row["people_text"],
+        "location": row["location_text"],
+        "privacy_tag": row["privacy_tag"],
+        "date_start": row["date_start"],
+        "date_end": row["date_end"],
+    }
+
+
+def collection_view_payload(row):
+    filters = saved_view_filters(row)
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "filters": filters,
+        "url": url_for("timeline_collections", **collection_query_values(filters)),
+    }
+
+
+def get_saved_collection_view(db, view_id):
+    row = db.execute(
+        """
+        SELECT *
+        FROM saved_timeline_views
+        WHERE id = ? AND user_id = ?
+        """,
+        (view_id, g.user["id"]),
+    ).fetchone()
+    if row is None:
+        abort(404)
+    return row
+
+
+def load_saved_collection_views(db):
+    rows = db.execute(
+        """
+        SELECT *
+        FROM saved_timeline_views
+        WHERE user_id = ?
+        ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    return [collection_view_payload(row) for row in rows]
+
+
+def collection_item_date_expr(table_alias, date_column):
+    return f"COALESCE({table_alias}.{date_column}, printf('%04d-%02d-01', {table_alias}.year, {table_alias}.month))"
+
+
+def add_people_collection_conditions(conditions, params, kind, table_alias, people):
+    join_table, id_column = person_join_for_kind(kind)
+    item_id_column = f"{table_alias}.id"
+    user_id_column = f"{table_alias}.user_id"
+    for person in parse_people(people):
+        conditions.append(
+            f"""
+            EXISTS (
+                SELECT 1
+                FROM {join_table} person_join
+                JOIN people pe ON pe.id = person_join.person_id
+                WHERE person_join.{id_column} = {item_id_column}
+                  AND pe.user_id = {user_id_column}
+                  AND lower(pe.name) LIKE ?
+            )
+            """
+        )
+        params.append(f"%{person.lower()}%")
+
+
+def add_privacy_collection_condition(conditions, params, kind, table_alias, privacy_tag):
+    if not privacy_tag:
+        return
+    join_table, id_column = tag_join_for_kind(kind)
+    conditions.append(
+        f"""
+        EXISTS (
+            SELECT 1
+            FROM {join_table} tag_join
+            JOIN tags t ON t.id = tag_join.tag_id
+            WHERE tag_join.{id_column} = {table_alias}.id
+              AND t.user_id = {table_alias}.user_id
+              AND t.name = ?
+        )
+        """
+    )
+    params.append(privacy_tag)
+
+
+def collection_item_matches_query_clause(kind, table_alias):
+    if kind == "photo":
+        return f"""
+        (
+            lower(COALESCE({table_alias}.original_filename, '')) LIKE ?
+            OR lower(COALESCE({table_alias}.title, '')) LIKE ?
+            OR lower(COALESCE({table_alias}.caption, '')) LIKE ?
+            OR lower(COALESCE({table_alias}.photo_date, '')) LIKE ?
+            OR lower(COALESCE({table_alias}.location_name, '')) LIKE ?
+            OR CAST({table_alias}.year AS TEXT) LIKE ?
+            OR printf('%04d-%02d', {table_alias}.year, {table_alias}.month) LIKE ?
+            OR EXISTS (
+                SELECT 1
+                FROM photo_people pp
+                JOIN people pe ON pe.id = pp.person_id
+                WHERE pp.photo_id = {table_alias}.id
+                  AND pe.user_id = {table_alias}.user_id
+                  AND lower(pe.name) LIKE ?
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM messages m
+                WHERE m.photo_id = {table_alias}.id
+                  AND lower(m.body) LIKE ?
+            )
+        )
+        """
+    return f"""
+    (
+        lower({table_alias}.body) LIKE ?
+        OR lower(COALESCE({table_alias}.entry_date, '')) LIKE ?
+        OR lower(COALESCE({table_alias}.location_name, '')) LIKE ?
+        OR CAST({table_alias}.year AS TEXT) LIKE ?
+        OR printf('%04d-%02d', {table_alias}.year, {table_alias}.month) LIKE ?
+        OR EXISTS (
+            SELECT 1
+            FROM text_entry_people tep
+            JOIN people pe ON pe.id = tep.person_id
+            WHERE tep.entry_id = {table_alias}.id
+              AND pe.user_id = {table_alias}.user_id
+              AND lower(pe.name) LIKE ?
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM text_entry_messages tem
+            WHERE tem.entry_id = {table_alias}.id
+              AND lower(tem.body) LIKE ?
+        )
+    )
+    """
+
+
+def search_collection_items(db, filters):
+    results = []
+
+    if filters["item_kind"] in ("", "photo"):
+        conditions = ["p.user_id = ?"]
+        params = [g.user["id"]]
+        if filters["q"]:
+            pattern = f"%{filters['q'].lower()}%"
+            conditions.append(collection_item_matches_query_clause("photo", "p"))
+            params.extend([pattern] * 9)
+        if filters["location"]:
+            conditions.append("lower(COALESCE(p.location_name, '')) LIKE ?")
+            params.append(f"%{filters['location'].lower()}%")
+        if filters["date_start"]:
+            conditions.append(f"{collection_item_date_expr('p', 'photo_date')} >= ?")
+            params.append(filters["date_start"])
+        if filters["date_end"]:
+            conditions.append(f"{collection_item_date_expr('p', 'photo_date')} <= ?")
+            params.append(filters["date_end"])
+        add_people_collection_conditions(conditions, params, "photo", "p", filters["people"])
+        add_privacy_collection_condition(conditions, params, "photo", "p", filters["privacy_tag"])
+        photo_rows = db.execute(
+            f"""
+            SELECT p.id, p.year, p.month, p.original_filename, p.title, p.caption, p.photo_date,
+                   p.location_name, p.latitude, p.longitude, p.created_at
+            FROM photos p
+            WHERE {" AND ".join(conditions)}
+            ORDER BY {collection_item_date_expr('p', 'photo_date')} DESC, p.id DESC
+            LIMIT 80
+            """,
+            tuple(params),
+        ).fetchall()
+        photo_tags = load_tags_for_items(db, "photo", [row["id"] for row in photo_rows])
+        photo_people = load_people_for_items(db, "photo", [row["id"] for row in photo_rows])
+        for row in photo_rows:
+            tags = photo_tags.get(row["id"], [])
+            people = photo_people.get(row["id"], [])
+            results.append(
+                {
+                    "kind": "photo",
+                    "id": row["id"],
+                    "year": row["year"],
+                    "month": row["month"],
+                    "title": photo_display_title(row),
+                    "preview": row["caption"] or row["original_filename"] or "Photo",
+                    "date_label": format_timeline_date_label(row["year"], row["month"], row["photo_date"]),
+                    "display_date": row["photo_date"],
+                    "location_name": row["location_name"] or "",
+                    "tags": tags,
+                    "tags_text": tags_to_text(tags),
+                    **people_payload(people),
+                    **privacy_payload_for_tags(tags),
+                    "url": timeline_item_link(g.user["id"], row["year"], row["month"], "photo", row["id"]),
+                }
+            )
+
+    if filters["item_kind"] in ("", "text"):
+        conditions = ["te.user_id = ?"]
+        params = [g.user["id"]]
+        if filters["q"]:
+            pattern = f"%{filters['q'].lower()}%"
+            conditions.append(collection_item_matches_query_clause("text", "te"))
+            params.extend([pattern] * 7)
+        if filters["location"]:
+            conditions.append("lower(COALESCE(te.location_name, '')) LIKE ?")
+            params.append(f"%{filters['location'].lower()}%")
+        if filters["date_start"]:
+            conditions.append(f"{collection_item_date_expr('te', 'entry_date')} >= ?")
+            params.append(filters["date_start"])
+        if filters["date_end"]:
+            conditions.append(f"{collection_item_date_expr('te', 'entry_date')} <= ?")
+            params.append(filters["date_end"])
+        add_people_collection_conditions(conditions, params, "text", "te", filters["people"])
+        add_privacy_collection_condition(conditions, params, "text", "te", filters["privacy_tag"])
+        text_rows = db.execute(
+            f"""
+            SELECT te.id, te.year, te.month, te.body, te.entry_date,
+                   te.location_name, te.latitude, te.longitude, te.created_at, te.updated_at
+            FROM text_entries te
+            WHERE {" AND ".join(conditions)}
+            ORDER BY {collection_item_date_expr('te', 'entry_date')} DESC, te.id DESC
+            LIMIT 80
+            """,
+            tuple(params),
+        ).fetchall()
+        text_tags = load_tags_for_items(db, "text", [row["id"] for row in text_rows])
+        text_people = load_people_for_items(db, "text", [row["id"] for row in text_rows])
+        for row in text_rows:
+            tags = text_tags.get(row["id"], [])
+            people = text_people.get(row["id"], [])
+            results.append(
+                {
+                    "kind": "text",
+                    "id": row["id"],
+                    "year": row["year"],
+                    "month": row["month"],
+                    "title": "Text entry",
+                    "preview": row["body"],
+                    "date_label": format_timeline_date_label(row["year"], row["month"], row["entry_date"]),
+                    "display_date": row["entry_date"],
+                    "location_name": row["location_name"] or "",
+                    "tags": tags,
+                    "tags_text": tags_to_text(tags),
+                    **people_payload(people),
+                    **privacy_payload_for_tags(tags),
+                    "url": timeline_item_link(g.user["id"], row["year"], row["month"], "text", row["id"]),
+                }
+            )
+
+    results.sort(key=timeline_item_sort_key)
+    return results[:120]
+
+
 def build_timeline_map_items(db):
     photo_rows = db.execute(
         """
@@ -5693,6 +6021,77 @@ def timeline_search():
         results=search_timeline_content(db, query),
         has_query=bool(query),
     )
+
+
+@app.route("/timeline/collections", methods=("GET", "POST"))
+@birthday_required
+def timeline_collections():
+    db = get_db()
+    try:
+        filters = collection_filters_from_source(request.form if request.method == "POST" else request.args)
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("timeline_collections"))
+
+    if request.method == "POST":
+        title = " ".join((request.form.get("title") or "").strip().split())[:120]
+        if not title:
+            flash("Name the saved view.", "error")
+            return redirect(url_for("timeline_collections", **collection_query_values(filters)))
+        if not collection_filters_have_values(filters):
+            flash("Choose at least one filter before saving a view.", "error")
+            return redirect(url_for("timeline_collections"))
+
+        db.execute(
+            """
+            INSERT INTO saved_timeline_views (
+                user_id, title, query_text, item_kind, people_text,
+                location_text, privacy_tag, date_start, date_end
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                g.user["id"],
+                title,
+                filters["q"],
+                filters["item_kind"],
+                filters["people"],
+                filters["location"],
+                filters["privacy_tag"],
+                filters["date_start"],
+                filters["date_end"],
+            ),
+        )
+        db.commit()
+        flash("Saved timeline view.", "success")
+        return redirect(url_for("timeline_collections", **collection_query_values(filters)))
+
+    results = search_collection_items(db, filters) if collection_filters_have_values(filters) else []
+    return render_template(
+        "timeline_collections.html",
+        filters=filters,
+        results=results,
+        has_filters=collection_filters_have_values(filters),
+        saved_views=load_saved_collection_views(db),
+        collection_query_values=collection_query_values(filters),
+    )
+
+
+@app.route("/timeline/collections/<int:view_id>/delete", methods=("POST",))
+@birthday_required
+def delete_timeline_collection(view_id):
+    get_saved_collection_view(get_db(), view_id)
+    db = get_db()
+    db.execute(
+        """
+        DELETE FROM saved_timeline_views
+        WHERE id = ? AND user_id = ?
+        """,
+        (view_id, g.user["id"]),
+    )
+    db.commit()
+    flash("Deleted saved view.", "success")
+    return redirect(url_for("timeline_collections"))
 
 
 @app.route("/timeline/map")

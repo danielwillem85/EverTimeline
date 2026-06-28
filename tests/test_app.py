@@ -190,6 +190,67 @@ def test_on_this_day_shows_matching_dated_memories(client, helpers):
     assert b"A different-day text memory" not in response.data
 
 
+def test_timeline_import_assistant_reviews_detected_dates_before_saving(client, helpers):
+    helpers.create_user(client, "owner")
+
+    upload_response = client.post(
+        "/timeline/import",
+        data={
+            **helpers.csrf_form_data(client, "/timeline/import"),
+            "photo": (
+                io.BytesIO(helpers.png_bytes()),
+                "memory-20200504.png",
+                "image/png",
+            ),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert upload_response.status_code == 302
+    review_path = upload_response.headers["Location"]
+    item = helpers.row(
+        """
+        SELECT pii.*
+        FROM photo_import_items pii
+        JOIN photo_import_batches pib ON pib.id = pii.batch_id
+        """
+    )
+    assert item["detected_date"] == "2020-05-04"
+    assert item["detected_source"] == "filename"
+
+    review_response = client.get(review_path)
+    assert review_response.status_code == 200
+    assert b"Review import" in review_response.data
+    assert b"2020-05-04" in review_response.data
+
+    save_response = client.post(
+        review_path,
+        data={
+            **helpers.csrf_form_data(client, review_path),
+            f"photo_date_{item['id']}": "2020-06-07",
+            f"tags_{item['id']}": "friends",
+        },
+    )
+
+    assert save_response.status_code == 302
+    assert save_response.headers["Location"].endswith("/year/2020/6")
+    photo = helpers.row("SELECT * FROM photos WHERE original_filename = ?", ("memory-20200504.png",))
+    assert photo["year"] == 2020
+    assert photo["month"] == 6
+    assert photo["photo_date"] == "2020-06-07"
+    assert helpers.row(
+        """
+        SELECT t.name
+        FROM photo_tags pt
+        JOIN tags t ON t.id = pt.tag_id
+        WHERE pt.photo_id = ?
+        """,
+        (photo["id"],),
+    )["name"] == "friends"
+    assert helpers.row("SELECT COUNT(*) AS count FROM photo_import_batches")["count"] == 0
+    assert helpers.row("SELECT COUNT(*) AS count FROM photo_import_items")["count"] == 0
+
+
 def test_full_account_backup_export_and_import(client, helpers):
     owner_id = helpers.create_user(client, "owner")
     photo_id = helpers.upload_photo(

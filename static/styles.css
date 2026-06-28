@@ -1027,6 +1027,88 @@ details.privacy-toggle-panel {
     min-height: 76px;
 }
 
+.import-upload-form {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) auto;
+    align-items: end;
+    gap: 16px;
+}
+
+.import-review-form {
+    display: grid;
+    gap: 16px;
+}
+
+.import-review-list {
+    display: grid;
+    gap: 12px;
+}
+
+.import-review-card {
+    display: grid;
+    grid-template-columns: 160px minmax(0, 1fr);
+    gap: 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    background: var(--surface);
+    box-shadow: 0 8px 20px rgba(24, 31, 28, 0.08);
+}
+
+.import-review-card img {
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 6px;
+    background: var(--surface-strong);
+    object-fit: cover;
+}
+
+.import-review-main {
+    display: grid;
+    align-content: start;
+    gap: 14px;
+    min-width: 0;
+}
+
+.import-review-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-width: 0;
+    gap: 10px;
+}
+
+.import-review-title-row h2 {
+    overflow: hidden;
+    margin-bottom: 0;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.import-review-fields {
+    display: grid;
+    grid-template-columns: minmax(160px, 200px) minmax(320px, 1fr) auto;
+    align-items: end;
+    gap: 14px;
+}
+
+.import-skip-row {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    gap: 8px;
+    color: var(--ink);
+    font-weight: 900;
+    white-space: nowrap;
+}
+
+.import-skip-row input {
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    accent-color: var(--primary);
+}
+
 .upload-form .tag-radio small,
 .text-entry-form .tag-radio small {
     overflow: visible;
@@ -2954,6 +3036,7 @@ details.privacy-toggle-panel {
     }
 
     .upload-form,
+    .import-upload-form,
     .text-entry-form,
     .search-form,
     .tags-form,
@@ -2961,6 +3044,24 @@ details.privacy-toggle-panel {
     .privacy-bulk-form,
     .chapter-form {
         grid-template-columns: 1fr;
+    }
+
+    .import-review-card,
+    .import-review-fields {
+        grid-template-columns: 1fr;
+    }
+
+    .import-review-card img {
+        max-height: 240px;
+    }
+
+    .import-review-title-row {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .import-review-title-row h2 {
+        white-space: normal;
     }
 
     .location-fields {

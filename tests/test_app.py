@@ -836,6 +836,85 @@ def test_timeline_search_finds_owned_content_types_and_excludes_other_users(app,
     assert b"No timeline matches." in response.data
 
 
+def test_saved_timeline_collections_filter_save_and_delete(app, client, helpers):
+    helpers.create_user(client, "owner")
+    helpers.create_text(
+        client,
+        "Family trail notes",
+        entry_date="2020-05-03",
+        tag="friends",
+        people="Alice Walker",
+        location_name="Trailhead",
+    )
+    helpers.upload_photo(
+        client,
+        filename="trail-photo.png",
+        title="Trail photo",
+        photo_date="2020-05-04",
+        tag="friends",
+        people="Alice Walker",
+        location_name="Trailhead",
+    )
+    helpers.create_text(
+        client,
+        "Wrong person memory",
+        entry_date="2020-05-05",
+        tag="friends",
+        people="Bob Walker",
+        location_name="Trailhead",
+    )
+
+    other = app.test_client()
+    helpers.create_user(other, "other")
+    helpers.create_text(
+        other,
+        "Forbidden collection memory",
+        tag="friends",
+        people="Alice Walker",
+        location_name="Trailhead",
+    )
+
+    response = client.get(
+        "/timeline/collections?"
+        "people=Alice%20Walker&item_kind=text&privacy_tag=friends&"
+        "location=Trailhead&date_start=2020-05-01&date_end=2020-05-31"
+    )
+    assert response.status_code == 200
+    assert b"Family trail notes" in response.data
+    assert b"Trail photo" not in response.data
+    assert b"Wrong person memory" not in response.data
+    assert b"Forbidden collection memory" not in response.data
+
+    save_response = client.post(
+        "/timeline/collections",
+        data={
+            **helpers.csrf_form_data(client, "/timeline/collections"),
+            "title": "Alice trail notes",
+            "people": "Alice Walker",
+            "item_kind": "text",
+            "privacy_tag": "friends",
+            "location": "Trailhead",
+            "date_start": "2020-05-01",
+            "date_end": "2020-05-31",
+        },
+    )
+    assert save_response.status_code == 302
+    view = helpers.row("SELECT * FROM saved_timeline_views WHERE title = ?", ("Alice trail notes",))
+    assert view["people_text"] == "Alice Walker"
+    assert view["item_kind"] == "text"
+
+    saved_page = client.get("/timeline/collections")
+    assert saved_page.status_code == 200
+    assert b"Alice trail notes" in saved_page.data
+
+    delete_response = client.post(
+        f"/timeline/collections/{view['id']}/delete",
+        data=helpers.csrf_form_data(client, "/timeline/collections"),
+    )
+    assert delete_response.status_code == 302
+    assert helpers.row("SELECT COUNT(*) AS count FROM saved_timeline_views")["count"] == 0
+
+
 def test_timeline_map_shows_owned_locations_and_updates_photo_place(app, client, helpers):
     helpers.create_user(client, "owner")
     photo_id = helpers.upload_photo(

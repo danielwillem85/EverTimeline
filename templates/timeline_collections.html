@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block title %}Collections - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
+        <h1>Collections</h1>
+    </div>
+    <div class="page-actions">
+        <a class="button secondary" href="{{ url_for('timeline_search') }}">Search timeline</a>
+        <a class="button secondary" href="{{ url_for('timeline_map') }}">Map</a>
+    </div>
+</section>
+
+<section class="collections-layout">
+    <aside class="saved-views-panel" aria-label="Saved views">
+        <div class="section-title-row">
+            <h2>Saved views</h2>
+            {% if saved_views %}
+                <span class="status-badge">{{ saved_views|length }}</span>
+            {% endif %}
+        </div>
+        {% if saved_views %}
+            <div class="saved-view-list">
+                {% for view in saved_views %}
+                    <article class="saved-view-card">
+                        <a href="{{ view['url'] }}">
+                            <strong>{{ view["title"] }}</strong>
+                            <span>
+                                {% set parts = [] %}
+                                {% if view["filters"]["item_kind"] %}{% set _ = parts.append(view["filters"]["item_kind"]) %}{% endif %}
+                                {% if view["filters"]["people"] %}{% set _ = parts.append(view["filters"]["people"]) %}{% endif %}
+                                {% if view["filters"]["privacy_tag"] %}{% set _ = parts.append(view["filters"]["privacy_tag"]) %}{% endif %}
+                                {{ parts|join(" / ") or "Timeline filter" }}
+                            </span>
+                        </a>
+                        <form
+                            method="post"
+                            action="{{ url_for('delete_timeline_collection', view_id=view['id']) }}"
+                            data-confirm
+                            data-confirm-title="Delete saved view?"
+                            data-confirm-message="This removes the saved filter only. Timeline entries stay untouched."
+                            data-confirm-action="Delete view"
+                        >
+                            {{ csrf_field() }}
+                            <button class="button secondary small" type="submit">Delete</button>
+                        </form>
+                    </article>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p class="empty-state">No saved views yet.</p>
+        {% endif %}
+    </aside>
+
+    <div class="collection-workspace">
+        <section class="search-panel collection-filter-panel">
+            <form class="collection-filter-form" method="get">
+                <label>
+                    <span>Text</span>
+                    <input name="q" value="{{ filters['q'] }}" placeholder="Picnic, caption, message, date" autocomplete="off">
+                </label>
+                <label>
+                    <span>People</span>
+                    <input name="people" value="{{ filters['people'] }}" placeholder="Alice, Sam" autocomplete="off">
+                </label>
+                <label>
+                    <span>Place</span>
+                    <input name="location" value="{{ filters['location'] }}" placeholder="City, venue, address" autocomplete="off">
+                </label>
+                <label>
+                    <span>Type</span>
+                    <select name="item_kind">
+                        <option value="" {% if not filters['item_kind'] %}selected{% endif %}>Any</option>
+                        <option value="photo" {% if filters['item_kind'] == 'photo' %}selected{% endif %}>Photos</option>
+                        <option value="text" {% if filters['item_kind'] == 'text' %}selected{% endif %}>Text entries</option>
+                    </select>
+                </label>
+                <label>
+                    <span>Visibility</span>
+                    <select name="privacy_tag">
+                        <option value="" {% if not filters['privacy_tag'] %}selected{% endif %}>Any</option>
+                        {% for tag in tag_choices %}
+                            <option value="{{ tag }}" {% if filters['privacy_tag'] == tag %}selected{% endif %}>{{ privacy_labels[tag] }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>
+                    <span>From</span>
+                    <input name="date_start" type="date" value="{{ filters['date_start'] }}">
+                </label>
+                <label>
+                    <span>To</span>
+                    <input name="date_end" type="date" value="{{ filters['date_end'] }}">
+                </label>
+                <div class="collection-filter-actions">
+                    <button class="button primary" type="submit">Apply</button>
+                    <a class="button secondary" href="{{ url_for('timeline_collections') }}">Clear</a>
+                </div>
+            </form>
+        </section>
+
+        {% if has_filters %}
+            <section class="save-view-panel">
+                <form class="save-view-form" method="post">
+                    {{ csrf_field() }}
+                    {% for key, value in collection_query_values.items() %}
+                        <input type="hidden" name="{{ key }}" value="{{ value }}">
+                    {% endfor %}
+                    <label>
+                        <span>Save view</span>
+                        <input name="title" placeholder="Family trips, Mom's photos, unshared notes" maxlength="120" required>
+                    </label>
+                    <button class="button secondary" type="submit">Save</button>
+                </form>
+            </section>
+        {% endif %}
+
+        <section class="collection-results">
+            <div class="section-title-row">
+                <h2>Results</h2>
+                {% if has_filters %}
+                    <span class="status-badge">{{ results|length }}</span>
+                {% endif %}
+            </div>
+            {% if has_filters %}
+                {% if results %}
+                    <div class="collection-result-list">
+                        {% for item in results %}
+                            <article class="collection-result-card">
+                                <div class="collection-result-main">
+                                    <div class="activity-title-row">
+                                        <span class="status-badge">{{ "Photo" if item["kind"] == "photo" else "Text" }}</span>
+                                        <h3>{{ item["title"] }}</h3>
+                                    </div>
+                                    <span>{{ item["date_label"] }} - Visible: {{ item["privacy_label"] }}</span>
+                                    {% if item["location_name"] %}
+                                        <span>{{ item["location_name"] }}</span>
+                                    {% endif %}
+                                    {% if item["people"] %}
+                                        <div class="people-chip-list" aria-label="People">
+                                            {% for person in item["people"] %}
+                                                <span class="people-chip">{{ person }}</span>
+                                            {% endfor %}
+                                        </div>
+                                    {% endif %}
+                                    <p>{{ item["preview"] }}</p>
+                                </div>
+                                <a class="button primary small" href="{{ item['url'] }}">Open</a>
+                            </article>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <p class="empty-state">No memories match these filters.</p>
+                {% endif %}
+            {% else %}
+                <p class="empty-state">Choose filters to build a view.</p>
+            {% endif %}
+        </section>
+    </div>
+</section>
+{% endblock %}

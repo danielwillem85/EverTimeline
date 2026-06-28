@@ -12,6 +12,7 @@
 
 <section class="auth-panel admin-panel">
     <h2>Image storage</h2>
+    {% set non_jpeg_count = image_summary["photo_non_jpeg"] + image_summary["import_non_jpeg"] %}
     <div class="admin-stat-grid">
         <article>
             <strong>{{ image_summary["photo_total"] }}</strong>
@@ -33,7 +34,9 @@
         data-confirm-action="Convert images"
     >
         {{ csrf_field() }}
-        <button class="button primary" type="submit">Convert all images to JPEG</button>
+        <button class="button primary" type="submit" {% if not non_jpeg_count %}disabled{% endif %}>
+            Convert all images to JPEG
+        </button>
     </form>
 </section>
 {% endblock %}

@@ -901,9 +901,12 @@ document.addEventListener("DOMContentLoaded", () => {
             const itemIds = chapterItems().map((item) => Number(item.dataset.chapterItemId));
             setReorderStatus("Saving order...");
             try {
-                const response = await fetch(reorderUrl, {
+                const response = await csrfFetch(reorderUrl, {
                     method: "POST",
-                    headers: {"Content-Type": "application/json"},
+                    headers: {
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                    },
                     body: JSON.stringify({item_ids: itemIds}),
                 });
                 if (!response.ok) {

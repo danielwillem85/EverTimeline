@@ -363,6 +363,94 @@ def test_full_account_backup_export_and_import(client, helpers):
     )["count"] == 1
 
 
+def test_chapter_items_can_be_reordered_with_json_api(client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="chapter-photo.png",
+        photo_date="2020-05-04",
+        tag="private",
+    )
+    first_text_id = helpers.create_text(
+        client,
+        "First text entry",
+        entry_date="2020-05-05",
+        tag="private",
+    )
+    second_text_id = helpers.create_text(
+        client,
+        "Second text entry",
+        entry_date="2020-05-06",
+        tag="private",
+    )
+
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Drag story",
+            "description": "",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Drag story",))["id"]
+
+    for item_kind, item_id in (
+        ("photo", photo_id),
+        ("text", first_text_id),
+        ("text", second_text_id),
+    ):
+        response = client.post(
+            "/chapters/items",
+            data={
+                **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+                "chapter_id": chapter_id,
+                "item_kind": item_kind,
+                "item_id": item_id,
+            },
+        )
+        assert response.status_code == 302
+
+    original_items = helpers.rows(
+        """
+        SELECT id
+        FROM chapter_items
+        WHERE chapter_id = ?
+        ORDER BY position ASC
+        """,
+        (chapter_id,),
+    )
+    reordered_ids = [row["id"] for row in reversed(original_items)]
+
+    response = client.post(
+        f"/api/chapters/{chapter_id}/items/reorder",
+        headers=helpers.csrf_headers(client, f"/chapters/{chapter_id}"),
+        json={"item_ids": reordered_ids},
+    )
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "ok"
+
+    saved_order = helpers.rows(
+        """
+        SELECT id, position
+        FROM chapter_items
+        WHERE chapter_id = ?
+        ORDER BY position ASC
+        """,
+        (chapter_id,),
+    )
+    assert [row["id"] for row in saved_order] == reordered_ids
+    assert [row["position"] for row in saved_order] == [1, 2, 3]
+
+    bad_response = client.post(
+        f"/api/chapters/{chapter_id}/items/reorder",
+        headers=helpers.csrf_headers(client, f"/chapters/{chapter_id}"),
+        json={"item_ids": reordered_ids[:-1]},
+    )
+    assert bad_response.status_code == 400
+
+
 def test_timeline_search_finds_owned_content_types_and_excludes_other_users(app, client, helpers):
     helpers.create_user(client, "owner")
     helpers.upload_photo(

@@ -2371,6 +2371,7 @@ details.privacy-toggle-panel {
 }
 
 .people-results,
+.timeline-people-list,
 .request-list {
     display: grid;
     gap: 10px;
@@ -3027,6 +3028,22 @@ details.privacy-toggle-panel {
     border-radius: 8px;
     object-fit: cover;
     background: var(--surface);
+}
+
+.person-text-memory-thumb {
+    display: -webkit-box;
+    overflow: hidden;
+    padding: 8px;
+    color: var(--ink);
+    font-size: 0.78rem;
+    font-weight: 800;
+    line-height: 1.25;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+}
+
+.person-memory-card .people-chip-list {
+    margin-top: 2px;
 }
 
 .timeline-search-main {

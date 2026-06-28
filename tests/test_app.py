@@ -50,6 +50,30 @@ def test_csrf_token_required_for_unsafe_requests(client, helpers):
     assert response.status_code == 400
 
 
+def test_oversized_upload_redirects_with_flash(app, client, helpers):
+    helpers.create_user(client, "owner")
+    previous_limit = app.config["MAX_CONTENT_LENGTH"]
+    app.config["MAX_CONTENT_LENGTH"] = 1024
+    try:
+        response = client.post(
+            "/year/2020/5",
+            data={
+                **helpers.csrf_form_data(client, "/year/2020/5"),
+                "photo": (io.BytesIO(b"x" * 2048), "too-large.png", "image/png"),
+                "photo_date": "2020-05-04",
+                "tags": "private",
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+    finally:
+        app.config["MAX_CONTENT_LENGTH"] = previous_limit
+
+    assert response.status_code == 200
+    assert b"That upload is too large." in response.data
+    assert b"The current limit is 1 KB per request." in response.data
+
+
 def test_password_reset_link_is_local_dev_only(app, client, helpers):
     helpers.create_user(client, "alice")
     app.config["LOCAL_PASSWORD_RESET_LINKS"] = False
@@ -183,12 +207,33 @@ def test_manual_people_tagging_for_items_search_and_updates(app, client, helpers
     assert b"Tagged photo" in search.data
     assert b"Dinner after the show" in search.data
 
+    people_index = client.get("/timeline/people")
+    assert people_index.status_code == 200
+    assert b"Alice Example" in people_index.data
+    assert b"Bob Friend" in people_index.data
+    assert b"Carol Cousin" in people_index.data
+    assert b"2 memories" in people_index.data
+
+    alice = helpers.row(
+        "SELECT id FROM people WHERE user_id = ? AND name = ?",
+        (helpers.user_id("owner"), "Alice Example"),
+    )
+    alice_page = client.get(f"/timeline/people/{alice['id']}")
+    assert alice_page.status_code == 200
+    assert b"Tagged photo" in alice_page.data
+    assert b"Dinner after the show" in alice_page.data
+
     other = app.test_client()
     helpers.create_user(other, "other")
     helpers.create_text(other, "Hidden people memory", people="Forbidden Person")
     hidden_search = client.get("/timeline/search?q=forbidden")
     assert hidden_search.status_code == 200
     assert b"Hidden people memory" not in hidden_search.data
+    forbidden_person = helpers.row(
+        "SELECT id FROM people WHERE user_id = ? AND name = ?",
+        (helpers.user_id("other"), "Forbidden Person"),
+    )
+    assert client.get(f"/timeline/people/{forbidden_person['id']}").status_code == 404
 
     photo_people_update = client.patch(
         f"/api/photo/{photo_id}/people",

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}{{ person["name"] }} - People tags - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline_people') }}">People tags</a>
+        <h1>{{ person["name"] }}</h1>
+        <p class="muted">{{ items|length }} {{ "memory" if items|length == 1 else "memories" }}</p>
+    </div>
+</section>
+
+<section class="timeline-search-list timeline-person-memory-list" aria-label="Memories tagged with {{ person['name'] }}">
+    {% for item in items %}
+        <article class="timeline-search-card person-memory-card">
+            <div class="timeline-search-content">
+                {% if item.get("image_url") %}
+                    <img class="timeline-search-thumb" src="{{ item['image_url'] }}" alt="{{ item['title'] }}">
+                {% else %}
+                    <div class="timeline-search-thumb person-text-memory-thumb">{{ item["preview"] }}</div>
+                {% endif %}
+                <div class="timeline-search-main">
+                    <span class="status-badge">{{ item["kind_label"] }}</span>
+                    <h2>{{ item["title"] }}</h2>
+                    <span>{{ item["source_label"] }} &middot; {{ item["date_label"] }}</span>
+                    {% if item["preview"] %}
+                        <p>{{ item["preview"] }}</p>
+                    {% endif %}
+                    <div class="timeline-search-meta">
+                        <span>Visible: {{ item["privacy_label"] }}</span>
+                        {% if item["people_text"] %}
+                            <span>People: {{ item["people_text"] }}</span>
+                        {% endif %}
+                    </div>
+                    {% if item["people"] %}
+                        <div class="people-chip-list" aria-label="People">
+                            {% for tagged_person in item["people"] %}
+                                <span class="people-chip">{{ tagged_person }}</span>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+            <a class="button primary small" href="{{ item['url'] }}">Open</a>
+        </article>
+    {% else %}
+        <p class="empty-state">No memories are tagged with {{ person["name"] }}.</p>
+    {% endfor %}
+</section>
+{% endblock %}

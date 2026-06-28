@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}People tags - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
+        <h1>People tags</h1>
+        <p class="muted">{{ people|length }} tagged {{ "person" if people|length == 1 else "people" }}</p>
+    </div>
+</section>
+
+<section class="timeline-people-list" aria-label="Tagged people">
+    {% for person in people %}
+        <article class="person-row timeline-person-row">
+            <div class="person-summary">
+                <strong>{{ person["name"] }}</strong>
+                <span>{{ person["item_count"] }} {{ "memory" if person["item_count"] == 1 else "memories" }} &middot; {{ person["year_label"] }}</span>
+                <span>{{ person["photo_count"] }} photos &middot; {{ person["text_count"] }} text entries{% if person["latest_label"] %} &middot; Latest {{ person["latest_label"] }}{% endif %}</span>
+            </div>
+            <a class="button primary small" href="{{ person['url'] }}">Open</a>
+        </article>
+    {% else %}
+        <p class="empty-state">No people tags yet.</p>
+    {% endfor %}
+</section>
+{% endblock %}

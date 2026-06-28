@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}EverTimeline{% endblock %}</title>
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css', v=static_version('styles.css')) }}">
     <script src="{{ url_for('static', filename='app.js', v=static_version('app.js')) }}" defer></script>
 </head>
@@ -56,6 +57,7 @@
                 >Profile</a>
                 <span class="username">{{ g.user["username"] }}</span>
                 <form action="{{ url_for('logout') }}" method="post">
+                    {{ csrf_field() }}
                     <button class="button secondary small" type="submit">Log out</button>
                 </form>
             </div>

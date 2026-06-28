@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta, timezone
+from contextlib import closing
 from functools import wraps
 import calendar
 import hashlib
@@ -23,13 +24,14 @@ from flask import (
     session,
     url_for,
 )
+from markupsafe import Markup, escape as html_escape
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 from PIL import Image
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DATABASE = BASE_DIR / "evertimeline.sqlite3"
+DATABASE = Path(os.environ.get("EVERTIMELINE_DATABASE", BASE_DIR / "evertimeline.sqlite3"))
 ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 EXIF_DATE_TAGS = (36867, 36868, 306)
 TAG_CHOICES = ("private", "family", "friends", "public")
@@ -53,6 +55,10 @@ CONNECTION_VISIBLE_TAGS = {
     "family": ("family", "friends", "public"),
 }
 PASSWORD_RESET_TTL = timedelta(hours=1)
+CSRF_SESSION_KEY = "_csrf_token"
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS", "TRACE"}
+LOCAL_ENVIRONMENTS = {"development", "dev", "local", "test"}
+DEFAULT_DEV_SECRET_KEY = "dev-change-me"
 MONTH_NAMES = [
     "January",
     "February",
@@ -69,11 +75,72 @@ MONTH_NAMES = [
 ]
 
 
+def env_flag(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def app_environment():
+    return (os.environ.get("EVERTIMELINE_ENV") or os.environ.get("FLASK_ENV") or "").strip().lower()
+
+
+def is_local_development():
+    environment = app_environment()
+    if environment:
+        return environment in LOCAL_ENVIRONMENTS
+    return __name__ == "__main__" or env_flag("EVERTIMELINE_SKIP_DB_INIT")
+
+
+def configured_secret_key():
+    secret_key = os.environ.get("SECRET_KEY")
+    if secret_key:
+        return secret_key
+    if is_local_development():
+        return DEFAULT_DEV_SECRET_KEY
+    raise RuntimeError("SECRET_KEY must be set outside local development.")
+
+
+def run_debug_enabled():
+    return env_flag("EVERTIMELINE_DEBUG") or env_flag("FLASK_DEBUG")
+
+
 app = Flask(__name__)
 app.config.update(
-    SECRET_KEY=os.environ.get("SECRET_KEY", "dev-change-me"),
+    SECRET_KEY=configured_secret_key(),
     MAX_CONTENT_LENGTH=128 * 1024 * 1024,
+    CSRF_PROTECT=True,
+    LOCAL_PASSWORD_RESET_LINKS=is_local_development(),
 )
+
+
+def csrf_token():
+    token = session.get(CSRF_SESSION_KEY)
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session[CSRF_SESSION_KEY] = token
+    return token
+
+
+def csrf_field():
+    token = html_escape(csrf_token())
+    return Markup(f'<input type="hidden" name="csrf_token" value="{token}">')
+
+
+@app.before_request
+def validate_csrf_token():
+    if request.method in SAFE_METHODS or not app.config.get("CSRF_PROTECT", True):
+        return
+
+    expected_token = session.get(CSRF_SESSION_KEY)
+    submitted_token = request.headers.get("X-CSRF-Token") or request.form.get("csrf_token")
+    if (
+        not expected_token
+        or not submitted_token
+        or not secrets.compare_digest(expected_token, submitted_token)
+    ):
+        abort(400)
 
 
 def get_db():
@@ -110,11 +177,13 @@ def inject_tag_choices():
         "privacy_help": PRIVACY_AUDIENCE_HELP,
         "notification_count": notification_count,
         "static_version": static_version,
+        "csrf_token": csrf_token,
+        "csrf_field": csrf_field,
     }
 
 
 def init_db():
-    with sqlite3.connect(DATABASE) as db:
+    with closing(sqlite3.connect(DATABASE)) as db:
         db.execute("PRAGMA foreign_keys = ON")
         db.executescript(
             """
@@ -335,6 +404,7 @@ def init_db():
             ON chapter_items (chapter_id, position, id)
             """
         )
+        db.commit()
 
 
 def ensure_user_profile_columns(db):
@@ -2865,12 +2935,15 @@ def forgot_password():
 
         db = get_db()
         user = find_user_for_password_reset(db, identifier)
-        if user is not None:
+        if user is not None and app.config.get("LOCAL_PASSWORD_RESET_LINKS", False):
             token = create_password_reset_token(db, user["id"])
             db.commit()
             reset_url = url_for("reset_password", token=token, _external=True)
 
-        flash("If an account matches that information, a reset link has been created.", "success")
+        flash(
+            "If an account matches that information and reset delivery is configured, reset instructions will be available.",
+            "success",
+        )
 
     return render_template(
         "forgot_password.html",
@@ -3965,8 +4038,8 @@ def photo_messages(photo_id):
     return jsonify(load_messages_for_timeline_item(db, "photo", photo_id))
 
 
-init_db()
-
-
 if __name__ == "__main__":
-    app.run(debug=True)
+    init_db()
+    app.run(debug=run_debug_enabled())
+elif os.environ.get("EVERTIMELINE_SKIP_DB_INIT") != "1":
+    init_db()

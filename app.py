@@ -211,6 +211,7 @@ def init_db():
                 original_filename TEXT,
                 title TEXT NOT NULL DEFAULT '',
                 caption TEXT NOT NULL DEFAULT '',
+                image_hash TEXT,
                 mime_type TEXT NOT NULL,
                 image_data BLOB NOT NULL,
                 photo_date TEXT,
@@ -423,6 +424,12 @@ def init_db():
             ON chapter_items (chapter_id, position, id)
             """
         )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS photos_user_image_hash
+            ON photos (user_id, image_hash)
+            """
+        )
         db.commit()
 
 
@@ -449,10 +456,12 @@ def ensure_photo_columns(db):
     migrations = {
         "title": "ALTER TABLE photos ADD COLUMN title TEXT NOT NULL DEFAULT ''",
         "caption": "ALTER TABLE photos ADD COLUMN caption TEXT NOT NULL DEFAULT ''",
+        "image_hash": "ALTER TABLE photos ADD COLUMN image_hash TEXT",
     }
     for column_name, statement in migrations.items():
         if column_name not in columns:
             db.execute(statement)
+    backfill_photo_hashes(db)
 
 
 def ensure_chapter_columns(db):
@@ -744,6 +753,40 @@ def photo_display_title(photo):
     return (photo["title"] or "").strip() or photo["original_filename"] or "Photo"
 
 
+def photo_image_hash(image_data):
+    return hashlib.sha256(image_data).hexdigest()
+
+
+def backfill_photo_hashes(db):
+    rows = db.execute(
+        """
+        SELECT id, image_data
+        FROM photos
+        WHERE image_hash IS NULL OR image_hash = ''
+        """
+    ).fetchall()
+    for row in rows:
+        db.execute(
+            "UPDATE photos SET image_hash = ? WHERE id = ?",
+            (photo_image_hash(row["image_data"]), row["id"]),
+        )
+
+
+def find_duplicate_photo(db, user_id, image_hash):
+    if not image_hash:
+        return None
+    return db.execute(
+        """
+        SELECT id, year, month, original_filename, title, caption, photo_date, created_at
+        FROM photos
+        WHERE user_id = ? AND image_hash = ?
+        ORDER BY id ASC
+        LIMIT 1
+        """,
+        (user_id, image_hash),
+    ).fetchone()
+
+
 def is_valid_email(value):
     return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value or ""))
 
@@ -883,14 +926,14 @@ def uploaded_photo_files():
     ]
 
 
-def insert_uploaded_photo(db, image, image_data, year, month, photo_date, title, caption, tags, location):
+def insert_uploaded_photo(db, image, image_data, image_hash, year, month, photo_date, title, caption, tags, location):
     cursor = db.execute(
         """
         INSERT INTO photos (
-            user_id, year, month, original_filename, title, caption, mime_type, image_data, photo_date,
+            user_id, year, month, original_filename, title, caption, image_hash, mime_type, image_data, photo_date,
             location_name, latitude, longitude
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             g.user["id"],
@@ -899,6 +942,7 @@ def insert_uploaded_photo(db, image, image_data, year, month, photo_date, title,
             secure_filename(image.filename),
             title,
             caption,
+            image_hash,
             image.mimetype,
             image_data,
             photo_date,
@@ -911,7 +955,7 @@ def insert_uploaded_photo(db, image, image_data, year, month, photo_date, title,
     return cursor.lastrowid
 
 
-def photo_upload_summary(uploaded_count, auto_dated_count, manual_date_used, skipped_count, ignored_exif_count):
+def photo_upload_summary(uploaded_count, auto_dated_count, manual_date_used, skipped_count, ignored_exif_count, duplicate_count=0):
     noun = "photo" if uploaded_count == 1 else "photos"
     parts = [f"Uploaded {uploaded_count} {noun}."]
     if auto_dated_count:
@@ -925,6 +969,9 @@ def photo_upload_summary(uploaded_count, auto_dated_count, manual_date_used, ski
     if skipped_count:
         skipped_noun = "file" if skipped_count == 1 else "files"
         parts.append(f"Skipped {skipped_count} {skipped_noun}.")
+    if duplicate_count:
+        duplicate_noun = "duplicate photo" if duplicate_count == 1 else "duplicate photos"
+        parts.append(f"Skipped {duplicate_count} {duplicate_noun} already in your timeline.")
     return " ".join(parts)
 
 
@@ -3454,7 +3501,7 @@ def load_backup_reaction_map(db, item_kind):
 def build_account_backup_manifest(db):
     photo_rows = db.execute(
         """
-        SELECT id, year, month, original_filename, title, caption, mime_type, photo_date, created_at
+        SELECT id, year, month, original_filename, title, caption, image_hash, mime_type, photo_date, created_at
         FROM photos
         WHERE user_id = ?
         ORDER BY year ASC, month ASC, COALESCE(photo_date, ''), id ASC
@@ -3522,7 +3569,7 @@ def build_account_backup_manifest(db):
             {
                 **dict_from_row(
                     row,
-                    ("id", "year", "month", "original_filename", "title", "caption", "mime_type", "photo_date", "created_at"),
+                    ("id", "year", "month", "original_filename", "title", "caption", "image_hash", "mime_type", "photo_date", "created_at"),
                 ),
                 "tags": photo_tags.get(row["id"], [DEFAULT_TAG]),
                 "image_path": backup_photo_path(row),
@@ -3688,12 +3735,21 @@ def import_photo_from_backup(db, archive, photo):
     if mime_type not in ALLOWED_IMAGE_MIMES:
         raise ValueError("Backup contains an unsupported photo type.")
 
+    image_hash = photo_image_hash(image_data)
+    duplicate = find_duplicate_photo(db, g.user["id"], image_hash)
+    if duplicate is not None:
+        return {
+            "id": duplicate["id"],
+            "created": False,
+            "duplicate": True,
+        }
+
     cursor = db.execute(
         """
         INSERT INTO photos (
-            user_id, year, month, original_filename, title, caption, mime_type, image_data, photo_date, created_at
+            user_id, year, month, original_filename, title, caption, image_hash, mime_type, image_data, photo_date, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             g.user["id"],
@@ -3702,6 +3758,7 @@ def import_photo_from_backup(db, archive, photo):
             secure_filename(backup_text(photo.get("original_filename"), "", 255)) or None,
             normalize_photo_title(photo.get("title", "")),
             normalize_photo_caption(photo.get("caption", "")),
+            image_hash,
             mime_type,
             image_data,
             photo.get("photo_date") or None,
@@ -3709,7 +3766,11 @@ def import_photo_from_backup(db, archive, photo):
         ),
     )
     set_tags_for_item(db, "photo", cursor.lastrowid, photo.get("tags", [DEFAULT_TAG]))
-    return cursor.lastrowid
+    return {
+        "id": cursor.lastrowid,
+        "created": True,
+        "duplicate": False,
+    }
 
 
 def import_text_entry_from_backup(db, entry):
@@ -3883,24 +3944,31 @@ def import_account_backup(backup_file):
 
             photo_id_map = {}
             text_id_map = {}
+            imported_photos = 0
+            duplicate_photos = 0
             imported_messages = 0
             imported_reactions = 0
 
             for photo in backup_list(manifest, "photos"):
-                new_id = import_photo_from_backup(db, archive, photo)
+                photo_import = import_photo_from_backup(db, archive, photo)
+                new_id = photo_import["id"]
                 photo_id_map[photo.get("id")] = new_id
-                imported_messages += import_messages_from_backup(
-                    db,
-                    "photo",
-                    new_id,
-                    photo.get("messages", []),
-                )
-                imported_reactions += import_owner_reactions_from_backup(
-                    db,
-                    "photo",
-                    new_id,
-                    photo.get("reactions", []),
-                )
+                if photo_import["created"]:
+                    imported_photos += 1
+                    imported_messages += import_messages_from_backup(
+                        db,
+                        "photo",
+                        new_id,
+                        photo.get("messages", []),
+                    )
+                    imported_reactions += import_owner_reactions_from_backup(
+                        db,
+                        "photo",
+                        new_id,
+                        photo.get("reactions", []),
+                    )
+                else:
+                    duplicate_photos += 1
 
             for entry in backup_list(manifest, "text_entries"):
                 new_id = import_text_entry_from_backup(db, entry)
@@ -3928,7 +3996,8 @@ def import_account_backup(backup_file):
         raise ValueError("Choose a valid zip file.") from exc
 
     return {
-        "photos": len(photo_id_map),
+        "photos": imported_photos,
+        "duplicate_photos": duplicate_photos,
         "text_entries": len(text_id_map),
         "messages": imported_messages,
         "reactions": imported_reactions,
@@ -4075,6 +4144,10 @@ def import_account_backup_route():
         return redirect(url_for("profile"))
 
     db.commit()
+    duplicate_summary = ""
+    if counts["duplicate_photos"]:
+        duplicate_noun = "duplicate photo" if counts["duplicate_photos"] == 1 else "duplicate photos"
+        duplicate_summary = f" Skipped {counts['duplicate_photos']} {duplicate_noun} already in your timeline."
     flash(
         (
             "Imported backup: "
@@ -4082,6 +4155,7 @@ def import_account_backup_route():
             f"{counts['text_entries']} text entries, "
             f"{counts['messages']} messages, "
             f"{counts['chapters']} chapters."
+            f"{duplicate_summary}"
         ),
         "success",
     )
@@ -4386,6 +4460,7 @@ def month_view(year, month):
         auto_dated_count = 0
         ignored_exif_count = 0
         skipped_count = 0
+        duplicate_count = 0
 
         for image in images:
             if image.mimetype not in ALLOWED_IMAGE_MIMES:
@@ -4395,6 +4470,11 @@ def month_view(year, month):
             image_data = image.read()
             if not image_data:
                 skipped_count += 1
+                continue
+
+            image_hash = photo_image_hash(image_data)
+            if find_duplicate_photo(db, g.user["id"], image_hash):
+                duplicate_count += 1
                 continue
 
             normalized_photo_date, used_auto_date, ignored_exif_date = photo_date_from_upload(
@@ -4407,6 +4487,7 @@ def month_view(year, month):
                 db,
                 image,
                 image_data,
+                image_hash,
                 year,
                 month,
                 normalized_photo_date,
@@ -4423,7 +4504,11 @@ def month_view(year, month):
 
         if uploaded_count == 0:
             db.rollback()
-            flash("No photos uploaded. Choose JPG, PNG, GIF, or WebP images.", "error")
+            if duplicate_count:
+                duplicate_noun = "duplicate photo" if duplicate_count == 1 else "duplicate photos"
+                flash(f"No new photos uploaded. Skipped {duplicate_count} {duplicate_noun} already in your timeline.", "error")
+            else:
+                flash("No photos uploaded. Choose JPG, PNG, GIF, or WebP images.", "error")
             return redirect(url_for("month_view", year=year, month=month))
 
         db.commit()
@@ -4434,6 +4519,7 @@ def month_view(year, month):
                 bool(manual_photo_date),
                 skipped_count,
                 ignored_exif_count,
+                duplicate_count,
             ),
             "success",
         )

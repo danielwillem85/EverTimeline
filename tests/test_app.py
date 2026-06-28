@@ -90,6 +90,23 @@ def test_uploads_text_entries_and_pdf_exports(client, helpers):
         caption="Blanket by the old willow",
         tag="public",
     )
+    duplicate_response = client.post(
+        "/year/2020/5",
+        data={
+            **helpers.csrf_form_data(client, "/year/2020/5"),
+            "photo": (io.BytesIO(helpers.png_bytes()), "public-photo-copy.png", "image/png"),
+            "photo_date": "2020-05-04",
+            "title": "Duplicate picnic",
+            "caption": "This should not create another row",
+            "tags": "public",
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert duplicate_response.status_code == 200
+    assert b"Skipped 1 duplicate photo already in your timeline." in duplicate_response.data
+    assert helpers.row("SELECT COUNT(*) AS count FROM photos")["count"] == 1
+    assert helpers.row("SELECT image_hash FROM photos WHERE id = ?", (photo_id,))["image_hash"]
     text_id = helpers.create_text(client, "A private journal note", tag="private")
 
     image_response = client.get(f"/photo/{photo_id}/image")
@@ -286,6 +303,26 @@ def test_full_account_backup_export_and_import(client, helpers):
     )
     assert imported_photo["title"] == "Family trip"
     assert imported_photo["caption"] == "Standing together beside the lake"
+
+    duplicate_import_response = client.post(
+        "/account/import",
+        data={
+            **helpers.csrf_form_data(client, "/profile"),
+            "backup": (
+                io.BytesIO(export_response.data),
+                "evertimeline-backup-again.zip",
+                "application/zip",
+            ),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert duplicate_import_response.status_code == 200
+    assert b"Skipped 1 duplicate photo already in your timeline." in duplicate_import_response.data
+    assert helpers.row(
+        "SELECT COUNT(*) AS count FROM photos WHERE user_id = ?",
+        (importer_id,),
+    )["count"] == 1
 
 
 def test_timeline_search_finds_owned_content_types_and_excludes_other_users(app, client, helpers):

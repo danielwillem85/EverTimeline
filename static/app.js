@@ -859,6 +859,108 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    document.querySelectorAll("[data-chapter-sequence]").forEach((sequence) => {
+        const reorderUrl = sequence.dataset.reorderUrl;
+        const status = document.querySelector("[data-reorder-status]");
+        let draggedItem = null;
+
+        const chapterItems = () => Array.from(sequence.querySelectorAll(".chapter-sequence-item"));
+
+        const setReorderStatus = (message) => {
+            if (status) {
+                status.textContent = message;
+            }
+        };
+
+        const updateChapterPositions = () => {
+            chapterItems().forEach((item, index) => {
+                const position = item.querySelector(".chapter-position");
+                if (position) {
+                    position.textContent = String(index + 1);
+                }
+            });
+        };
+
+        const saveChapterOrder = async () => {
+            if (!reorderUrl) {
+                return;
+            }
+
+            const itemIds = chapterItems().map((item) => Number(item.dataset.chapterItemId));
+            setReorderStatus("Saving order...");
+            try {
+                const response = await fetch(reorderUrl, {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({item_ids: itemIds}),
+                });
+                if (!response.ok) {
+                    throw new Error("Order could not be saved.");
+                }
+                setReorderStatus("Order saved.");
+            } catch (error) {
+                setReorderStatus("Order could not be saved. Refresh and try again.");
+            }
+        };
+
+        sequence.addEventListener("dragstart", (event) => {
+            const handle = event.target.closest(".chapter-drag-handle");
+            if (!handle) {
+                event.preventDefault();
+                return;
+            }
+
+            draggedItem = handle.closest(".chapter-sequence-item");
+            if (!draggedItem) {
+                event.preventDefault();
+                return;
+            }
+
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", draggedItem.dataset.chapterItemId || "");
+            window.setTimeout(() => {
+                draggedItem.classList.add("is-dragging");
+            }, 0);
+        });
+
+        sequence.addEventListener("dragover", (event) => {
+            if (!draggedItem) {
+                return;
+            }
+
+            const target = event.target.closest(".chapter-sequence-item");
+            if (!target || target === draggedItem || !sequence.contains(target)) {
+                return;
+            }
+
+            event.preventDefault();
+            chapterItems().forEach((item) => item.classList.remove("is-drop-target"));
+            target.classList.add("is-drop-target");
+            const rect = target.getBoundingClientRect();
+            const shouldMoveAfter = event.clientY > rect.top + rect.height / 2;
+            sequence.insertBefore(draggedItem, shouldMoveAfter ? target.nextSibling : target);
+            updateChapterPositions();
+        });
+
+        sequence.addEventListener("drop", async (event) => {
+            if (!draggedItem) {
+                return;
+            }
+
+            event.preventDefault();
+            chapterItems().forEach((item) => item.classList.remove("is-drop-target", "is-dragging"));
+            draggedItem = null;
+            updateChapterPositions();
+            await saveChapterOrder();
+        });
+
+        sequence.addEventListener("dragend", () => {
+            chapterItems().forEach((item) => item.classList.remove("is-drop-target", "is-dragging"));
+            draggedItem = null;
+            updateChapterPositions();
+        });
+    });
+
     const homePhotoModal = document.getElementById("home-photo-modal");
     if (homePhotoModal) {
         const homePhotoImage = document.getElementById("home-photo-modal-image");

@@ -3,19 +3,90 @@
 
 {% block title %}{{ chapter["title"] }} - EverTimeline{% endblock %}
 
+{% macro tag_radio_group(selected=default_tag) %}
+<fieldset class="tag-radio-group">
+    <legend>Sharing</legend>
+    <div class="tag-radio-list">
+        {% for tag in tag_choices %}
+            <label class="tag-radio">
+                <input type="radio" name="visibility" value="{{ tag }}" {% if tag == selected %}checked{% endif %}>
+                <span>
+                    <strong>{{ tag }}</strong>
+                    <small>{{ privacy_labels[tag] }}</small>
+                </span>
+            </label>
+        {% endfor %}
+    </div>
+</fieldset>
+{% endmacro %}
+
 {% block content %}
 <section class="page-heading">
     <div>
         <a class="back-link" href="{{ url_for('chapters') }}">Chapters</a>
-        <h1>{{ chapter["title"] }}</h1>
+        <div class="chapter-title-row">
+            <h1>{{ chapter["title"] }}</h1>
+            <span class="status-badge" title="{{ chapter['privacy_help'] }}">Shared: {{ chapter["privacy_label"] }}</span>
+        </div>
         {% if chapter["description"] %}
             <p class="muted">{{ chapter["description"] }}</p>
         {% endif %}
     </div>
-    <form class="inline-form" method="post" action="{{ url_for('delete_chapter', chapter_id=chapter['id']) }}">
+    <form
+        class="inline-form"
+        method="post"
+        action="{{ url_for('delete_chapter', chapter_id=chapter['id']) }}"
+        data-confirm
+        data-confirm-title="Delete chapter?"
+        data-confirm-message="This removes the chapter and its curated sequence. The original photos and text entries stay in your timeline."
+        data-confirm-action="Delete chapter"
+        data-confirm-danger="true"
+    >
         {{ csrf_field() }}
         <button class="button danger small" type="submit">Delete chapter</button>
     </form>
+</section>
+
+<section class="chapter-hero-panel">
+    <div class="chapter-hero-cover">
+        {% if chapter["cover"] %}
+            {% if chapter["cover"]["kind"] == "photo" %}
+                <img src="{{ chapter['cover']['image_url'] }}" alt="{{ chapter['cover']['label'] }}" loading="lazy">
+            {% else %}
+                <div class="chapter-hero-text-cover">{{ chapter["cover"]["body"] }}</div>
+            {% endif %}
+        {% else %}
+            <div class="chapter-hero-empty-cover">Choose a cover after adding items.</div>
+        {% endif %}
+    </div>
+    <details class="chapter-settings-panel">
+        <summary>Chapter settings</summary>
+        <form method="post" action="{{ url_for('update_chapter_settings', chapter_id=chapter['id']) }}" class="chapter-settings-form">
+            {{ csrf_field() }}
+            <label>
+                <span>Title</span>
+                <input name="title" value="{{ chapter['title'] }}" required>
+            </label>
+            <label>
+                <span>Description</span>
+                <textarea name="description" rows="3">{{ chapter["description"] or "" }}</textarea>
+            </label>
+            <label>
+                <span>Cover</span>
+                <select name="cover_ref">
+                    <option value="">First item in sequence</option>
+                    {% for item in cover_options %}
+                        {% set cover_ref = item["kind"] ~ ":" ~ item["id"] %}
+                        <option value="{{ cover_ref }}" {% if cover_ref == selected_cover_ref %}selected{% endif %}>
+                            {{ loop.index }}. {{ item["title"] }} - {{ item["date_label"] }}
+                        </option>
+                    {% endfor %}
+                </select>
+            </label>
+            {{ tag_radio_group(chapter["visibility"]) }}
+            <button class="button primary" type="submit">Save settings</button>
+        </form>
+    </details>
 </section>
 
 {% set carousel_items_url = url_for('chapter_items', chapter_id=chapter['id']) %}
@@ -27,9 +98,12 @@
 <section class="connection-section">
     <h2>Sequence</h2>
     {% if items %}
-        <div class="chapter-sequence">
+        <p class="muted">Drag items to reorder the chapter. The Up and Down buttons are still available as a fallback.</p>
+        <div class="chapter-sequence" data-chapter-sequence data-reorder-url="{{ url_for('reorder_chapter_items', chapter_id=chapter['id']) }}">
             {% for item in items %}
-                <article class="chapter-sequence-item">
+                {% set item_cover_ref = item["kind"] ~ ":" ~ item["id"] %}
+                <article class="chapter-sequence-item" data-chapter-item-id="{{ item['chapter_item_id'] }}">
+                    <span class="chapter-drag-handle" draggable="true" aria-label="Drag to reorder" title="Drag to reorder">::</span>
                     <div class="chapter-position">{{ loop.index }}</div>
                     <div class="chapter-preview-wrap">
                         <a class="chapter-preview" href="{{ item['url'] }}">
@@ -44,6 +118,9 @@
                     <div class="chapter-item-main">
                         <strong>{{ item["title"] }}</strong>
                         <span>{{ item["date_label"] }} - {{ item["source_label"] }} - Visible: {{ item["privacy_label"] }}</span>
+                        {% if selected_cover_ref == item_cover_ref %}
+                            <span class="chapter-cover-note">Chapter cover</span>
+                        {% endif %}
                         {% if item["kind"] == "text" %}
                             <p>{{ item["body"] }}</p>
                         {% endif %}
@@ -67,6 +144,7 @@
                 </article>
             {% endfor %}
         </div>
+        <p class="muted compact-status" data-reorder-status aria-live="polite"></p>
     {% else %}
         <p class="empty-state">Add photos or text entries from a month page to build this story.</p>
     {% endif %}

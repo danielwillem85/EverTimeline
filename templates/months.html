@@ -35,7 +35,16 @@
                         <button class="icon-button local-settings-close" type="button" data-close-local-settings aria-label="Close local settings">x</button>
                     </header>
                     <p class="muted">Set who can see every item in {{ year }}.</p>
-                    <form method="post" action="{{ url_for('bulk_year_privacy', year=year) }}" class="privacy-bulk-form local-settings-form">
+                    <form
+                        method="post"
+                        action="{{ url_for('bulk_year_privacy', year=year) }}"
+                        class="privacy-bulk-form local-settings-form"
+                        data-confirm
+                        data-confirm-title="Apply bulk visibility?"
+                        data-confirm-message="This will update who can see every photo and text entry in {{ year }}."
+                        data-confirm-action="Apply to year"
+                    >
+                        {{ csrf_field() }}
                         {{ tag_radio_group() }}
                         <button class="button secondary" type="submit">Apply to year</button>
                     </form>

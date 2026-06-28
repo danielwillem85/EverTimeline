@@ -65,10 +65,12 @@
                     </div>
                     <span class="status-badge">{{ request["relation"] }}</span>
                     <form class="inline-form" method="post" action="{{ url_for('accept_connection_request', request_id=request['id']) }}">
+                        {{ csrf_field() }}
                         <input type="hidden" name="next" value="notifications">
                         <button class="button primary small" type="submit">Accept</button>
                     </form>
                     <form class="inline-form" method="post" action="{{ url_for('decline_connection_request', request_id=request['id']) }}">
+                        {{ csrf_field() }}
                         <input type="hidden" name="next" value="notifications">
                         <button class="button secondary small" type="submit">Decline</button>
                     </form>

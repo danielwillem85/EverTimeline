@@ -35,9 +35,9 @@
                     {% if request.endpoint == 'home' %}aria-current="page"{% endif %}
                 >Home</a>
                 <a
-                    class="topbar-link{% if request.endpoint in ('timeline', 'timeline_search', 'year_view', 'month_view', 'birthday') %} is-active{% endif %}"
+                    class="topbar-link{% if request.endpoint in ('timeline', 'timeline_search', 'timeline_map', 'year_view', 'month_view', 'birthday') %} is-active{% endif %}"
                     href="{{ url_for('timeline') }}"
-                    {% if request.endpoint in ('timeline', 'timeline_search', 'year_view', 'month_view', 'birthday') %}aria-current="page"{% endif %}
+                    {% if request.endpoint in ('timeline', 'timeline_search', 'timeline_map', 'year_view', 'month_view', 'birthday') %}aria-current="page"{% endif %}
                 >Timeline</a>
                 <a
                     class="topbar-link{% if request.endpoint in ('chapters', 'chapter_detail') %} is-active{% endif %}"

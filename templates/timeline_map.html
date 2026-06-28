@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block title %}Timeline map - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
+        <h1>Map</h1>
+        <p class="muted">{{ mapped_items|length }} mapped, {{ named_items|length }} named</p>
+    </div>
+    <div class="page-actions">
+        <a class="button secondary" href="{{ url_for('timeline_search') }}">Search timeline</a>
+    </div>
+</section>
+
+<section class="timeline-map-panel" aria-label="Timeline map">
+    <div class="timeline-map-canvas">
+        <div class="timeline-map-grid" aria-hidden="true"></div>
+        {% for item in mapped_items %}
+            <a
+                class="timeline-map-marker {{ item['kind'] }}"
+                href="{{ item['url'] }}"
+                style="left: {{ '%.4f'|format(item['x']) }}%; top: {{ '%.4f'|format(item['y']) }}%;"
+                title="{{ item['location_name'] or item['title'] }} - {{ item['date_label'] }}"
+                aria-label="{{ item['title'] }} at {{ item['location_name'] or item['latitude'] ~ ', ' ~ item['longitude'] }}"
+            >
+                <span></span>
+            </a>
+        {% else %}
+            <p class="empty-state map-empty">No mapped coordinates yet.</p>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="map-place-list" aria-label="Timeline places">
+    {% for item in items %}
+        <article class="map-place-card{% if not item['has_coordinates'] %} needs-coordinates{% endif %}">
+            <div class="map-place-main">
+                <span class="status-badge">{{ "Photo" if item["kind"] == "photo" else "Text" }}</span>
+                <h2>{{ item["location_name"] or "Coordinates" }}</h2>
+                <span>{{ item["title"] }} - {{ item["date_label"] }}</span>
+                {% if item["preview"] %}
+                    <p>{{ item["preview"] }}</p>
+                {% endif %}
+                {% if item["has_coordinates"] %}
+                    <small>{{ "%.5f"|format(item["latitude"]) }}, {{ "%.5f"|format(item["longitude"]) }}</small>
+                {% else %}
+                    <small>Needs coordinates</small>
+                {% endif %}
+            </div>
+            <a class="button secondary small" href="{{ item['url'] }}">Open</a>
+        </article>
+    {% else %}
+        <p class="empty-state">No places yet.</p>
+    {% endfor %}
+</section>
+{% endblock %}

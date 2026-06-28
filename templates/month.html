@@ -20,6 +20,24 @@
 </fieldset>
 {% endmacro %}
 
+{% macro location_fields() %}
+<fieldset class="location-fields">
+    <legend>Place</legend>
+    <label>
+        <span>Name</span>
+        <input name="location_name" placeholder="City, venue, or address">
+    </label>
+    <label>
+        <span>Latitude</span>
+        <input name="latitude" type="number" min="-90" max="90" step="any" inputmode="decimal">
+    </label>
+    <label>
+        <span>Longitude</span>
+        <input name="longitude" type="number" min="-180" max="180" step="any" inputmode="decimal">
+    </label>
+</fieldset>
+{% endmacro %}
+
 {% macro chapter_add_form(item) %}
     {% if chapters %}
         <details class="chapter-add-panel">
@@ -97,6 +115,7 @@
                 <span>Date</span>
                 <input name="photo_date" type="date" min="{{ month_start }}" max="{{ month_end }}">
             </label>
+            {{ location_fields() }}
             {{ tag_radio_group() }}
             <button class="button primary" type="submit">Upload</button>
         </form>
@@ -114,6 +133,7 @@
                 <span>Date</span>
                 <input name="entry_date" type="date" min="{{ month_start }}" max="{{ month_end }}">
             </label>
+            {{ location_fields() }}
             {{ tag_radio_group() }}
             <button class="button primary" type="submit">Save</button>
         </form>
@@ -131,6 +151,9 @@
                         data-photo-id="{{ item['id'] }}"
                         data-entry-ref="photo-{{ item['id'] }}"
                         data-photo-date="{{ item['display_date'] or '' }}"
+                        data-location-name="{{ item['location_name'] or '' }}"
+                        data-latitude="{{ item['latitude'] if item['latitude'] is not none else '' }}"
+                        data-longitude="{{ item['longitude'] if item['longitude'] is not none else '' }}"
                         data-photo-tags="{{ item['tags_text'] }}"
                         data-privacy-label="{{ item['privacy_label'] }}"
                         data-privacy-help="{{ item['privacy_help'] }}"
@@ -152,6 +175,9 @@
                         type="button"
                         data-entry-id="{{ item['id'] }}"
                         data-entry-ref="text-{{ item['id'] }}"
+                        data-location-name="{{ item['location_name'] or '' }}"
+                        data-latitude="{{ item['latitude'] if item['latitude'] is not none else '' }}"
+                        data-longitude="{{ item['longitude'] if item['longitude'] is not none else '' }}"
                         data-entry-tags="{{ item['tags_text'] }}"
                         data-privacy-label="{{ item['privacy_label'] }}"
                         data-privacy-help="{{ item['privacy_help'] }}"
@@ -182,6 +208,7 @@
             <div>
                 <h2 id="text-modal-title">Text entry</h2>
                 <p id="text-modal-date" class="muted"></p>
+                <p id="text-location-summary" class="location-summary"></p>
                 <p id="text-privacy-summary" class="privacy-summary"></p>
             </div>
             <div class="modal-actions">
@@ -201,6 +228,7 @@
                     <span>Date</span>
                     <input name="entry_date" type="date" min="{{ month_start }}" max="{{ month_end }}">
                 </label>
+                {{ location_fields() }}
                 {{ tag_radio_group() }}
                 <div class="form-actions">
                     <button class="button primary" type="submit">Save</button>
@@ -218,6 +246,7 @@
             <div>
                 <h2 id="modal-title">Picture</h2>
                 <p id="modal-date" class="muted"></p>
+                <p id="photo-location-summary" class="location-summary"></p>
                 <p id="photo-privacy-summary" class="privacy-summary"></p>
             </div>
             <div class="modal-actions">
@@ -231,6 +260,10 @@
                 <form id="photo-tags-form" class="tags-form">
                     {{ tag_radio_group() }}
                     <button class="button secondary small" type="submit">Save visibility</button>
+                </form>
+                <form id="photo-location-form" class="location-form">
+                    {{ location_fields() }}
+                    <button class="button secondary small" type="submit">Save place</button>
                 </form>
                 <h3>Messages</h3>
                 <div id="message-list" class="message-list"></div>

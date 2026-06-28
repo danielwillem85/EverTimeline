@@ -13,6 +13,7 @@
         {% endif %}
     </div>
     <form class="inline-form" method="post" action="{{ url_for('delete_chapter', chapter_id=chapter['id']) }}">
+        {{ csrf_field() }}
         <button class="button danger small" type="submit">Delete chapter</button>
     </form>
 </section>
@@ -49,14 +50,17 @@
                     </div>
                     <div class="chapter-item-actions">
                         <form class="inline-form" method="post" action="{{ url_for('reorder_chapter_item', chapter_id=chapter['id'], chapter_item_id=item['chapter_item_id']) }}">
+                            {{ csrf_field() }}
                             <input type="hidden" name="direction" value="up">
                             <button class="button secondary small" type="submit" {% if loop.first %}disabled{% endif %}>Up</button>
                         </form>
                         <form class="inline-form" method="post" action="{{ url_for('reorder_chapter_item', chapter_id=chapter['id'], chapter_item_id=item['chapter_item_id']) }}">
+                            {{ csrf_field() }}
                             <input type="hidden" name="direction" value="down">
                             <button class="button secondary small" type="submit" {% if loop.last %}disabled{% endif %}>Down</button>
                         </form>
                         <form class="inline-form" method="post" action="{{ url_for('remove_chapter_item', chapter_id=chapter['id'], chapter_item_id=item['chapter_item_id']) }}">
+                            {{ csrf_field() }}
                             <button class="button danger small" type="submit">Remove</button>
                         </form>
                     </div>

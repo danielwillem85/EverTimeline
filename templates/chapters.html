@@ -13,6 +13,7 @@
 <section class="connection-section">
     <h2>Create chapter</h2>
     <form class="chapter-form" method="post">
+        {{ csrf_field() }}
         <label>
             <span>Title</span>
             <input name="title" placeholder="College, First job, Family trip" required>
@@ -41,6 +42,7 @@
                     <div class="chapter-card-actions">
                         <a class="button primary small" href="{{ url_for('chapter_detail', chapter_id=chapter['id']) }}">Open</a>
                         <form class="inline-form" method="post" action="{{ url_for('delete_chapter', chapter_id=chapter['id']) }}">
+                            {{ csrf_field() }}
                             <button class="button danger small" type="submit">Delete</button>
                         </form>
                     </div>

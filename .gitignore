@@ -4,3 +4,4 @@ __pycache__/
 venv/
 evertimeline.sqlite3
 .env
+.coverage

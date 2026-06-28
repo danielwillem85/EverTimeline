@@ -65,6 +65,7 @@
             <button class="icon-button" type="button" data-close-connection-modal aria-label="Close popup">x</button>
         </header>
         <form class="connection-modal-form" method="post" action="{{ url_for('create_connection_request') }}">
+            {{ csrf_field() }}
             <input type="hidden" name="recipient_id" id="connection-recipient-id">
             <input type="hidden" name="q" value="{{ query }}">
             <fieldset class="tag-radio-group">

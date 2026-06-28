@@ -6,6 +6,7 @@
 <section class="auth-panel">
     <h1>Log in</h1>
     <form method="post" class="form-stack">
+        {{ csrf_field() }}
         <label>
             <span>Username</span>
             <input name="username" autocomplete="username" required>

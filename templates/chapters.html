@@ -2,6 +2,23 @@
 
 {% block title %}Chapters - EverTimeline{% endblock %}
 
+{% macro tag_radio_group(selected=default_tag) %}
+<fieldset class="tag-radio-group">
+    <legend>Sharing</legend>
+    <div class="tag-radio-list">
+        {% for tag in tag_choices %}
+            <label class="tag-radio">
+                <input type="radio" name="visibility" value="{{ tag }}" {% if tag == selected %}checked{% endif %}>
+                <span>
+                    <strong>{{ tag }}</strong>
+                    <small>{{ privacy_labels[tag] }}</small>
+                </span>
+            </label>
+        {% endfor %}
+    </div>
+</fieldset>
+{% endmacro %}
+
 {% block content %}
 <section class="page-heading">
     <div>
@@ -21,6 +38,7 @@
             <span>Description</span>
             <textarea name="description" rows="3" placeholder="A short note about this story"></textarea>
         </label>
+        {{ tag_radio_group() }}
         <button class="button primary" type="submit">Create</button>
     </form>
 </section>
@@ -31,16 +49,36 @@
         <div class="chapter-grid">
             {% for chapter in chapters %}
                 <article class="chapter-card">
+                    <div class="chapter-card-cover">
+                        {% if chapter["cover"] %}
+                            {% if chapter["cover"]["kind"] == "photo" %}
+                                <img src="{{ chapter['cover']['image_url'] }}" alt="{{ chapter['cover']['label'] }}" loading="lazy">
+                            {% else %}
+                                <div class="chapter-card-text-cover">{{ chapter["cover"]["body"] }}</div>
+                            {% endif %}
+                        {% else %}
+                            <div class="chapter-card-empty-cover">No cover</div>
+                        {% endif %}
+                    </div>
                     <div class="chapter-card-main">
                         <h3>{{ chapter["title"] }}</h3>
                         {% if chapter["description"] %}
                             <p>{{ chapter["description"] }}</p>
                         {% endif %}
-                        <span>{{ chapter["item_count"] }} items</span>
+                        <span>{{ chapter["item_count"] }} items - Shared: {{ chapter["privacy_label"] }}</span>
                     </div>
                     <div class="chapter-card-actions">
                         <a class="button primary small" href="{{ url_for('chapter_detail', chapter_id=chapter['id']) }}">Open</a>
-                        <form class="inline-form" method="post" action="{{ url_for('delete_chapter', chapter_id=chapter['id']) }}">
+                        <form
+                            class="inline-form"
+                            method="post"
+                            action="{{ url_for('delete_chapter', chapter_id=chapter['id']) }}"
+                            data-confirm
+                            data-confirm-title="Delete chapter?"
+                            data-confirm-message="This removes the chapter and its curated sequence. The original photos and text entries stay in your timeline."
+                            data-confirm-action="Delete chapter"
+                            data-confirm-danger="true"
+                        >
                             <button class="button danger small" type="submit">Delete</button>
                         </form>
                     </div>

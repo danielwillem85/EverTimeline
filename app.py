@@ -256,6 +256,9 @@ def init_db():
                 user_id INTEGER NOT NULL,
                 title TEXT NOT NULL,
                 description TEXT,
+                visibility TEXT NOT NULL DEFAULT 'private' CHECK (visibility IN ('private', 'family', 'friends', 'public')),
+                cover_item_kind TEXT CHECK (cover_item_kind IN ('photo', 'text')),
+                cover_item_id INTEGER,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
@@ -274,6 +277,7 @@ def init_db():
             """
         )
         ensure_user_profile_columns(db)
+        ensure_chapter_columns(db)
         db.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique
@@ -346,6 +350,21 @@ def ensure_user_profile_columns(db):
         "first_name": "ALTER TABLE users ADD COLUMN first_name TEXT NOT NULL DEFAULT ''",
         "last_name": "ALTER TABLE users ADD COLUMN last_name TEXT NOT NULL DEFAULT ''",
         "email": "ALTER TABLE users ADD COLUMN email TEXT",
+    }
+    for column_name, statement in migrations.items():
+        if column_name not in columns:
+            db.execute(statement)
+
+
+def ensure_chapter_columns(db):
+    columns = {
+        row[1]
+        for row in db.execute("PRAGMA table_info(chapters)").fetchall()
+    }
+    migrations = {
+        "visibility": "ALTER TABLE chapters ADD COLUMN visibility TEXT NOT NULL DEFAULT 'private'",
+        "cover_item_kind": "ALTER TABLE chapters ADD COLUMN cover_item_kind TEXT",
+        "cover_item_id": "ALTER TABLE chapters ADD COLUMN cover_item_id INTEGER",
     }
     for column_name, statement in migrations.items():
         if column_name not in columns:
@@ -1350,8 +1369,104 @@ def get_chapter_options(db):
     ).fetchall()
 
 
+def chapter_visibility(value):
+    return normalize_tag_choice(value) or DEFAULT_TAG
+
+
+def parse_chapter_cover_ref(value):
+    if not value:
+        return None, None
+    try:
+        item_kind, item_id = value.split(":", 1)
+        item_id = int(item_id)
+    except (TypeError, ValueError):
+        return None, None
+    if item_kind not in ("photo", "text") or item_id <= 0:
+        return None, None
+    return item_kind, item_id
+
+
+def chapter_cover_ref(item):
+    return f"{item['kind']}:{item['id']}"
+
+
+def chapter_cover_exists(db, chapter_id, item_kind, item_id):
+    if not item_kind or not item_id:
+        return True
+    row = db.execute(
+        """
+        SELECT id
+        FROM chapter_items
+        WHERE chapter_id = ? AND item_kind = ? AND item_id = ?
+        """,
+        (chapter_id, item_kind, item_id),
+    ).fetchone()
+    return row is not None
+
+
+def get_chapter_cover(db, chapter, image_url_builder):
+    selected_kind = chapter["cover_item_kind"] if "cover_item_kind" in chapter.keys() else None
+    selected_id = chapter["cover_item_id"] if "cover_item_id" in chapter.keys() else None
+    row = None
+    if selected_kind and selected_id:
+        row = db.execute(
+            """
+            SELECT item_kind, item_id
+            FROM chapter_items
+            WHERE chapter_id = ? AND item_kind = ? AND item_id = ?
+            """,
+            (chapter["id"], selected_kind, selected_id),
+        ).fetchone()
+    if row is None:
+        row = db.execute(
+            """
+            SELECT item_kind, item_id
+            FROM chapter_items
+            WHERE chapter_id = ?
+            ORDER BY position ASC, id ASC
+            LIMIT 1
+            """,
+            (chapter["id"],),
+        ).fetchone()
+    if row is None:
+        return None
+
+    if row["item_kind"] == "photo":
+        photo = db.execute(
+            """
+            SELECT id, original_filename
+            FROM photos
+            WHERE id = ? AND user_id = ?
+            """,
+            (row["item_id"], g.user["id"]),
+        ).fetchone()
+        if photo is None:
+            return None
+        return {
+            "kind": "photo",
+            "image_url": image_url_builder(photo["id"]),
+            "label": photo["original_filename"] or "Photo",
+        }
+
+    entry = db.execute(
+        """
+        SELECT id, body
+        FROM text_entries
+        WHERE id = ? AND user_id = ?
+        """,
+        (row["item_id"], g.user["id"]),
+    ).fetchone()
+    if entry is None:
+        return None
+    return {
+        "kind": "text",
+        "body": entry["body"],
+        "label": "Text entry",
+    }
+
+
 def get_chapters_with_counts(db):
-    return db.execute(
+    rows = db.execute(
         """
         SELECT
             c.*,
@@ -1364,6 +1479,18 @@ def get_chapters_with_counts(db):
         """,
         (g.user["id"],),
     ).fetchall()
+    chapters = []
+    for row in rows:
+        chapter = dict(row)
+        chapter["visibility"] = chapter_visibility(chapter.get("visibility"))
+        chapter.update(privacy_payload_for_tags([chapter["visibility"]]))
+        chapter["cover"] = get_chapter_cover(
+            db,
+            row,
+            lambda photo_id: url_for("photo_image", photo_id=photo_id),
+        )
+        chapters.append(chapter)
+    return chapters
 
 
 def get_owned_chapter(chapter_id):
@@ -3265,16 +3392,17 @@ def chapters():
     if request.method == "POST":
         title = request.form.get("title", "").strip()
         description = request.form.get("description", "").strip()
+        visibility = chapter_visibility(request.form.get("visibility"))
         if not title:
             flash("Chapter title is required.", "error")
             return redirect(url_for("chapters"))
 
         cursor = db.execute(
             """
-            INSERT INTO chapters (user_id, title, description)
-            VALUES (?, ?, ?)
+            INSERT INTO chapters (user_id, title, description, visibility)
+            VALUES (?, ?, ?, ?)
             """,
-            (g.user["id"], title, description or None),
+            (g.user["id"], title, description or None, visibility),
         )
         db.commit()
         flash("Chapter created.", "success")
@@ -3293,7 +3421,69 @@ def chapter_detail(chapter_id):
         chapter_id,
         lambda photo_id: url_for("photo_image", photo_id=photo_id),
     )
-    return render_template("chapter.html", chapter=chapter, items=items)
+    chapter = dict(chapter)
+    chapter["visibility"] = chapter_visibility(chapter.get("visibility"))
+    chapter.update(privacy_payload_for_tags([chapter["visibility"]]))
+    chapter["cover"] = get_chapter_cover(
+        db,
+        chapter,
+        lambda photo_id: url_for("photo_image", photo_id=photo_id),
+    )
+    return render_template(
+        "chapter.html",
+        chapter=chapter,
+        items=items,
+        cover_options=items,
+        selected_cover_ref=(
+            f"{chapter['cover_item_kind']}:{chapter['cover_item_id']}"
+            if chapter.get("cover_item_kind") and chapter.get("cover_item_id")
+            else ""
+        ),
+    )
+
+
+@app.route("/chapters/<int:chapter_id>/settings", methods=("POST",))
+@birthday_required
+def update_chapter_settings(chapter_id):
+    db = get_db()
+    get_owned_chapter(chapter_id)
+    title = request.form.get("title", "").strip()
+    description = request.form.get("description", "").strip()
+    visibility = chapter_visibility(request.form.get("visibility"))
+    cover_kind, cover_id = parse_chapter_cover_ref(request.form.get("cover_ref", ""))
+
+    if not title:
+        flash("Chapter title is required.", "error")
+        return redirect(url_for("chapter_detail", chapter_id=chapter_id))
+
+    if cover_kind and not chapter_cover_exists(db, chapter_id, cover_kind, cover_id):
+        flash("Choose a cover from this chapter.", "error")
+        return redirect(url_for("chapter_detail", chapter_id=chapter_id))
+
+    db.execute(
+        """
+        UPDATE chapters
+        SET title = ?,
+            description = ?,
+            visibility = ?,
+            cover_item_kind = ?,
+            cover_item_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+        """,
+        (
+            title,
+            description or None,
+            visibility,
+            cover_kind,
+            cover_id,
+            chapter_id,
+            g.user["id"],
+        ),
+    )
+    db.commit()
+    flash("Chapter settings saved.", "success")
+    return redirect(url_for("chapter_detail", chapter_id=chapter_id))
 
 
 @app.route("/chapters/<int:chapter_id>/delete", methods=("POST",))
@@ -3385,6 +3575,51 @@ def reorder_chapter_item(chapter_id, chapter_item_id):
         )
         db.commit()
     return redirect(url_for("chapter_detail", chapter_id=chapter_id))
+
+
+@app.route("/api/chapters/<int:chapter_id>/items/reorder", methods=("POST",))
+@birthday_required
+def reorder_chapter_items(chapter_id):
+    db = get_db()
+    get_owned_chapter(chapter_id)
+    payload = request.get_json(silent=True) or {}
+    item_ids = payload.get("item_ids") or []
+    if not isinstance(item_ids, list):
+        return jsonify({"error": "Invalid item order."}), 400
+
+    try:
+        normalized_ids = [int(item_id) for item_id in item_ids]
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid item order."}), 400
+
+    rows = db.execute(
+        """
+        SELECT id
+        FROM chapter_items
+        WHERE chapter_id = ?
+        ORDER BY position ASC, id ASC
+        """,
+        (chapter_id,),
+    ).fetchall()
+    existing_ids = [row["id"] for row in rows]
+    if sorted(normalized_ids) != sorted(existing_ids):
+        return jsonify({"error": "Item order does not match this chapter."}), 400
+
+    for position, item_id in enumerate(normalized_ids, start=1):
+        db.execute(
+            """
+            UPDATE chapter_items
+            SET position = ?
+            WHERE id = ? AND chapter_id = ?
+            """,
+            (position, item_id, chapter_id),
+        )
+    db.execute(
+        "UPDATE chapters SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (chapter_id,),
+    )
+    db.commit()
+    return jsonify({"status": "ok"})
 
 
 @app.route("/api/chapters/<int:chapter_id>/items")

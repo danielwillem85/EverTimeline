@@ -52,6 +52,107 @@ document.addEventListener("DOMContentLoaded", () => {
         container.dataset.privacyHelp = help || "";
     };
 
+    const syncModalOpenState = () => {
+        const hasOpenModal = Array.from(document.querySelectorAll(".modal")).some((modal) => {
+            return !modal.hidden;
+        });
+        document.body.classList.toggle("modal-open", hasOpenModal);
+    };
+
+    const confirmationModal = document.getElementById("confirmation-modal");
+    const confirmationTitle = document.getElementById("confirmation-modal-title");
+    const confirmationMessage = document.getElementById("confirmation-modal-message");
+    const confirmationAcceptButton = confirmationModal ? confirmationModal.querySelector("[data-confirm-accept]") : null;
+    const confirmationCancelButtons = confirmationModal ? Array.from(confirmationModal.querySelectorAll("[data-confirm-cancel]")) : [];
+    let confirmationResolve = null;
+    let confirmationTrigger = null;
+
+    const closeConfirmation = (confirmed) => {
+        if (!confirmationModal || !confirmationResolve) {
+            return;
+        }
+
+        const resolve = confirmationResolve;
+        const trigger = confirmationTrigger;
+        confirmationResolve = null;
+        confirmationTrigger = null;
+        confirmationModal.hidden = true;
+        syncModalOpenState();
+        resolve(confirmed);
+
+        if (trigger && typeof trigger.focus === "function") {
+            trigger.focus({preventScroll: true});
+        }
+    };
+
+    const requestConfirmation = ({
+        title = "Confirm action",
+        message = "This action needs confirmation.",
+        confirmLabel = "Confirm",
+        danger = false,
+    } = {}) => {
+        if (!confirmationModal || !confirmationTitle || !confirmationMessage || !confirmationAcceptButton) {
+            return Promise.resolve(true);
+        }
+
+        if (confirmationResolve) {
+            closeConfirmation(false);
+        }
+
+        confirmationTitle.textContent = title;
+        confirmationMessage.textContent = message;
+        confirmationAcceptButton.textContent = confirmLabel;
+        confirmationAcceptButton.className = `button ${danger ? "danger" : "primary"}`;
+        confirmationTrigger = document.activeElement;
+        confirmationModal.hidden = false;
+        syncModalOpenState();
+        confirmationAcceptButton.focus();
+
+        return new Promise((resolve) => {
+            confirmationResolve = resolve;
+        });
+    };
+
+    if (confirmationModal) {
+        confirmationAcceptButton.addEventListener("click", () => closeConfirmation(true));
+        confirmationCancelButtons.forEach((button) => {
+            button.addEventListener("click", () => closeConfirmation(false));
+        });
+
+        document.addEventListener("keydown", (event) => {
+            if (event.key !== "Escape" || confirmationModal.hidden) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            closeConfirmation(false);
+        });
+    }
+
+    document.querySelectorAll("form[data-confirm]").forEach((form) => {
+        form.addEventListener("submit", async (event) => {
+            if (form.dataset.confirmed === "true") {
+                delete form.dataset.confirmed;
+                return;
+            }
+
+            event.preventDefault();
+            const confirmed = await requestConfirmation({
+                title: form.dataset.confirmTitle || "Confirm action",
+                message: form.dataset.confirmMessage || "This action needs confirmation.",
+                confirmLabel: form.dataset.confirmAction || "Confirm",
+                danger: form.dataset.confirmDanger === "true",
+            });
+            if (!confirmed) {
+                return;
+            }
+
+            form.dataset.confirmed = "true";
+            HTMLFormElement.prototype.submit.call(form);
+        });
+    });
+
     const navToggle = document.querySelector("[data-nav-toggle]");
     const primaryNavigation = document.querySelector("[data-primary-navigation]");
     if (navToggle && primaryNavigation) {
@@ -758,6 +859,108 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    document.querySelectorAll("[data-chapter-sequence]").forEach((sequence) => {
+        const reorderUrl = sequence.dataset.reorderUrl;
+        const status = document.querySelector("[data-reorder-status]");
+        let draggedItem = null;
+
+        const chapterItems = () => Array.from(sequence.querySelectorAll(".chapter-sequence-item"));
+
+        const setReorderStatus = (message) => {
+            if (status) {
+                status.textContent = message;
+            }
+        };
+
+        const updateChapterPositions = () => {
+            chapterItems().forEach((item, index) => {
+                const position = item.querySelector(".chapter-position");
+                if (position) {
+                    position.textContent = String(index + 1);
+                }
+            });
+        };
+
+        const saveChapterOrder = async () => {
+            if (!reorderUrl) {
+                return;
+            }
+
+            const itemIds = chapterItems().map((item) => Number(item.dataset.chapterItemId));
+            setReorderStatus("Saving order...");
+            try {
+                const response = await fetch(reorderUrl, {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({item_ids: itemIds}),
+                });
+                if (!response.ok) {
+                    throw new Error("Order could not be saved.");
+                }
+                setReorderStatus("Order saved.");
+            } catch (error) {
+                setReorderStatus("Order could not be saved. Refresh and try again.");
+            }
+        };
+
+        sequence.addEventListener("dragstart", (event) => {
+            const handle = event.target.closest(".chapter-drag-handle");
+            if (!handle) {
+                event.preventDefault();
+                return;
+            }
+
+            draggedItem = handle.closest(".chapter-sequence-item");
+            if (!draggedItem) {
+                event.preventDefault();
+                return;
+            }
+
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", draggedItem.dataset.chapterItemId || "");
+            window.setTimeout(() => {
+                draggedItem.classList.add("is-dragging");
+            }, 0);
+        });
+
+        sequence.addEventListener("dragover", (event) => {
+            if (!draggedItem) {
+                return;
+            }
+
+            const target = event.target.closest(".chapter-sequence-item");
+            if (!target || target === draggedItem || !sequence.contains(target)) {
+                return;
+            }
+
+            event.preventDefault();
+            chapterItems().forEach((item) => item.classList.remove("is-drop-target"));
+            target.classList.add("is-drop-target");
+            const rect = target.getBoundingClientRect();
+            const shouldMoveAfter = event.clientY > rect.top + rect.height / 2;
+            sequence.insertBefore(draggedItem, shouldMoveAfter ? target.nextSibling : target);
+            updateChapterPositions();
+        });
+
+        sequence.addEventListener("drop", async (event) => {
+            if (!draggedItem) {
+                return;
+            }
+
+            event.preventDefault();
+            chapterItems().forEach((item) => item.classList.remove("is-drop-target", "is-dragging"));
+            draggedItem = null;
+            updateChapterPositions();
+            await saveChapterOrder();
+        });
+
+        sequence.addEventListener("dragend", () => {
+            chapterItems().forEach((item) => item.classList.remove("is-drop-target", "is-dragging"));
+            draggedItem = null;
+            updateChapterPositions();
+        });
+    });
+
     const homePhotoModal = document.getElementById("home-photo-modal");
     if (homePhotoModal) {
         const homePhotoImage = document.getElementById("home-photo-modal-image");
@@ -1318,6 +1521,16 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
+        const confirmed = await requestConfirmation({
+            title: "Delete picture?",
+            message: "This permanently removes the picture, messages, chapter placements, tags, likes, loves, and related notifications.",
+            confirmLabel: "Delete picture",
+            danger: true,
+        });
+        if (!confirmed) {
+            return;
+        }
+
         deletePhotoButton.disabled = true;
         const response = await csrfFetch(`/api/photo/${activePhotoId}`, {
             method: "DELETE",
@@ -1376,6 +1589,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
     deleteTextButton.addEventListener("click", async () => {
         if (activeTextEntryId === null) {
+            return;
+        }
+
+        const confirmed = await requestConfirmation({
+            title: "Delete text entry?",
+            message: "This permanently removes the text entry, chapter placements, tags, likes, loves, and related notifications.",
+            confirmLabel: "Delete text",
+            danger: true,
+        });
+        if (!confirmed) {
             return;
         }
 

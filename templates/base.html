@@ -66,16 +66,23 @@
                     href="{{ url_for('search') }}"
                     {% if request.endpoint == 'search' %}aria-current="page"{% endif %}
                 >People</a>
-                <a
-                    class="topbar-link{% if request.endpoint == 'profile' %} is-active{% endif %}"
-                    href="{{ url_for('profile') }}"
-                    {% if request.endpoint == 'profile' %}aria-current="page"{% endif %}
-                >Profile</a>
-                <span class="username">{{ g.user["username"] }}</span>
-                <form action="{{ url_for('logout') }}" method="post">
-                    {{ csrf_field() }}
-                    <button class="button secondary small" type="submit">Log out</button>
-                </form>
+                <details class="account-menu{% if request.endpoint == 'profile' %} is-active{% endif %}">
+                    <summary aria-label="Account menu for {{ g.user['username'] }}" title="Account menu">
+                        <span aria-hidden="true">&#9881;</span>
+                    </summary>
+                    <div class="account-menu-panel">
+                        <span class="account-menu-name">{{ g.user["username"] }}</span>
+                        <a
+                            class="account-menu-link{% if request.endpoint == 'profile' %} is-active{% endif %}"
+                            href="{{ url_for('profile') }}"
+                            {% if request.endpoint == 'profile' %}aria-current="page"{% endif %}
+                        >Profile</a>
+                        <form action="{{ url_for('logout') }}" method="post">
+                            {{ csrf_field() }}
+                            <button class="button secondary small" type="submit">Log out</button>
+                        </form>
+                    </div>
+                </details>
             </nav>
         {% endif %}
     </header>
@@ -93,5 +100,22 @@
 
         {% block content %}{% endblock %}
     </main>
+
+    <div class="modal confirmation-modal" id="confirmation-modal" hidden>
+        <div class="modal-backdrop" data-confirm-cancel></div>
+        <section class="modal-panel confirmation-panel" role="dialog" aria-modal="true" aria-labelledby="confirmation-modal-title">
+            <header class="modal-header">
+                <h2 id="confirmation-modal-title">Confirm action</h2>
+                <button class="icon-button" type="button" data-confirm-cancel aria-label="Close confirmation">x</button>
+            </header>
+            <div class="confirmation-body">
+                <p id="confirmation-modal-message">This action needs confirmation.</p>
+                <div class="form-actions confirmation-actions">
+                    <button class="button secondary" type="button" data-confirm-cancel>Cancel</button>
+                    <button class="button danger" type="button" data-confirm-accept>Confirm</button>
+                </div>
+            </div>
+        </section>
+    </div>
 </body>
 </html>

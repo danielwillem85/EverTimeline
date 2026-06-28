@@ -175,6 +175,94 @@ body.nav-open {
     font-size: 0.84rem;
 }
 
+.account-menu {
+    position: relative;
+}
+
+.account-menu summary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    min-height: 30px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0;
+    background: var(--surface-strong);
+    color: var(--ink);
+    cursor: pointer;
+    font-size: 1rem;
+    font-weight: 900;
+    list-style: none;
+}
+
+.account-menu summary::-webkit-details-marker {
+    display: none;
+}
+
+.account-menu[open] summary,
+.account-menu.is-active summary {
+    border-color: #2563eb;
+    background: #2563eb;
+    color: #fff;
+}
+
+.account-menu:not([open]) > .account-menu-panel {
+    display: none;
+}
+
+.account-menu-panel {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 40;
+    display: grid;
+    width: 180px;
+    gap: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.account-menu-name {
+    padding: 2px 2px 6px;
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.86rem;
+    font-weight: 800;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.account-menu-link {
+    display: flex;
+    align-items: center;
+    min-height: 34px;
+    border-radius: 6px;
+    padding: 0 10px;
+    color: var(--ink);
+    font-size: 0.9rem;
+    font-weight: 800;
+    text-decoration: none;
+}
+
+.account-menu-link:hover {
+    background: var(--surface-strong);
+}
+
+.account-menu-link.is-active {
+    background: #2563eb;
+    color: #fff;
+}
+
+.account-menu form,
+.account-menu .button {
+    width: 100%;
+}
+
 .shell {
     width: min(1120px, calc(100% - 32px));
     margin: 0 auto;
@@ -1273,6 +1361,30 @@ details.privacy-toggle-panel {
     box-shadow: var(--shadow);
 }
 
+.confirmation-modal {
+    z-index: 120;
+}
+
+.confirmation-panel {
+    width: min(460px, 100%);
+}
+
+.confirmation-body {
+    display: grid;
+    gap: 18px;
+    padding: 18px;
+}
+
+.confirmation-body p {
+    margin-bottom: 0;
+    color: var(--muted);
+    line-height: 1.45;
+}
+
+.confirmation-actions {
+    justify-content: flex-end;
+}
+
 .modal-header {
     display: flex;
     align-items: center;
@@ -1920,7 +2032,7 @@ details.privacy-toggle-panel {
 
 .chapter-form {
     display: grid;
-    grid-template-columns: minmax(180px, 260px) minmax(240px, 1fr) auto;
+    grid-template-columns: minmax(180px, 240px) minmax(220px, 1fr) minmax(260px, 1.1fr) auto;
     align-items: end;
     gap: 14px;
 }
@@ -1938,13 +2050,56 @@ details.privacy-toggle-panel {
 
 .chapter-card {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: 96px minmax(0, 1fr) auto;
     gap: 14px;
     min-width: 0;
     border: 1px solid var(--border);
     border-radius: 8px;
     padding: 14px;
     background: #fff;
+}
+
+.chapter-card-cover,
+.chapter-hero-cover {
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-strong);
+}
+
+.chapter-card-cover {
+    width: 96px;
+    aspect-ratio: 1;
+}
+
+.chapter-card-cover img,
+.chapter-hero-cover img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.chapter-card-text-cover,
+.chapter-card-empty-cover,
+.chapter-hero-text-cover,
+.chapter-hero-empty-cover {
+    height: 100%;
+    overflow: hidden;
+    padding: 12px;
+    color: var(--muted);
+    font-size: 0.82rem;
+    font-weight: 800;
+    line-height: 1.35;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.chapter-card-empty-cover,
+.chapter-hero-empty-cover {
+    display: grid;
+    place-items: center;
+    text-align: center;
 }
 
 .chapter-card-main {
@@ -1975,6 +2130,78 @@ details.privacy-toggle-panel {
     gap: 8px;
 }
 
+.chapter-title-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.chapter-title-row h1 {
+    margin-bottom: 0;
+}
+
+.chapter-hero-panel {
+    display: grid;
+    grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+    gap: 18px;
+    margin-bottom: 20px;
+    padding: 18px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.chapter-hero-cover {
+    aspect-ratio: 4 / 3;
+}
+
+.chapter-settings-panel {
+    align-self: start;
+}
+
+.chapter-settings-panel summary {
+    display: inline-flex;
+    align-items: center;
+    min-height: 38px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0 12px;
+    background: var(--surface-strong);
+    color: var(--ink);
+    cursor: pointer;
+    font-weight: 900;
+    list-style: none;
+}
+
+.chapter-settings-panel summary::-webkit-details-marker {
+    display: none;
+}
+
+.chapter-settings-panel[open] summary {
+    border-color: rgba(22, 109, 103, 0.42);
+    background: #ebf6f3;
+    color: var(--primary);
+}
+
+.chapter-settings-panel:not([open]) > .chapter-settings-form {
+    display: none;
+}
+
+.chapter-settings-form {
+    display: grid;
+    grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.2fr);
+    gap: 14px;
+    margin-top: 14px;
+}
+
+.chapter-settings-form textarea,
+.chapter-settings-form .tag-radio-group,
+.chapter-settings-form .button {
+    grid-column: 1 / -1;
+}
+
 .chapter-sequence {
     display: grid;
     gap: 10px;
@@ -1982,7 +2209,7 @@ details.privacy-toggle-panel {
 
 .chapter-sequence-item {
     display: grid;
-    grid-template-columns: 38px 104px minmax(0, 1fr) auto;
+    grid-template-columns: 28px 38px 104px minmax(0, 1fr) auto;
     align-items: center;
     gap: 14px;
     min-width: 0;
@@ -1990,6 +2217,31 @@ details.privacy-toggle-panel {
     border-radius: 8px;
     padding: 12px;
     background: #fff;
+}
+
+.chapter-sequence-item.is-dragging {
+    opacity: 0.48;
+}
+
+.chapter-sequence-item.is-drop-target {
+    border-color: rgba(22, 109, 103, 0.55);
+    background: #f5fbf8;
+}
+
+.chapter-drag-handle {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    min-height: 34px;
+    border-radius: 6px;
+    color: var(--muted);
+    cursor: grab;
+    font-weight: 900;
+    letter-spacing: 1px;
+}
+
+.chapter-sequence-item:active .chapter-drag-handle {
+    cursor: grabbing;
 }
 
 .chapter-position {
@@ -2062,6 +2314,15 @@ details.privacy-toggle-panel {
     white-space: nowrap;
 }
 
+.chapter-cover-note {
+    justify-self: start;
+    border-radius: 999px;
+    padding: 2px 8px;
+    background: var(--surface-strong);
+    color: var(--primary) !important;
+    font-size: 0.78rem !important;
+}
+
 .chapter-item-main p {
     max-height: 3.9em;
     overflow: hidden;
@@ -2074,6 +2335,11 @@ details.privacy-toggle-panel {
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+.compact-status {
+    margin-bottom: 0;
+    font-size: 0.88rem;
 }
 
 .inline-form {
@@ -2411,6 +2677,16 @@ details.privacy-toggle-panel {
     .chapter-sequence-item {
         grid-template-columns: 1fr;
         align-items: stretch;
+    }
+
+    .chapter-card-cover {
+        width: 100%;
+        aspect-ratio: 4 / 3;
+    }
+
+    .chapter-hero-panel,
+    .chapter-settings-form {
+        grid-template-columns: 1fr;
     }
 
     .chapter-card-actions,

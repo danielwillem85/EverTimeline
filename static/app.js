@@ -532,6 +532,18 @@ document.addEventListener("DOMContentLoaded", () => {
                 privacy.title = item.privacy_help || "";
                 meta.appendChild(privacy);
             }
+            if (item.kind === "photo" && item.title) {
+                const title = document.createElement("span");
+                title.className = "carousel-item-photo-title";
+                title.textContent = item.title;
+                meta.appendChild(title);
+            }
+            if (item.kind === "photo" && item.caption) {
+                const caption = document.createElement("span");
+                caption.className = "carousel-item-caption";
+                caption.textContent = item.caption;
+                meta.appendChild(caption);
+            }
 
             const media = document.createElement("div");
             media.className = "carousel-window-media";
@@ -964,8 +976,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const homePhotoModal = document.getElementById("home-photo-modal");
     if (homePhotoModal) {
         const homePhotoImage = document.getElementById("home-photo-modal-image");
+        const homePhotoTitle = document.getElementById("home-photo-modal-title");
         const homePhotoOwner = document.getElementById("home-photo-modal-owner");
         const homePhotoDate = document.getElementById("home-photo-modal-date");
+        const homePhotoCaption = document.getElementById("home-photo-modal-caption");
         const homePhotoMessageList = document.getElementById("home-photo-message-list");
 
         const renderHomePhotoMessages = (messages) => {
@@ -1010,8 +1024,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const openHomePhotoModal = async (button) => {
             homePhotoImage.src = button.dataset.fullSrc;
             homePhotoImage.alt = button.dataset.photoTitle || "Selected public photo";
+            homePhotoTitle.textContent = button.dataset.photoTitle || "Public photo";
             homePhotoOwner.textContent = button.dataset.photoOwner || "";
             homePhotoDate.textContent = button.dataset.photoDate || "";
+            homePhotoCaption.textContent = button.dataset.photoCaption || "";
             renderHomePhotoMessages([]);
             homePhotoModal.hidden = false;
             document.body.classList.add("modal-open");
@@ -1043,7 +1059,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const readonlyTextModal = document.getElementById("readonly-text-modal");
     if (readonlyPhotoModal && readonlyTextModal) {
         const readonlyModalImage = document.getElementById("readonly-modal-image");
+        const readonlyPhotoTitle = document.getElementById("readonly-photo-modal-title");
         const readonlyPhotoDate = document.getElementById("readonly-photo-modal-date");
+        const readonlyPhotoCaption = document.getElementById("readonly-photo-caption-view");
         const readonlyMessageList = document.getElementById("readonly-message-list");
         const readonlyTextDate = document.getElementById("readonly-text-modal-date");
         const readonlyPhotoPrivacySummary = document.getElementById("readonly-photo-privacy-summary");
@@ -1089,7 +1107,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const openReadonlyPhotoModal = async (button) => {
             readonlyModalImage.src = button.dataset.fullSrc;
+            readonlyModalImage.alt = button.dataset.photoDisplayTitle || "Selected timeline picture";
+            readonlyPhotoTitle.textContent = button.dataset.photoDisplayTitle || "Picture";
             readonlyPhotoDate.textContent = button.dataset.photoDate || "";
+            readonlyPhotoCaption.textContent = button.dataset.photoCaption || "";
             setPrivacySummary(
                 readonlyPhotoPrivacySummary,
                 button.dataset.privacyLabel,
@@ -1180,12 +1201,17 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     const modalImage = document.getElementById("modal-image");
+    const modalTitle = document.getElementById("modal-title");
     const modalDate = document.getElementById("modal-date");
+    const photoCaptionView = document.getElementById("photo-caption-view");
     const photoPrivacySummary = document.getElementById("photo-privacy-summary");
     const messageList = document.getElementById("message-list");
     const messageForm = document.getElementById("message-form");
     const messageInput = messageForm.querySelector("textarea");
     const deletePhotoButton = document.getElementById("delete-photo-button");
+    const photoDetailsForm = document.getElementById("photo-details-form");
+    const photoDetailsTitle = photoDetailsForm.querySelector("input[name='title']");
+    const photoDetailsCaption = photoDetailsForm.querySelector("textarea[name='caption']");
     const photoTagsForm = document.getElementById("photo-tags-form");
     const photoTagInputs = Array.from(photoTagsForm.querySelectorAll("input[name='tags']"));
 
@@ -1279,6 +1305,63 @@ document.addEventListener("DOMContentLoaded", () => {
         );
     };
 
+    const updatePhotoThumbnailDetails = (photo) => {
+        if (!activePhotoThumbnail) {
+            return;
+        }
+
+        const title = photo.title || "";
+        const displayTitle = photo.display_title || title || "Photo";
+        const caption = photo.caption || "";
+        activePhotoThumbnail.dataset.photoTitle = title;
+        activePhotoThumbnail.dataset.photoDisplayTitle = displayTitle;
+        activePhotoThumbnail.dataset.photoCaption = caption;
+
+        const image = activePhotoThumbnail.querySelector("img");
+        if (image) {
+            image.alt = displayTitle;
+        }
+
+        const card = activePhotoThumbnail.closest(".entry-card");
+        if (!card) {
+            return;
+        }
+
+        let meta = card.querySelector(".photo-card-meta");
+        if (!title && !caption) {
+            if (meta) {
+                meta.remove();
+            }
+            return;
+        }
+        if (!meta) {
+            meta = document.createElement("div");
+            meta.className = "photo-card-meta";
+            activePhotoThumbnail.insertAdjacentElement("afterend", meta);
+        }
+
+        meta.innerHTML = "";
+        if (title) {
+            const titleEl = document.createElement("strong");
+            titleEl.textContent = title;
+            meta.appendChild(titleEl);
+        }
+        if (caption) {
+            const captionEl = document.createElement("span");
+            captionEl.textContent = caption;
+            meta.appendChild(captionEl);
+        }
+    };
+
+    const renderPhotoDetails = (photo) => {
+        const displayTitle = photo.display_title || photo.title || "Picture";
+        modalTitle.textContent = displayTitle;
+        modalImage.alt = displayTitle;
+        photoCaptionView.textContent = photo.caption || "";
+        photoDetailsTitle.value = photo.title || "";
+        photoDetailsCaption.value = photo.caption || "";
+    };
+
     const updateTextThumbnailTags = (tags, tagsText, privacyLabel, privacyHelpText) => {
         if (!activeTextThumbnail) {
             return;
@@ -1337,6 +1420,11 @@ document.addEventListener("DOMContentLoaded", () => {
         activePhotoId = button.dataset.photoId;
         activePhotoThumbnail = button;
         modalImage.src = button.dataset.fullSrc;
+        renderPhotoDetails({
+            title: button.dataset.photoTitle || "",
+            display_title: button.dataset.photoDisplayTitle || button.dataset.photoTitle || "Picture",
+            caption: button.dataset.photoCaption || "",
+        });
         modalDate.textContent = button.dataset.photoDate || "";
         setPrivacySummary(
             photoPrivacySummary,
@@ -1355,6 +1443,7 @@ document.addEventListener("DOMContentLoaded", () => {
         modalImage.removeAttribute("src");
         activePhotoId = null;
         activePhotoThumbnail = null;
+        renderPhotoDetails({title: "", display_title: "Picture", caption: ""});
         setModalOpenState();
     };
 
@@ -1484,6 +1573,28 @@ document.addEventListener("DOMContentLoaded", () => {
         if (response.ok) {
             messageInput.value = "";
             await loadMessages();
+        }
+    });
+
+    photoDetailsForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (activePhotoId === null) {
+            return;
+        }
+
+        const response = await csrfFetch(`/api/photo/${activePhotoId}`, {
+            method: "PATCH",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                title: photoDetailsTitle.value,
+                caption: photoDetailsCaption.value,
+            }),
+        });
+
+        if (response.ok) {
+            const payload = await response.json();
+            renderPhotoDetails(payload);
+            updatePhotoThumbnailDetails(payload);
         }
     });
 

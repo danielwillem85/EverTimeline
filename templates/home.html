@@ -22,6 +22,7 @@
                         title="{{ photo['owner_name'] }}{% if photo['display_date'] %} - {{ photo['display_date'] }}{% endif %}"
                         data-full-src="{{ photo['image_url'] }}"
                         data-photo-title="{{ photo['title'] }}"
+                        data-photo-caption="{{ photo['caption'] or '' }}"
                         data-photo-owner="{{ photo['owner_name'] }}"
                         data-photo-date="{{ photo['display_date'] or '' }}"
                         data-messages-url="{{ photo['messages_url'] }}"
@@ -49,6 +50,7 @@
                 <h2 id="home-photo-modal-title">Public photo</h2>
                 <p id="home-photo-modal-owner" class="muted"></p>
                 <p id="home-photo-modal-date" class="privacy-summary"></p>
+                <p id="home-photo-modal-caption" class="photo-caption-view"></p>
             </div>
             <button class="icon-button" type="button" data-close-home-photo-modal aria-label="Close popup">x</button>
         </header>

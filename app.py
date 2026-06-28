@@ -209,6 +209,8 @@ def init_db():
                 year INTEGER NOT NULL,
                 month INTEGER NOT NULL,
                 original_filename TEXT,
+                title TEXT NOT NULL DEFAULT '',
+                caption TEXT NOT NULL DEFAULT '',
                 mime_type TEXT NOT NULL,
                 image_data BLOB NOT NULL,
                 photo_date TEXT,
@@ -351,6 +353,7 @@ def init_db():
             """
         )
         ensure_user_profile_columns(db)
+        ensure_photo_columns(db)
         ensure_chapter_columns(db)
         db.execute(
             """
@@ -425,6 +428,20 @@ def ensure_user_profile_columns(db):
         "first_name": "ALTER TABLE users ADD COLUMN first_name TEXT NOT NULL DEFAULT ''",
         "last_name": "ALTER TABLE users ADD COLUMN last_name TEXT NOT NULL DEFAULT ''",
         "email": "ALTER TABLE users ADD COLUMN email TEXT",
+    }
+    for column_name, statement in migrations.items():
+        if column_name not in columns:
+            db.execute(statement)
+
+
+def ensure_photo_columns(db):
+    columns = {
+        row[1]
+        for row in db.execute("PRAGMA table_info(photos)").fetchall()
+    }
+    migrations = {
+        "title": "ALTER TABLE photos ADD COLUMN title TEXT NOT NULL DEFAULT ''",
+        "caption": "ALTER TABLE photos ADD COLUMN caption TEXT NOT NULL DEFAULT ''",
     }
     for column_name, statement in migrations.items():
         if column_name not in columns:
@@ -527,7 +544,7 @@ def load_items_before_birthday(db, user_id, birthday_date):
     )
     photo_rows = db.execute(
         f"""
-        SELECT id, year, month, photo_date AS item_date, original_filename AS title
+        SELECT id, year, month, photo_date AS item_date, COALESCE(NULLIF(title, ''), original_filename, 'Photo') AS title
         FROM photos
         WHERE {items_before_birthday_query("photo_date")}
         ORDER BY year ASC, month ASC, id ASC
@@ -681,6 +698,18 @@ def normalize_email(value):
     return (value or "").strip().lower()
 
 
+def normalize_photo_title(value):
+    return " ".join((value or "").strip().split())[:120]
+
+
+def normalize_photo_caption(value):
+    return (value or "").strip()[:2000]
+
+
+def photo_display_title(photo):
+    return (photo["title"] or "").strip() or photo["original_filename"] or "Photo"
+
+
 def is_valid_email(value):
     return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value or ""))
 
@@ -820,19 +849,21 @@ def uploaded_photo_files():
     ]
 
 
-def insert_uploaded_photo(db, image, image_data, year, month, photo_date, tags):
+def insert_uploaded_photo(db, image, image_data, year, month, photo_date, title, caption, tags):
     cursor = db.execute(
         """
         INSERT INTO photos (
-            user_id, year, month, original_filename, mime_type, image_data, photo_date
+            user_id, year, month, original_filename, title, caption, mime_type, image_data, photo_date
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             g.user["id"],
             year,
             month,
             secure_filename(image.filename),
+            title,
+            caption,
             image.mimetype,
             image_data,
             photo_date,
@@ -1377,6 +1408,8 @@ def random_public_photos(db, limit=48):
         SELECT
             p.id,
             p.original_filename,
+            p.title,
+            p.caption,
             p.photo_date,
             p.created_at,
             u.username,
@@ -1399,7 +1432,8 @@ def random_public_photos(db, limit=48):
             "id": row["id"],
             "image_url": url_for("public_photo_image", photo_id=row["id"]),
             "messages_url": url_for("public_photo_messages", photo_id=row["id"]),
-            "title": row["original_filename"] or "Public photo",
+            "title": photo_display_title(row),
+            "caption": row["caption"] or "",
             "owner_name": user_full_name(row) or row["username"],
             "display_date": row["photo_date"],
         }
@@ -1509,7 +1543,7 @@ def get_chapter_cover(db, chapter, image_url_builder):
     if row["item_kind"] == "photo":
         photo = db.execute(
             """
-            SELECT id, original_filename
+            SELECT id, original_filename, title, caption
             FROM photos
             WHERE id = ? AND user_id = ?
             """,
@@ -1520,7 +1554,7 @@ def get_chapter_cover(db, chapter, image_url_builder):
         return {
             "kind": "photo",
             "image_url": image_url_builder(photo["id"]),
-            "label": photo["original_filename"] or "Photo",
+            "label": photo_display_title(photo),
         }
 
     entry = db.execute(
@@ -1689,7 +1723,7 @@ def build_chapter_items(db, chapter_id, image_url_builder, message_url_builder=N
         placeholders = ",".join(["?"] * len(photo_ids))
         rows = db.execute(
             f"""
-            SELECT id, year, month, original_filename, photo_date, created_at
+            SELECT id, year, month, original_filename, title, caption, photo_date, created_at
             FROM photos
             WHERE user_id = ? AND id IN ({placeholders})
             """,
@@ -1734,13 +1768,14 @@ def build_chapter_items(db, chapter_id, image_url_builder, message_url_builder=N
                     "source_label": item_source_label(photo["year"], photo["month"]),
                     "url": timeline_item_link(g.user["id"], photo["year"], photo["month"], "photo", photo["id"]),
                     "image_url": image_url_builder(photo["id"]),
+                    "caption": photo["caption"] or "",
                     "messages": load_messages_for_timeline_item(db, "photo", photo["id"]) if message_url_builder else [],
                     "messages_url": messages_url,
                     "can_message": can_message and bool(messages_url),
                     "tags": tags,
                     "tags_text": tags_to_text(tags),
                     **privacy_payload_for_tags(tags),
-                    "title": photo["original_filename"] or "Photo",
+                    "title": photo_display_title(photo),
                 }
             )
         else:
@@ -1787,7 +1822,7 @@ def get_unread_message_notifications(db):
             p.year,
             p.month,
             p.photo_date AS item_date,
-            p.original_filename AS item_title,
+            COALESCE(NULLIF(p.title, ''), p.original_filename, 'Photo') AS item_title,
             p.user_id AS owner_id,
             u.username,
             u.first_name,
@@ -1921,7 +1956,7 @@ def get_unread_reaction_notifications(db):
             p.year,
             p.month,
             p.photo_date AS item_date,
-            p.original_filename AS item_title,
+            COALESCE(NULLIF(p.title, ''), p.original_filename, 'Photo') AS item_title,
             p.user_id AS owner_id,
             u.username,
             u.first_name,
@@ -2143,7 +2178,7 @@ def get_activity_feed(db, limit=60):
         allowed_tags = None if owner_id == g.user["id"] else connection_by_id[owner_id]["allowed_tags"]
         photo_rows = db.execute(
             """
-            SELECT id, year, month, original_filename, photo_date, created_at
+            SELECT id, year, month, original_filename, title, caption, photo_date, created_at
             FROM photos
             WHERE user_id = ?
             ORDER BY created_at DESC
@@ -2168,7 +2203,7 @@ def get_activity_feed(db, limit=60):
                 year=row["year"],
                 month=row["month"],
                 display_date=row["photo_date"],
-                body=row["original_filename"] or "Photo",
+                body=row["caption"] or photo_display_title(row),
             )
 
         text_rows = db.execute(
@@ -2425,11 +2460,13 @@ def search_timeline_content(db, query):
 
     photo_rows = db.execute(
         """
-        SELECT id, year, month, original_filename, photo_date, created_at
+        SELECT id, year, month, original_filename, title, caption, photo_date, created_at
         FROM photos
         WHERE user_id = ?
           AND (
             lower(COALESCE(original_filename, '')) LIKE ?
+            OR lower(COALESCE(title, '')) LIKE ?
+            OR lower(COALESCE(caption, '')) LIKE ?
             OR lower(COALESCE(photo_date, '')) LIKE ?
             OR CAST(year AS TEXT) LIKE ?
             OR printf('%04d-%02d', year, month) LIKE ?
@@ -2437,7 +2474,7 @@ def search_timeline_content(db, query):
         ORDER BY COALESCE(photo_date, created_at) DESC, id DESC
         LIMIT 40
         """,
-        (g.user["id"], pattern, pattern, pattern, pattern),
+        (g.user["id"], pattern, pattern, pattern, pattern, pattern, pattern),
     ).fetchall()
     for row in photo_rows:
         date_label = format_timeline_date_label(row["year"], row["month"], row["photo_date"])
@@ -2445,9 +2482,9 @@ def search_timeline_content(db, query):
             ("photo", row["id"]),
             {
                 "kind": "Photo",
-                "title": row["original_filename"] or "Photo",
+                "title": photo_display_title(row),
                 "context": f"{MONTH_NAMES[row['month'] - 1]} {row['year']} - {date_label}",
-                "preview": "Matched photo filename or date.",
+                "preview": short_preview(row["caption"] or "Matched photo filename or date.", 180),
                 "url": timeline_item_link(g.user["id"], row["year"], row["month"], "photo", row["id"]),
             },
         )
@@ -2491,7 +2528,7 @@ def search_timeline_content(db, query):
             p.year,
             p.month,
             p.photo_date AS item_date,
-            p.original_filename AS item_title,
+            COALESCE(NULLIF(p.title, ''), p.original_filename, 'Photo') AS item_title,
             u.username,
             u.first_name,
             u.last_name
@@ -2652,7 +2689,7 @@ def get_connection_timeline_item(connection_id, item_kind, item_id):
 def build_month_items(db, owner_id, year, month, image_url_builder, allowed_tags=None):
     photo_rows = db.execute(
         """
-        SELECT id, original_filename, photo_date, created_at
+        SELECT id, original_filename, title, caption, photo_date, created_at
         FROM photos
         WHERE user_id = ? AND year = ? AND month = ?
         ORDER BY COALESCE(photo_date, created_at) DESC, id DESC
@@ -2682,6 +2719,9 @@ def build_month_items(db, owner_id, year, month, image_url_builder, allowed_tags
                 "year": year,
                 "month": month,
                 "original_filename": photo["original_filename"],
+                "title": photo["title"] or "",
+                "display_title": photo_display_title(photo),
+                "caption": photo["caption"] or "",
                 "display_date": photo["photo_date"],
                 "created_at": photo["created_at"],
                 "image_url": image_url_builder(photo["id"]),
@@ -2729,7 +2769,7 @@ def build_timeline_api_items(
 
     photo_rows = db.execute(
         f"""
-        SELECT id, year, month, original_filename, photo_date, created_at
+        SELECT id, year, month, original_filename, title, caption, photo_date, created_at
         FROM photos
         WHERE user_id = ?{query_suffix}
         """,
@@ -2804,13 +2844,14 @@ def build_timeline_api_items(
                 "date_label": format_timeline_date_label(photo["year"], photo["month"], display_date),
                 "created_at": photo["created_at"],
                 "image_url": image_url_builder(photo["id"]),
+                "caption": photo["caption"] or "",
                 "messages": messages_by_photo.get(photo["id"], []),
                 "messages_url": messages_url,
                 "can_message": can_message and bool(messages_url),
                 "tags": tags,
                 "tags_text": tags_to_text(tags),
                 **privacy_payload_for_tags(tags),
-                "title": photo["original_filename"] or "Photo",
+                "title": photo_display_title(photo),
             }
         )
 
@@ -2844,7 +2885,7 @@ def build_timeline_api_items(
 
 def build_pdf_export_items(db, owner_id, year, month=None):
     photo_query = """
-        SELECT id, year, month, original_filename, mime_type, image_data, photo_date, created_at
+        SELECT id, year, month, original_filename, title, caption, mime_type, image_data, photo_date, created_at
         FROM photos
         WHERE user_id = ? AND year = ?
     """
@@ -2873,7 +2914,8 @@ def build_pdf_export_items(db, owner_id, year, month=None):
                 "id": photo["id"],
                 "year": photo["year"],
                 "month": photo["month"],
-                "title": photo["original_filename"] or "Photo",
+                "title": photo_display_title(photo),
+                "caption": photo["caption"] or "",
                 "display_date": photo["photo_date"],
                 "date_label": format_timeline_date_label(photo["year"], photo["month"], photo["photo_date"]),
                 "created_at": photo["created_at"],
@@ -3056,6 +3098,8 @@ def render_timeline_pdf(title, subtitle, items):
                 story.append(Spacer(1, 8))
             except Exception:
                 story.append(Paragraph("Photo could not be rendered in this PDF.", body_style))
+            if item.get("caption"):
+                story.append(Paragraph(pdf_paragraph(item["caption"]), body_style))
         else:
             story.append(Paragraph(pdf_paragraph(item["body"]), body_style))
 
@@ -3219,7 +3263,7 @@ def load_backup_reaction_map(db, item_kind):
 def build_account_backup_manifest(db):
     photo_rows = db.execute(
         """
-        SELECT id, year, month, original_filename, mime_type, photo_date, created_at
+        SELECT id, year, month, original_filename, title, caption, mime_type, photo_date, created_at
         FROM photos
         WHERE user_id = ?
         ORDER BY year ASC, month ASC, COALESCE(photo_date, ''), id ASC
@@ -3287,7 +3331,7 @@ def build_account_backup_manifest(db):
             {
                 **dict_from_row(
                     row,
-                    ("id", "year", "month", "original_filename", "mime_type", "photo_date", "created_at"),
+                    ("id", "year", "month", "original_filename", "title", "caption", "mime_type", "photo_date", "created_at"),
                 ),
                 "tags": photo_tags.get(row["id"], [DEFAULT_TAG]),
                 "image_path": backup_photo_path(row),
@@ -3456,15 +3500,17 @@ def import_photo_from_backup(db, archive, photo):
     cursor = db.execute(
         """
         INSERT INTO photos (
-            user_id, year, month, original_filename, mime_type, image_data, photo_date, created_at
+            user_id, year, month, original_filename, title, caption, mime_type, image_data, photo_date, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             g.user["id"],
             year,
             month,
             secure_filename(backup_text(photo.get("original_filename"), "", 255)) or None,
+            normalize_photo_title(photo.get("title", "")),
+            normalize_photo_caption(photo.get("caption", "")),
             mime_type,
             image_data,
             photo.get("photo_date") or None,
@@ -4108,6 +4154,8 @@ def month_view(year, month):
     if request.method == "POST":
         images = uploaded_photo_files()
         photo_date = request.form.get("photo_date", "")
+        photo_title = normalize_photo_title(request.form.get("title", ""))
+        photo_caption = normalize_photo_caption(request.form.get("caption", ""))
         tags = parse_tags(request.form.get("tags", ""))
 
         if not images:
@@ -4153,6 +4201,8 @@ def month_view(year, month):
                 year,
                 month,
                 normalized_photo_date,
+                photo_title,
+                photo_caption,
                 tags,
             )
             uploaded_count += 1
@@ -4926,11 +4976,58 @@ def public_photo_messages(photo_id):
     return jsonify(load_messages_for_timeline_item(get_db(), "photo", photo_id))
 
 
-@app.route("/api/photo/<int:photo_id>", methods=("DELETE",))
+@app.route("/api/photo/<int:photo_id>", methods=("GET", "PATCH", "DELETE"))
 @birthday_required
 def delete_photo(photo_id):
-    get_owned_photo(photo_id)
+    photo = get_owned_photo(photo_id)
     db = get_db()
+    if request.method == "GET":
+        tags = get_tags_for_item(db, "photo", photo_id)
+        return jsonify(
+            {
+                "id": photo["id"],
+                "title": photo["title"] or "",
+                "display_title": photo_display_title(photo),
+                "caption": photo["caption"] or "",
+                "photo_date": photo["photo_date"],
+                "original_filename": photo["original_filename"],
+                "created_at": photo["created_at"],
+                "tags": tags,
+                "tags_text": tags_to_text(tags),
+                **privacy_payload_for_tags(tags),
+            }
+        )
+
+    if request.method == "PATCH":
+        payload = request.get_json(silent=True) or request.form
+        title = normalize_photo_title(payload.get("title", ""))
+        caption = normalize_photo_caption(payload.get("caption", ""))
+        db.execute(
+            """
+            UPDATE photos
+            SET title = ?, caption = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (title, caption, photo_id, g.user["id"]),
+        )
+        db.commit()
+        photo = get_owned_photo(photo_id)
+        tags = get_tags_for_item(db, "photo", photo_id)
+        return jsonify(
+            {
+                "id": photo["id"],
+                "title": photo["title"] or "",
+                "display_title": photo_display_title(photo),
+                "caption": photo["caption"] or "",
+                "photo_date": photo["photo_date"],
+                "original_filename": photo["original_filename"],
+                "created_at": photo["created_at"],
+                "tags": tags,
+                "tags_text": tags_to_text(tags),
+                **privacy_payload_for_tags(tags),
+            }
+        )
+
     db.execute(
         """
         DELETE FROM chapter_items

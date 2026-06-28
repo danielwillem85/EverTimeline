@@ -152,6 +152,8 @@ class TestHelpers:
         month=5,
         filename="photo.png",
         photo_date="2020-05-04",
+        title="",
+        caption="",
         tag="private",
     ):
         response = client.post(
@@ -160,6 +162,8 @@ class TestHelpers:
                 **self.csrf_form_data(client, f"/year/{year}/{month}"),
                 "photo": (io.BytesIO(self.png_bytes()), filename, "image/png"),
                 "photo_date": photo_date,
+                "title": title,
+                "caption": caption,
                 "tags": tag,
             },
             content_type="multipart/form-data",

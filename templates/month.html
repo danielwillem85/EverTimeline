@@ -97,6 +97,14 @@
                 <span>Date</span>
                 <input name="photo_date" type="date" min="{{ month_start }}" max="{{ month_end }}">
             </label>
+            <label>
+                <span>Title</span>
+                <input name="title" maxlength="120">
+            </label>
+            <label class="photo-caption-field">
+                <span>Caption</span>
+                <textarea name="caption" rows="3" maxlength="2000"></textarea>
+            </label>
             {{ tag_radio_group() }}
             <button class="button primary" type="submit">Upload</button>
         </form>
@@ -130,18 +138,31 @@
                         type="button"
                         data-photo-id="{{ item['id'] }}"
                         data-entry-ref="photo-{{ item['id'] }}"
+                        data-photo-title="{{ item['title'] or '' }}"
+                        data-photo-display-title="{{ item['display_title'] }}"
+                        data-photo-caption="{{ item['caption'] or '' }}"
                         data-photo-date="{{ item['display_date'] or '' }}"
                         data-photo-tags="{{ item['tags_text'] }}"
                         data-privacy-label="{{ item['privacy_label'] }}"
                         data-privacy-help="{{ item['privacy_help'] }}"
                         data-full-src="{{ item['image_url'] }}"
                     >
-                        <img src="{{ item['image_url'] }}" alt="{{ item['original_filename'] or 'Uploaded picture' }}" loading="lazy">
+                        <img src="{{ item['image_url'] }}" alt="{{ item['display_title'] }}" loading="lazy">
                         <span class="privacy-badge" title="{{ item['privacy_help'] }}">Visible: {{ item["privacy_label"] }}</span>
                         {% if item["display_date"] %}
                             <span class="thumb-date">{{ item["display_date"] }}</span>
                         {% endif %}
                     </button>
+                    {% if item["title"] or item["caption"] %}
+                        <div class="photo-card-meta">
+                            {% if item["title"] %}
+                                <strong>{{ item["title"] }}</strong>
+                            {% endif %}
+                            {% if item["caption"] %}
+                                <span>{{ item["caption"] }}</span>
+                            {% endif %}
+                        </div>
+                    {% endif %}
                     {{ reaction_bar(item) }}
                     {{ chapter_add_form(item) }}
                 </article>
@@ -218,6 +239,7 @@
             <div>
                 <h2 id="modal-title">Picture</h2>
                 <p id="modal-date" class="muted"></p>
+                <p id="photo-caption-view" class="photo-caption-view"></p>
                 <p id="photo-privacy-summary" class="privacy-summary"></p>
             </div>
             <div class="modal-actions">
@@ -228,6 +250,17 @@
         <div class="modal-body">
             <img id="modal-image" alt="Selected timeline picture">
             <aside class="message-panel">
+                <form id="photo-details-form" class="photo-details-form">
+                    <label>
+                        <span>Title</span>
+                        <input name="title" maxlength="120">
+                    </label>
+                    <label>
+                        <span>Caption</span>
+                        <textarea name="caption" rows="3" maxlength="2000"></textarea>
+                    </label>
+                    <button class="button secondary small" type="submit">Save details</button>
+                </form>
                 <form id="photo-tags-form" class="tags-form">
                     {{ tag_radio_group() }}
                     <button class="button secondary small" type="submit">Save visibility</button>

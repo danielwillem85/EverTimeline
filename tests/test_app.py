@@ -625,7 +625,8 @@ def test_timeline_search_finds_owned_content_types_and_excludes_other_users(app,
         client,
         filename="summit-aurora.png",
         photo_date="2020-05-04",
-        tag="private",
+        location_name="Mountain overlook",
+        tag="public",
     )
     text_id = helpers.create_text(
         client,
@@ -665,6 +666,28 @@ def test_timeline_search_finds_owned_content_types_and_excludes_other_users(app,
         response = client.get(f"/timeline/search?q={query}")
         assert response.status_code == 200
         assert expected in response.data
+
+    filtered_response = client.get(
+        "/timeline/search?kind=photo&visibility=public&caption=without&location=with"
+    )
+    assert filtered_response.status_code == 200
+    assert b"summit-aurora.png" in filtered_response.data
+    assert b"A copper lantern memory" not in filtered_response.data
+
+    message_filter_response = client.get("/timeline/search?messages=with")
+    assert message_filter_response.status_code == 200
+    assert b"A copper lantern memory" in message_filter_response.data
+    assert b"summit-aurora.png" not in message_filter_response.data
+
+    chapter_filter_response = client.get("/timeline/search?chapter=out")
+    assert chapter_filter_response.status_code == 200
+    assert b"summit-aurora.png" in chapter_filter_response.data
+    assert b"A copper lantern memory" in chapter_filter_response.data
+
+    empty_visibility_response = client.get("/timeline/search?visibility=family")
+    assert empty_visibility_response.status_code == 200
+    assert b"summit-aurora.png" not in empty_visibility_response.data
+    assert b"A copper lantern memory" not in empty_visibility_response.data
 
     response = client.get("/timeline/search?q=forbidden")
     assert response.status_code == 200

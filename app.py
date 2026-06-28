@@ -3475,12 +3475,199 @@ def search_people(db, query):
     return results
 
 
-def search_timeline_content(db, query):
-    normalized_query = (query or "").strip()
-    if not normalized_query:
+TIMELINE_SEARCH_KIND_CHOICES = ("all", "photo", "text", "message", "chapter")
+TIMELINE_SEARCH_TRI_CHOICES = ("all", "with", "without")
+TIMELINE_SEARCH_CHAPTER_CHOICES = ("all", "in", "out")
+
+
+def normalized_search_filter(value, choices, default="all"):
+    value = (value or default).strip().lower()
+    return value if value in choices else default
+
+
+def normalized_search_year(value):
+    try:
+        year = int((value or "").strip())
+    except (TypeError, ValueError):
+        return None
+    if 1 <= year <= 9999:
+        return year
+    return None
+
+
+def timeline_search_filters(args=None):
+    if args is None:
+        args = request.args
+    year_from = normalized_search_year(args.get("year_from"))
+    year_to = normalized_search_year(args.get("year_to"))
+    if year_from is not None and year_to is not None and year_from > year_to:
+        year_from, year_to = year_to, year_from
+    return {
+        "query": (args.get("q") or "").strip(),
+        "kind": normalized_search_filter(args.get("kind"), TIMELINE_SEARCH_KIND_CHOICES),
+        "visibility": normalized_search_filter(args.get("visibility"), ("all", *TAG_CHOICES)),
+        "year_from": year_from,
+        "year_to": year_to,
+        "location": normalized_search_filter(args.get("location"), TIMELINE_SEARCH_TRI_CHOICES),
+        "caption": normalized_search_filter(args.get("caption"), TIMELINE_SEARCH_TRI_CHOICES),
+        "messages": normalized_search_filter(args.get("messages"), TIMELINE_SEARCH_TRI_CHOICES),
+        "chapter": normalized_search_filter(args.get("chapter"), TIMELINE_SEARCH_CHAPTER_CHOICES),
+    }
+
+
+def timeline_search_has_active_filters(filters):
+    return any(
+        (
+            filters["query"],
+            filters["kind"] != "all",
+            filters["visibility"] != "all",
+            filters["year_from"] is not None,
+            filters["year_to"] is not None,
+            filters["location"] != "all",
+            filters["caption"] != "all",
+            filters["messages"] != "all",
+            filters["chapter"] != "all",
+        )
+    )
+
+
+def timeline_search_query_matches(fields, query):
+    if not query:
+        return True
+    needle = query.lower()
+    return any(needle in str(field or "").lower() for field in fields)
+
+
+def timeline_search_has_location(row):
+    return bool((row["location_name"] or "").strip() or row["latitude"] is not None or row["longitude"] is not None)
+
+
+def load_timeline_search_message_counts(db, kind, item_ids):
+    if not item_ids:
+        return {}
+    placeholders = ",".join(["?"] * len(item_ids))
+    if kind == "photo":
+        rows = db.execute(
+            f"""
+            SELECT photo_id AS item_id, COUNT(*) AS count
+            FROM messages
+            WHERE photo_id IN ({placeholders})
+            GROUP BY photo_id
+            """,
+            tuple(item_ids),
+        ).fetchall()
+    else:
+        rows = db.execute(
+            f"""
+            SELECT entry_id AS item_id, COUNT(*) AS count
+            FROM text_entry_messages
+            WHERE entry_id IN ({placeholders})
+            GROUP BY entry_id
+            """,
+            tuple(item_ids),
+        ).fetchall()
+    return {row["item_id"]: row["count"] for row in rows}
+
+
+def load_timeline_search_chapter_memberships(db, kind, item_ids):
+    if not item_ids:
+        return {}
+    placeholders = ",".join(["?"] * len(item_ids))
+    rows = db.execute(
+        f"""
+        SELECT ci.item_id, COUNT(*) AS count, GROUP_CONCAT(c.title, ', ') AS titles
+        FROM chapter_items ci
+        JOIN chapters c ON c.id = ci.chapter_id
+        WHERE c.user_id = ? AND ci.item_kind = ? AND ci.item_id IN ({placeholders})
+        GROUP BY ci.item_id
+        """,
+        (g.user["id"], kind, *item_ids),
+    ).fetchall()
+    return {
+        row["item_id"]: {
+            "count": row["count"],
+            "titles": row["titles"] or "",
+        }
+        for row in rows
+    }
+
+
+def timeline_search_item_matches(filters, kind, row, tags, message_count=0, chapter_count=0):
+    if filters["kind"] not in ("all", kind):
+        return False
+    if filters["visibility"] != "all" and tags_to_text(tags) != filters["visibility"]:
+        return False
+    if filters["year_from"] is not None and row["year"] < filters["year_from"]:
+        return False
+    if filters["year_to"] is not None and row["year"] > filters["year_to"]:
+        return False
+    has_location = timeline_search_has_location(row)
+    if filters["location"] == "with" and not has_location:
+        return False
+    if filters["location"] == "without" and has_location:
+        return False
+    if filters["caption"] != "all":
+        if kind != "photo":
+            return False
+        has_caption = bool((row["caption"] or "").strip())
+        if filters["caption"] == "with" and not has_caption:
+            return False
+        if filters["caption"] == "without" and has_caption:
+            return False
+    if filters["messages"] == "with" and message_count <= 0:
+        return False
+    if filters["messages"] == "without" and message_count > 0:
+        return False
+    if filters["chapter"] == "in" and chapter_count <= 0:
+        return False
+    if filters["chapter"] == "out" and chapter_count > 0:
+        return False
+    return True
+
+
+def timeline_search_meta(row, tags, message_count=0, chapter_membership=None):
+    meta = [f"Visible: {privacy_label_for_tags(tags)}"]
+    if timeline_search_has_location(row):
+        meta.append(row["location_name"] or "Mapped")
+    if message_count:
+        message_word = "message" if message_count == 1 else "messages"
+        meta.append(f"{message_count} {message_word}")
+    if chapter_membership and chapter_membership.get("count"):
+        chapter_word = "chapter" if chapter_membership["count"] == 1 else "chapters"
+        meta.append(f"{chapter_membership['count']} {chapter_word}")
+    return meta
+
+
+def timeline_search_context(row, display_date):
+    return f"{MONTH_NAMES[row['month'] - 1]} {row['year']} - {display_date}"
+
+
+def timeline_search_chapter_filters_apply(filters):
+    return any(
+        (
+            filters["year_from"] is not None,
+            filters["year_to"] is not None,
+            filters["location"] != "all",
+            filters["caption"] != "all",
+            filters["messages"] != "all",
+            filters["chapter"] != "all",
+        )
+    )
+
+
+def timeline_search_parent_filters(filters):
+    parent_filters = dict(filters)
+    parent_filters["kind"] = "all"
+    return parent_filters
+
+
+def search_timeline_content(db, filters):
+    if isinstance(filters, str):
+        filters = timeline_search_filters({"q": filters})
+    normalized_query = filters["query"]
+    if not timeline_search_has_active_filters(filters):
         return []
 
-    pattern = f"%{normalized_query.lower()}%"
     results = []
     seen = set()
 
@@ -3496,129 +3683,221 @@ def search_timeline_content(db, query):
                location_name, latitude, longitude, created_at
         FROM photos
         WHERE user_id = ?
-          AND (
-            lower(COALESCE(original_filename, '')) LIKE ?
-            OR lower(COALESCE(title, '')) LIKE ?
-            OR lower(COALESCE(caption, '')) LIKE ?
-            OR lower(COALESCE(photo_date, '')) LIKE ?
-            OR CAST(year AS TEXT) LIKE ?
-            OR printf('%04d-%02d', year, month) LIKE ?
-          )
         ORDER BY COALESCE(photo_date, created_at) DESC, id DESC
-        LIMIT 40
+        LIMIT 200
         """,
-        (g.user["id"], pattern, pattern, pattern, pattern, pattern, pattern),
+        (g.user["id"],),
     ).fetchall()
+    photo_ids = [row["id"] for row in photo_rows]
+    photo_tags = load_tags_for_items(db, "photo", photo_ids)
+    photo_message_counts = load_timeline_search_message_counts(db, "photo", photo_ids)
+    photo_chapters = load_timeline_search_chapter_memberships(db, "photo", photo_ids)
     for row in photo_rows:
+        if not timeline_search_query_matches(
+            (
+                row["original_filename"],
+                row["title"],
+                row["caption"],
+                row["photo_date"],
+                row["year"],
+                f"{row['year']:04d}-{row['month']:02d}",
+                row["location_name"],
+            ),
+            normalized_query,
+        ):
+            continue
+        tags = photo_tags.get(row["id"], [DEFAULT_TAG])
+        message_count = photo_message_counts.get(row["id"], 0)
+        chapter_membership = photo_chapters.get(row["id"], {})
+        if not timeline_search_item_matches(
+            filters,
+            "photo",
+            row,
+            tags,
+            message_count,
+            chapter_membership.get("count", 0),
+        ):
+            continue
         date_label = format_timeline_date_label(row["year"], row["month"], row["photo_date"])
         add_result(
             ("photo", row["id"]),
             {
                 "kind": "Photo",
+                "kind_key": "photo",
                 "title": photo_display_title(row),
-                "context": f"{MONTH_NAMES[row['month'] - 1]} {row['year']} - {date_label}",
+                "context": timeline_search_context(row, date_label),
                 "preview": short_preview(row["caption"] or "Matched photo filename or date.", 180),
+                "meta": timeline_search_meta(row, tags, message_count, chapter_membership),
+                "image_url": url_for("photo_image", photo_id=row["id"]),
                 "url": timeline_item_link(g.user["id"], row["year"], row["month"], "photo", row["id"]),
             },
         )
 
     text_rows = db.execute(
         """
-        SELECT id, year, month, body, entry_date, created_at
+        SELECT id, year, month, body, entry_date, location_name, latitude, longitude, created_at
         FROM text_entries
         WHERE user_id = ?
-          AND (
-            lower(body) LIKE ?
-            OR lower(COALESCE(entry_date, '')) LIKE ?
-            OR CAST(year AS TEXT) LIKE ?
-            OR printf('%04d-%02d', year, month) LIKE ?
-          )
         ORDER BY COALESCE(entry_date, created_at) DESC, id DESC
-        LIMIT 40
+        LIMIT 200
         """,
-        (g.user["id"], pattern, pattern, pattern, pattern),
+        (g.user["id"],),
     ).fetchall()
+    text_ids = [row["id"] for row in text_rows]
+    text_tags = load_tags_for_items(db, "text", text_ids)
+    text_message_counts = load_timeline_search_message_counts(db, "text", text_ids)
+    text_chapters = load_timeline_search_chapter_memberships(db, "text", text_ids)
     for row in text_rows:
+        if not timeline_search_query_matches(
+            (
+                row["body"],
+                row["entry_date"],
+                row["year"],
+                f"{row['year']:04d}-{row['month']:02d}",
+                row["location_name"],
+            ),
+            normalized_query,
+        ):
+            continue
+        tags = text_tags.get(row["id"], [DEFAULT_TAG])
+        message_count = text_message_counts.get(row["id"], 0)
+        chapter_membership = text_chapters.get(row["id"], {})
+        if not timeline_search_item_matches(
+            filters,
+            "text",
+            row,
+            tags,
+            message_count,
+            chapter_membership.get("count", 0),
+        ):
+            continue
         date_label = format_timeline_date_label(row["year"], row["month"], row["entry_date"])
         add_result(
             ("text", row["id"]),
             {
                 "kind": "Text entry",
+                "kind_key": "text",
                 "title": "Text entry",
-                "context": f"{MONTH_NAMES[row['month'] - 1]} {row['year']} - {date_label}",
+                "context": timeline_search_context(row, date_label),
                 "preview": short_preview(row["body"], 180),
+                "meta": timeline_search_meta(row, tags, message_count, chapter_membership),
                 "url": timeline_item_link(g.user["id"], row["year"], row["month"], "text", row["id"]),
             },
         )
 
-    photo_message_rows = db.execute(
-        """
-        SELECT
-            m.id AS message_id,
-            m.body,
-            m.created_at,
-            p.id AS item_id,
-            p.year,
-            p.month,
-            p.photo_date AS item_date,
-            COALESCE(NULLIF(p.title, ''), p.original_filename, 'Photo') AS item_title,
-            u.username,
-            u.first_name,
-            u.last_name
-        FROM messages m
-        JOIN photos p ON p.id = m.photo_id
-        JOIN users u ON u.id = m.user_id
-        WHERE p.user_id = ? AND lower(m.body) LIKE ?
-        ORDER BY m.created_at DESC, m.id DESC
-        LIMIT 40
-        """,
-        (g.user["id"], pattern),
-    ).fetchall()
-    for row in photo_message_rows:
-        add_result(
-            ("photo-message", row["message_id"]),
-            {
-                "kind": "Message",
-                "title": row["item_title"] or "Photo message",
-                "context": f"Photo message by {message_author_name(row)}",
-                "preview": short_preview(row["body"], 180),
-                "url": timeline_item_link(g.user["id"], row["year"], row["month"], "photo", row["item_id"]),
-            },
-        )
+    include_message_results = filters["kind"] == "message" or (filters["kind"] == "all" and normalized_query)
+    if include_message_results and filters["messages"] != "without":
+        photo_message_rows = db.execute(
+            """
+            SELECT
+                m.id AS message_id,
+                m.body,
+                m.created_at,
+                p.id AS item_id,
+                p.year,
+                p.month,
+                p.original_filename,
+                p.title,
+                p.caption,
+                p.photo_date AS item_date,
+                p.location_name,
+                p.latitude,
+                p.longitude,
+                COALESCE(NULLIF(p.title, ''), p.original_filename, 'Photo') AS item_title,
+                u.username,
+                u.first_name,
+                u.last_name
+            FROM messages m
+            JOIN photos p ON p.id = m.photo_id
+            JOIN users u ON u.id = m.user_id
+            WHERE p.user_id = ?
+            ORDER BY m.created_at DESC, m.id DESC
+            LIMIT 120
+            """,
+            (g.user["id"],),
+        ).fetchall()
+        for row in photo_message_rows:
+            if not timeline_search_query_matches((row["body"], row["item_title"]), normalized_query):
+                continue
+            tags = photo_tags.get(row["item_id"], get_tags_for_item(db, "photo", row["item_id"]))
+            message_count = photo_message_counts.get(row["item_id"], 1)
+            chapter_membership = photo_chapters.get(row["item_id"], {})
+            if not timeline_search_item_matches(
+                timeline_search_parent_filters(filters),
+                "photo",
+                row,
+                tags,
+                message_count,
+                chapter_membership.get("count", 0),
+            ):
+                continue
+            add_result(
+                ("photo-message", row["message_id"]),
+                {
+                    "kind": "Message",
+                    "kind_key": "message",
+                    "title": row["item_title"] or "Photo message",
+                    "context": f"Photo message by {message_author_name(row)}",
+                    "preview": short_preview(row["body"], 180),
+                    "meta": timeline_search_meta(row, tags, message_count, chapter_membership),
+                    "image_url": url_for("photo_image", photo_id=row["item_id"]),
+                    "url": timeline_item_link(g.user["id"], row["year"], row["month"], "photo", row["item_id"]),
+                },
+            )
 
-    text_message_rows = db.execute(
-        """
-        SELECT
-            tem.id AS message_id,
-            tem.body,
-            tem.created_at,
-            te.id AS item_id,
-            te.year,
-            te.month,
-            te.entry_date AS item_date,
-            u.username,
-            u.first_name,
-            u.last_name
-        FROM text_entry_messages tem
-        JOIN text_entries te ON te.id = tem.entry_id
-        JOIN users u ON u.id = tem.user_id
-        WHERE te.user_id = ? AND lower(tem.body) LIKE ?
-        ORDER BY tem.created_at DESC, tem.id DESC
-        LIMIT 40
-        """,
-        (g.user["id"], pattern),
-    ).fetchall()
-    for row in text_message_rows:
-        add_result(
-            ("text-message", row["message_id"]),
-            {
-                "kind": "Message",
-                "title": "Text entry message",
-                "context": f"Text entry message by {message_author_name(row)}",
-                "preview": short_preview(row["body"], 180),
-                "url": timeline_item_link(g.user["id"], row["year"], row["month"], "text", row["item_id"]),
-            },
-        )
+        text_message_rows = db.execute(
+            """
+            SELECT
+                tem.id AS message_id,
+                tem.body,
+                tem.created_at,
+                te.id AS item_id,
+                te.year,
+                te.month,
+                te.body AS item_body,
+                te.entry_date AS item_date,
+                te.location_name,
+                te.latitude,
+                te.longitude,
+                u.username,
+                u.first_name,
+                u.last_name
+            FROM text_entry_messages tem
+            JOIN text_entries te ON te.id = tem.entry_id
+            JOIN users u ON u.id = tem.user_id
+            WHERE te.user_id = ?
+            ORDER BY tem.created_at DESC, tem.id DESC
+            LIMIT 120
+            """,
+            (g.user["id"],),
+        ).fetchall()
+        for row in text_message_rows:
+            if not timeline_search_query_matches((row["body"], row["item_body"]), normalized_query):
+                continue
+            tags = text_tags.get(row["item_id"], get_tags_for_item(db, "text", row["item_id"]))
+            message_count = text_message_counts.get(row["item_id"], 1)
+            chapter_membership = text_chapters.get(row["item_id"], {})
+            if not timeline_search_item_matches(
+                timeline_search_parent_filters(filters),
+                "text",
+                row,
+                tags,
+                message_count,
+                chapter_membership.get("count", 0),
+            ):
+                continue
+            add_result(
+                ("text-message", row["message_id"]),
+                {
+                    "kind": "Message",
+                    "kind_key": "message",
+                    "title": "Text entry message",
+                    "context": f"Text entry message by {message_author_name(row)}",
+                    "preview": short_preview(row["body"], 180),
+                    "meta": timeline_search_meta(row, tags, message_count, chapter_membership),
+                    "url": timeline_item_link(g.user["id"], row["year"], row["month"], "text", row["item_id"]),
+                },
+            )
 
     chapter_rows = db.execute(
         """
@@ -3626,30 +3905,37 @@ def search_timeline_content(db, query):
             c.id,
             c.title,
             c.description,
+            c.visibility,
             c.created_at,
             COUNT(ci.id) AS item_count
         FROM chapters c
         LEFT JOIN chapter_items ci ON ci.chapter_id = c.id
         WHERE c.user_id = ?
-          AND (
-            lower(c.title) LIKE ?
-            OR lower(COALESCE(c.description, '')) LIKE ?
-          )
         GROUP BY c.id
         ORDER BY c.created_at DESC, c.id DESC
         LIMIT 40
         """,
-        (g.user["id"], pattern, pattern),
+        (g.user["id"],),
     ).fetchall()
     for row in chapter_rows:
+        if filters["kind"] not in ("all", "chapter"):
+            continue
+        if timeline_search_chapter_filters_apply(filters):
+            continue
+        if filters["visibility"] != "all" and row["visibility"] != filters["visibility"]:
+            continue
+        if not timeline_search_query_matches((row["title"], row["description"]), normalized_query):
+            continue
         item_word = "item" if row["item_count"] == 1 else "items"
         add_result(
             ("chapter", row["id"]),
             {
                 "kind": "Chapter",
+                "kind_key": "chapter",
                 "title": row["title"],
                 "context": f"{row['item_count']} {item_word}",
                 "preview": short_preview(row["description"] or "Chapter title matched.", 180),
+                "meta": [f"Visible: {PRIVACY_AUDIENCE_LABELS[row['visibility']]}"],
                 "url": url_for("chapter_detail", chapter_id=row["id"]),
             },
         )
@@ -5478,12 +5764,53 @@ def on_this_day():
 @birthday_required
 def timeline_search():
     db = get_db()
-    query = request.args.get("q", "").strip()
+    filters = timeline_search_filters()
+    quick_searches = [
+        {
+            "label": "Public photos without captions",
+            "url": url_for("timeline_search", kind="photo", visibility="public", caption="without"),
+        },
+        {
+            "label": "Items with places",
+            "url": url_for("timeline_search", location="with"),
+        },
+        {
+            "label": "Items with messages",
+            "url": url_for("timeline_search", messages="with"),
+        },
+        {
+            "label": "Memories not in chapters",
+            "url": url_for("timeline_search", chapter="out"),
+        },
+        {
+            "label": "Public view audit",
+            "url": url_for("timeline_search", visibility="public"),
+        },
+    ]
     return render_template(
         "timeline_search.html",
-        query=query,
-        results=search_timeline_content(db, query),
-        has_query=bool(query),
+        query=filters["query"],
+        filters=filters,
+        quick_searches=quick_searches,
+        kind_options=[
+            ("all", "Everything"),
+            ("photo", "Photos"),
+            ("text", "Text entries"),
+            ("message", "Messages"),
+            ("chapter", "Chapters"),
+        ],
+        tri_options=[
+            ("all", "Any"),
+            ("with", "With"),
+            ("without", "Without"),
+        ],
+        chapter_options=[
+            ("all", "Any"),
+            ("in", "In a chapter"),
+            ("out", "Not in a chapter"),
+        ],
+        results=search_timeline_content(db, filters),
+        has_query=timeline_search_has_active_filters(filters),
     )
 
 

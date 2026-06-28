@@ -253,6 +253,59 @@ def test_full_account_backup_export_and_import(client, helpers):
     )["name"] == "friends"
 
 
+def test_timeline_search_finds_owned_content_types_and_excludes_other_users(app, client, helpers):
+    helpers.create_user(client, "owner")
+    helpers.upload_photo(
+        client,
+        filename="summit-aurora.png",
+        photo_date="2020-05-04",
+        tag="private",
+    )
+    text_id = helpers.create_text(
+        client,
+        "A copper lantern memory from the cabin",
+        tag="private",
+    )
+    message_response = client.post(
+        f"/api/timeline-item/text/{text_id}/messages",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={"body": "silver echo from a message"},
+    )
+    assert message_response.status_code == 201
+
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Harbor years",
+            "description": "Storm glass notes",
+        },
+    )
+    assert chapter_response.status_code == 302
+
+    other = app.test_client()
+    helpers.create_user(other, "other")
+    helpers.create_text(other, "forbidden galaxy", tag="private")
+
+    expectations = {
+        "summit": b"summit-aurora.png",
+        "2020-05-04": b"Matched photo filename or date.",
+        "copper": b"A copper lantern memory",
+        "silver": b"silver echo from a message",
+        "harbor": b"Harbor years",
+        "storm": b"Storm glass notes",
+    }
+    for query, expected in expectations.items():
+        response = client.get(f"/timeline/search?q={query}")
+        assert response.status_code == 200
+        assert expected in response.data
+
+    response = client.get("/timeline/search?q=forbidden")
+    assert response.status_code == 200
+    assert b"forbidden galaxy" not in response.data
+    assert b"No timeline matches." in response.data
+
+
 def test_connection_requests_and_privacy_visibility_for_friend_and_family(app, client, helpers):
     owner_id = helpers.create_user(client, "owner")
     helpers.create_text(client, "private memory", tag="private")

@@ -2408,6 +2408,185 @@ def search_people(db, query):
     return results
 
 
+def search_timeline_content(db, query):
+    normalized_query = (query or "").strip()
+    if not normalized_query:
+        return []
+
+    pattern = f"%{normalized_query.lower()}%"
+    results = []
+    seen = set()
+
+    def add_result(key, result):
+        if key in seen:
+            return
+        seen.add(key)
+        results.append(result)
+
+    photo_rows = db.execute(
+        """
+        SELECT id, year, month, original_filename, photo_date, created_at
+        FROM photos
+        WHERE user_id = ?
+          AND (
+            lower(COALESCE(original_filename, '')) LIKE ?
+            OR lower(COALESCE(photo_date, '')) LIKE ?
+            OR CAST(year AS TEXT) LIKE ?
+            OR printf('%04d-%02d', year, month) LIKE ?
+          )
+        ORDER BY COALESCE(photo_date, created_at) DESC, id DESC
+        LIMIT 40
+        """,
+        (g.user["id"], pattern, pattern, pattern, pattern),
+    ).fetchall()
+    for row in photo_rows:
+        date_label = format_timeline_date_label(row["year"], row["month"], row["photo_date"])
+        add_result(
+            ("photo", row["id"]),
+            {
+                "kind": "Photo",
+                "title": row["original_filename"] or "Photo",
+                "context": f"{MONTH_NAMES[row['month'] - 1]} {row['year']} - {date_label}",
+                "preview": "Matched photo filename or date.",
+                "url": timeline_item_link(g.user["id"], row["year"], row["month"], "photo", row["id"]),
+            },
+        )
+
+    text_rows = db.execute(
+        """
+        SELECT id, year, month, body, entry_date, created_at
+        FROM text_entries
+        WHERE user_id = ?
+          AND (
+            lower(body) LIKE ?
+            OR lower(COALESCE(entry_date, '')) LIKE ?
+            OR CAST(year AS TEXT) LIKE ?
+            OR printf('%04d-%02d', year, month) LIKE ?
+          )
+        ORDER BY COALESCE(entry_date, created_at) DESC, id DESC
+        LIMIT 40
+        """,
+        (g.user["id"], pattern, pattern, pattern, pattern),
+    ).fetchall()
+    for row in text_rows:
+        date_label = format_timeline_date_label(row["year"], row["month"], row["entry_date"])
+        add_result(
+            ("text", row["id"]),
+            {
+                "kind": "Text entry",
+                "title": "Text entry",
+                "context": f"{MONTH_NAMES[row['month'] - 1]} {row['year']} - {date_label}",
+                "preview": short_preview(row["body"], 180),
+                "url": timeline_item_link(g.user["id"], row["year"], row["month"], "text", row["id"]),
+            },
+        )
+
+    photo_message_rows = db.execute(
+        """
+        SELECT
+            m.id AS message_id,
+            m.body,
+            m.created_at,
+            p.id AS item_id,
+            p.year,
+            p.month,
+            p.photo_date AS item_date,
+            p.original_filename AS item_title,
+            u.username,
+            u.first_name,
+            u.last_name
+        FROM messages m
+        JOIN photos p ON p.id = m.photo_id
+        JOIN users u ON u.id = m.user_id
+        WHERE p.user_id = ? AND lower(m.body) LIKE ?
+        ORDER BY m.created_at DESC, m.id DESC
+        LIMIT 40
+        """,
+        (g.user["id"], pattern),
+    ).fetchall()
+    for row in photo_message_rows:
+        add_result(
+            ("photo-message", row["message_id"]),
+            {
+                "kind": "Message",
+                "title": row["item_title"] or "Photo message",
+                "context": f"Photo message by {message_author_name(row)}",
+                "preview": short_preview(row["body"], 180),
+                "url": timeline_item_link(g.user["id"], row["year"], row["month"], "photo", row["item_id"]),
+            },
+        )
+
+    text_message_rows = db.execute(
+        """
+        SELECT
+            tem.id AS message_id,
+            tem.body,
+            tem.created_at,
+            te.id AS item_id,
+            te.year,
+            te.month,
+            te.entry_date AS item_date,
+            u.username,
+            u.first_name,
+            u.last_name
+        FROM text_entry_messages tem
+        JOIN text_entries te ON te.id = tem.entry_id
+        JOIN users u ON u.id = tem.user_id
+        WHERE te.user_id = ? AND lower(tem.body) LIKE ?
+        ORDER BY tem.created_at DESC, tem.id DESC
+        LIMIT 40
+        """,
+        (g.user["id"], pattern),
+    ).fetchall()
+    for row in text_message_rows:
+        add_result(
+            ("text-message", row["message_id"]),
+            {
+                "kind": "Message",
+                "title": "Text entry message",
+                "context": f"Text entry message by {message_author_name(row)}",
+                "preview": short_preview(row["body"], 180),
+                "url": timeline_item_link(g.user["id"], row["year"], row["month"], "text", row["item_id"]),
+            },
+        )
+
+    chapter_rows = db.execute(
+        """
+        SELECT
+            c.id,
+            c.title,
+            c.description,
+            c.created_at,
+            COUNT(ci.id) AS item_count
+        FROM chapters c
+        LEFT JOIN chapter_items ci ON ci.chapter_id = c.id
+        WHERE c.user_id = ?
+          AND (
+            lower(c.title) LIKE ?
+            OR lower(COALESCE(c.description, '')) LIKE ?
+          )
+        GROUP BY c.id
+        ORDER BY c.created_at DESC, c.id DESC
+        LIMIT 40
+        """,
+        (g.user["id"], pattern, pattern),
+    ).fetchall()
+    for row in chapter_rows:
+        item_word = "item" if row["item_count"] == 1 else "items"
+        add_result(
+            ("chapter", row["id"]),
+            {
+                "kind": "Chapter",
+                "title": row["title"],
+                "context": f"{row['item_count']} {item_word}",
+                "preview": short_preview(row["description"] or "Chapter title matched.", 180),
+                "url": url_for("chapter_detail", chapter_id=row["id"]),
+            },
+        )
+
+    return results[:80]
+
+
 def current_profile_form_values():
     return {
         "first_name": g.user["first_name"] or "",
@@ -3851,6 +4030,19 @@ def timeline():
     years = list(user_years())
     year_counts = get_year_counts(db)
     return render_template("timeline.html", years=years, year_counts=year_counts)
+
+
+@app.route("/timeline/search")
+@birthday_required
+def timeline_search():
+    db = get_db()
+    query = request.args.get("q", "").strip()
+    return render_template(
+        "timeline_search.html",
+        query=query,
+        results=search_timeline_content(db, query),
+        has_query=bool(query),
+    )
 
 
 @app.route("/year/<int:year>")

@@ -2953,6 +2953,10 @@ details.privacy-toggle-panel {
     margin-bottom: 18px;
 }
 
+.map-filter-form {
+    grid-template-columns: minmax(140px, 180px) minmax(160px, 220px) auto;
+}
+
 .timeline-map-canvas {
     position: relative;
     min-height: 420px;
@@ -2968,6 +2972,10 @@ details.privacy-toggle-panel {
         #dfe8e3;
     background-size: 10% 20%, 10% 20%, auto, auto, auto, auto;
     box-shadow: var(--shadow);
+}
+
+.compact-map-canvas {
+    min-height: 300px;
 }
 
 .timeline-map-grid {
@@ -2997,6 +3005,14 @@ details.privacy-toggle-panel {
     background: var(--primary);
 }
 
+.timeline-map-marker.place {
+    width: 34px;
+    height: 34px;
+    background: #2563eb;
+    color: #fff;
+    text-decoration: none;
+}
+
 .timeline-map-marker span {
     width: 8px;
     height: 8px;
@@ -3004,11 +3020,85 @@ details.privacy-toggle-panel {
     background: #fff;
 }
 
+.timeline-map-marker.place span {
+    display: inline-grid;
+    place-items: center;
+    width: auto;
+    height: auto;
+    min-width: 1.4em;
+    border-radius: 0;
+    background: transparent;
+    color: #fff;
+    font-size: 0.78rem;
+    font-weight: 900;
+}
+
 .map-empty {
     position: absolute;
     inset: 50% auto auto 50%;
     width: min(90%, 320px);
     transform: translate(-50%, -50%);
+}
+
+.map-place-clusters {
+    display: grid;
+    gap: 12px;
+    margin-bottom: 18px;
+}
+
+.map-place-clusters h2,
+.map-place-list h2 {
+    margin-bottom: 0;
+}
+
+.map-place-cluster-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px;
+}
+
+.map-place-cluster-card {
+    display: grid;
+    gap: 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    background: #fff;
+    color: var(--ink);
+    text-decoration: none;
+    box-shadow: 0 8px 20px rgba(24, 31, 28, 0.08);
+}
+
+.map-place-cluster-card:hover {
+    border-color: rgba(22, 109, 103, 0.45);
+}
+
+.map-place-cluster-card h3 {
+    overflow: hidden;
+    margin-bottom: 3px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.map-place-cluster-card span {
+    color: var(--muted);
+    font-size: 0.84rem;
+    font-weight: 800;
+}
+
+.map-place-counts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.map-place-counts span {
+    border-radius: 999px;
+    padding: 4px 8px;
+    background: var(--surface-strong);
+    color: var(--primary);
+    font-size: 0.76rem;
+    font-weight: 900;
 }
 
 .map-place-list {

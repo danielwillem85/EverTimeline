@@ -7,17 +7,51 @@
     <div>
         <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
         <h1>Map</h1>
-        <p class="muted">{{ mapped_items|length }} mapped, {{ named_items|length }} named</p>
+        <p class="muted">{{ place_summaries|length }} places, {{ mapped_items|length }} mapped memories, {{ named_items|length }} named without coordinates</p>
     </div>
     <div class="page-actions">
         <a class="button secondary" href="{{ url_for('timeline_search') }}">Search timeline</a>
     </div>
 </section>
 
+<section class="search-panel map-filter-panel">
+    <form class="search-form map-filter-form" method="get">
+        <label>
+            <span>Year</span>
+            <select name="year">
+                <option value="">All years</option>
+                {% for year in available_years %}
+                    <option value="{{ year }}" {% if selected_year == year %}selected{% endif %}>{{ year }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>
+            <span>Type</span>
+            <select name="type">
+                <option value="all" {% if selected_type == "all" %}selected{% endif %}>All memories</option>
+                <option value="photo" {% if selected_type == "photo" %}selected{% endif %}>Photos</option>
+                <option value="text" {% if selected_type == "text" %}selected{% endif %}>Text</option>
+            </select>
+        </label>
+        <button class="button primary" type="submit">Apply</button>
+    </form>
+</section>
+
 <section class="timeline-map-panel" aria-label="Timeline map">
     <div class="timeline-map-canvas">
         <div class="timeline-map-grid" aria-hidden="true"></div>
-        {% for item in mapped_items %}
+        {% for place in mapped_places %}
+            <a
+                class="timeline-map-marker place"
+                href="{{ place['url'] }}"
+                style="left: {{ '%.4f'|format(place['x']) }}%; top: {{ '%.4f'|format(place['y']) }}%;"
+                title="{{ place['location_name'] }} - {{ place['item_count'] }} memories"
+                aria-label="{{ place['location_name'] }} with {{ place['item_count'] }} memories"
+            >
+                <span>{{ place["item_count"] }}</span>
+            </a>
+        {% endfor %}
+        {% for item in coordinate_items %}
             <a
                 class="timeline-map-marker {{ item['kind'] }}"
                 href="{{ item['url'] }}"
@@ -28,12 +62,40 @@
                 <span></span>
             </a>
         {% else %}
-            <p class="empty-state map-empty">No mapped coordinates yet.</p>
+            {% if not mapped_places %}
+                <p class="empty-state map-empty">No mapped coordinates yet.</p>
+            {% endif %}
+        {% endfor %}
+    </div>
+</section>
+
+<section class="map-place-clusters" aria-label="Place clusters">
+    <h2>Places</h2>
+    <div class="map-place-cluster-grid">
+        {% for place in place_summaries %}
+            <a class="map-place-cluster-card" href="{{ place['url'] }}">
+                <div>
+                    <h3>{{ place["location_name"] }}</h3>
+                    <span>{{ place["item_count"] }} {{ "memory" if place["item_count"] == 1 else "memories" }} · {{ place["year_label"] }}</span>
+                </div>
+                <div class="map-place-counts">
+                    <span>{{ place["photo_count"] }} photos</span>
+                    <span>{{ place["text_count"] }} text</span>
+                    {% if place["mapped_count"] %}
+                        <span>{{ place["mapped_count"] }} mapped</span>
+                    {% else %}
+                        <span>Needs coordinates</span>
+                    {% endif %}
+                </div>
+            </a>
+        {% else %}
+            <p class="empty-state">No named places yet.</p>
         {% endfor %}
     </div>
 </section>
 
 <section class="map-place-list" aria-label="Timeline places">
+    <h2>Memories</h2>
     {% for item in items %}
         <article class="map-place-card{% if not item['has_coordinates'] %} needs-coordinates{% endif %}">
             <div class="map-place-main">

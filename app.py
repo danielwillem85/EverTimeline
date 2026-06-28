@@ -1465,6 +1465,14 @@ def map_position(latitude, longitude):
     }
 
 
+def normalize_place_name(value):
+    return " ".join((value or "").strip().split())
+
+
+def place_group_key(value):
+    return normalize_place_name(value).casefold()
+
+
 def normalize_tag_name(value):
     return " ".join((value or "").strip().lower().split())
 
@@ -3660,7 +3668,8 @@ def search_timeline_content(db, query):
 def build_timeline_map_items(db):
     photo_rows = db.execute(
         """
-        SELECT id, year, month, original_filename, photo_date, location_name, latitude, longitude, created_at
+        SELECT id, year, month, original_filename, title, caption, photo_date,
+               location_name, latitude, longitude, created_at
         FROM photos
         WHERE user_id = ?
           AND (
@@ -3689,8 +3698,10 @@ def build_timeline_map_items(db):
         item = {
             "kind": "photo",
             "id": row["id"],
-            "title": row["original_filename"] or "Photo",
-            "preview": "Photo",
+            "year": row["year"],
+            "month": row["month"],
+            "title": photo_display_title(row),
+            "preview": short_preview(row["caption"] or "Photo"),
             "date_label": format_timeline_date_label(row["year"], row["month"], row["photo_date"]),
             "location_name": row["location_name"] or "",
             "latitude": row["latitude"],
@@ -3716,6 +3727,8 @@ def build_timeline_map_items(db):
         item = {
             "kind": "text",
             "id": row["id"],
+            "year": row["year"],
+            "month": row["month"],
             "title": "Text entry",
             "preview": short_preview(row["body"]),
             "date_label": format_timeline_date_label(row["year"], row["month"], row["entry_date"]),
@@ -3742,6 +3755,67 @@ def build_timeline_map_items(db):
     for item in items:
         item.pop("sort_key", None)
     return items
+
+
+def filter_timeline_map_items(items, item_type="all", year=None):
+    filtered = items
+    if item_type in ("photo", "text"):
+        filtered = [item for item in filtered if item["kind"] == item_type]
+    if year is not None:
+        filtered = [item for item in filtered if item["year"] == year]
+    return filtered
+
+
+def build_place_summaries(items):
+    groups = {}
+    for item in items:
+        location_name = normalize_place_name(item["location_name"])
+        if not location_name:
+            continue
+        key = place_group_key(location_name)
+        group = groups.setdefault(
+            key,
+            {
+                "location_name": location_name,
+                "item_count": 0,
+                "photo_count": 0,
+                "text_count": 0,
+                "mapped_count": 0,
+                "years": set(),
+                "coordinates": [],
+                "latest_label": "",
+                "url": url_for("timeline_place", name=location_name),
+            },
+        )
+        group["item_count"] += 1
+        group["photo_count"] += 1 if item["kind"] == "photo" else 0
+        group["text_count"] += 1 if item["kind"] == "text" else 0
+        group["years"].add(item["year"])
+        group["latest_label"] = item["date_label"]
+        if item["has_coordinates"]:
+            group["mapped_count"] += 1
+            group["coordinates"].append((item["latitude"], item["longitude"]))
+
+    summaries = []
+    for group in groups.values():
+        years = sorted(group.pop("years"))
+        coordinates = group.pop("coordinates")
+        group["year_label"] = (
+            str(years[0])
+            if len(years) == 1
+            else f"{years[0]}-{years[-1]}"
+        )
+        group["has_coordinates"] = bool(coordinates)
+        if coordinates:
+            latitude = sum(point[0] for point in coordinates) / len(coordinates)
+            longitude = sum(point[1] for point in coordinates) / len(coordinates)
+            group["latitude"] = latitude
+            group["longitude"] = longitude
+            group.update(map_position(latitude, longitude))
+        summaries.append(group)
+
+    summaries.sort(key=lambda group: (-group["item_count"], group["location_name"].casefold()))
+    return summaries
 
 
 def current_profile_form_values():
@@ -5490,12 +5564,58 @@ def timeline_search():
 @app.route("/timeline/map")
 @birthday_required
 def timeline_map():
-    items = build_timeline_map_items(get_db())
+    all_items = build_timeline_map_items(get_db())
+    item_type = request.args.get("type", "all")
+    if item_type not in ("all", "photo", "text"):
+        item_type = "all"
+    selected_year = request.args.get("year", type=int)
+    available_years = sorted({item["year"] for item in all_items})
+    if selected_year is not None and selected_year not in user_years():
+        abort(404)
+
+    items = filter_timeline_map_items(all_items, item_type, selected_year)
+    place_summaries = build_place_summaries(items)
     return render_template(
         "timeline_map.html",
         items=items,
         mapped_items=[item for item in items if item["has_coordinates"]],
         named_items=[item for item in items if not item["has_coordinates"]],
+        place_summaries=place_summaries,
+        mapped_places=[place for place in place_summaries if place["has_coordinates"]],
+        coordinate_items=[
+            item
+            for item in items
+            if item["has_coordinates"] and not normalize_place_name(item["location_name"])
+        ],
+        available_years=available_years,
+        selected_year=selected_year,
+        selected_type=item_type,
+    )
+
+
+@app.route("/timeline/map/place")
+@birthday_required
+def timeline_place():
+    place_name = normalize_place_name(request.args.get("name", ""))
+    if not place_name:
+        abort(404)
+
+    all_items = build_timeline_map_items(get_db())
+    target_key = place_group_key(place_name)
+    items = [
+        item
+        for item in all_items
+        if place_group_key(item["location_name"]) == target_key
+    ]
+    if not items:
+        abort(404)
+
+    return render_template(
+        "timeline_place.html",
+        place_name=normalize_place_name(items[0]["location_name"]),
+        items=items,
+        mapped_items=[item for item in items if item["has_coordinates"]],
+        year_label=build_place_summaries(items)[0]["year_label"],
     )
 
 

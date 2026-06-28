@@ -83,7 +83,13 @@ def test_password_reset_link_is_local_dev_only(app, client, helpers):
 def test_uploads_text_entries_and_pdf_exports(client, helpers):
     helpers.create_user(client, "owner")
 
-    photo_id = helpers.upload_photo(client, filename="public-photo.png", tag="public")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="public-photo.png",
+        title="Park picnic",
+        caption="Blanket by the old willow",
+        tag="public",
+    )
     text_id = helpers.create_text(client, "A private journal note", tag="private")
 
     image_response = client.get(f"/photo/{photo_id}/image")
@@ -94,6 +100,25 @@ def test_uploads_text_entries_and_pdf_exports(client, helpers):
     text_response = client.get(f"/api/text-entry/{text_id}")
     assert text_response.status_code == 200
     assert text_response.get_json()["body"] == "A private journal note"
+
+    photo_response = client.get(f"/api/photo/{photo_id}")
+    assert photo_response.status_code == 200
+    assert photo_response.get_json()["display_title"] == "Park picnic"
+
+    photo_update = client.patch(
+        f"/api/photo/{photo_id}",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={
+            "title": "Updated picnic",
+            "caption": "A caption that timeline search can find",
+        },
+    )
+    assert photo_update.status_code == 200
+    assert photo_update.get_json()["caption"] == "A caption that timeline search can find"
+
+    search_response = client.get("/timeline/search?q=timeline%20search")
+    assert search_response.status_code == 200
+    assert b"Updated picnic" in search_response.data
 
     timeline_response = client.get("/api/timeline-items?year=2020")
     assert timeline_response.status_code == 200
@@ -115,6 +140,8 @@ def test_full_account_backup_export_and_import(client, helpers):
     photo_id = helpers.upload_photo(
         client,
         filename="family-trip.png",
+        title="Family trip",
+        caption="Standing together beside the lake",
         photo_date="2020-05-04",
         tag="family",
     )
@@ -177,6 +204,8 @@ def test_full_account_backup_export_and_import(client, helpers):
         manifest = json.loads(archive.read("evertimeline-backup.json").decode("utf-8"))
         assert manifest["format"] == "evertimeline.account_backup"
         assert manifest["user"]["username"] == "owner"
+        assert manifest["photos"][0]["title"] == "Family trip"
+        assert manifest["photos"][0]["caption"] == "Standing together beside the lake"
         assert manifest["photos"][0]["tags"] == ["family"]
         assert manifest["photos"][0]["messages"][0]["body"] == "Photo message"
         assert manifest["text_entries"][0]["reactions"][0]["reaction"] == "love"
@@ -251,6 +280,12 @@ def test_full_account_backup_export_and_import(client, helpers):
         """,
         (importer_id,),
     )["name"] == "friends"
+    imported_photo = helpers.row(
+        "SELECT title, caption FROM photos WHERE user_id = ?",
+        (importer_id,),
+    )
+    assert imported_photo["title"] == "Family trip"
+    assert imported_photo["caption"] == "Standing together beside the lake"
 
 
 def test_timeline_search_finds_owned_content_types_and_excludes_other_users(app, client, helpers):

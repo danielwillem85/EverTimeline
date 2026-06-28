@@ -1027,7 +1027,7 @@ details.privacy-toggle-panel {
 
 .public-photo-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
     gap: 16px;
 }
 
@@ -1061,10 +1061,47 @@ details.privacy-toggle-panel {
 .public-photo-card img {
     display: block;
     width: 100%;
-    aspect-ratio: 1;
+    aspect-ratio: 4 / 3;
     border-radius: 6px;
     background: var(--surface-strong);
     object-fit: cover;
+}
+
+.public-photo-meta {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+    color: var(--muted);
+    font-size: 0.86rem;
+    font-weight: 800;
+    line-height: 1.35;
+}
+
+.public-photo-meta span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.public-photo-owner-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-width: 0;
+    gap: 8px;
+}
+
+.public-photo-owner-row strong {
+    overflow: hidden;
+    color: var(--ink);
+    font-size: 0.98rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.public-photo-owner-row .button,
+.public-photo-owner-row .status-badge {
+    flex: 0 0 auto;
 }
 
 .reaction-bar {

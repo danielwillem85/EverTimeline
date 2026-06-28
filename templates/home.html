@@ -7,7 +7,7 @@
 <section class="page-heading">
     <div>
         <h1>Home</h1>
-        <p class="muted">A random selection of public photos from EverTimeline.</p>
+        <p class="muted">Public memories from EverTimeline, with reactions, comments, and people to connect with.</p>
     </div>
 </section>
 
@@ -25,6 +25,7 @@
                         data-photo-owner="{{ photo['owner_name'] }}"
                         data-photo-date="{{ photo['display_date'] or '' }}"
                         data-messages-url="{{ photo['messages_url'] }}"
+                        data-photo-id="{{ photo['id'] }}"
                     >
                         <img
                             src="{{ photo['image_url'] }}"
@@ -33,6 +34,28 @@
                         >
                     </button>
                     {{ reaction_bar(photo) }}
+                    <figcaption class="public-photo-meta">
+                        <div class="public-photo-owner-row">
+                            <strong>{{ photo["owner_name"] }}</strong>
+                            {% if photo["connection_state"]["can_request"] %}
+                                <button
+                                    class="button secondary small connect-open-button"
+                                    type="button"
+                                    data-recipient-id="{{ photo['owner_id'] }}"
+                                    data-recipient-name="{{ photo['owner_name'] }}"
+                                >
+                                    Add connection
+                                </button>
+                            {% else %}
+                                <span class="status-badge">{{ photo["connection_state"]["label"] }}</span>
+                            {% endif %}
+                        </div>
+                        <span>{{ photo["display_date"] or "No date" }}</span>
+                        <span>{{ photo["title"] }}</span>
+                        <span data-public-message-count data-photo-id="{{ photo['id'] }}">
+                            {{ photo["message_count"] }} {{ "comment" if photo["message_count"] == 1 else "comments" }}
+                        </span>
+                    </figcaption>
                 </figure>
             {% endfor %}
         </div>
@@ -57,8 +80,47 @@
             <aside class="message-panel readonly-message-panel">
                 <h3>Messages</h3>
                 <div id="home-photo-message-list" class="message-list"></div>
+                <form id="home-photo-message-form" class="message-form">
+                    <label>
+                        <span>Comment</span>
+                        <textarea name="body" rows="3" required></textarea>
+                    </label>
+                    <button class="button primary" type="submit">Add comment</button>
+                </form>
             </aside>
         </div>
+    </section>
+</div>
+
+<div class="modal" id="connection-modal" hidden>
+    <div class="modal-backdrop" data-close-connection-modal></div>
+    <section class="modal-panel connection-modal-panel" role="dialog" aria-modal="true" aria-labelledby="connection-modal-title">
+        <header class="modal-header">
+            <div>
+                <h2 id="connection-modal-title">Add connection</h2>
+                <p id="connection-modal-target" class="muted"></p>
+            </div>
+            <button class="icon-button" type="button" data-close-connection-modal aria-label="Close popup">x</button>
+        </header>
+        <form class="connection-modal-form" method="post" action="{{ url_for('create_connection_request') }}">
+            {{ csrf_field() }}
+            <input type="hidden" name="recipient_id" id="connection-recipient-id">
+            <input type="hidden" name="next" value="{{ request.path }}">
+            <fieldset class="tag-radio-group">
+                <legend>Connection type</legend>
+                <div class="tag-radio-list">
+                    <label class="tag-radio">
+                        <input type="radio" name="relation" value="friend" checked>
+                        <span>Friend</span>
+                    </label>
+                    <label class="tag-radio">
+                        <input type="radio" name="relation" value="family">
+                        <span>Family</span>
+                    </label>
+                </div>
+            </fieldset>
+            <button class="button primary" type="submit">Connect</button>
+        </form>
     </section>
 </div>
 {% endblock %}

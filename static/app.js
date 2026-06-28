@@ -967,6 +967,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const homePhotoOwner = document.getElementById("home-photo-modal-owner");
         const homePhotoDate = document.getElementById("home-photo-modal-date");
         const homePhotoMessageList = document.getElementById("home-photo-message-list");
+        const homePhotoMessageForm = document.getElementById("home-photo-message-form");
+        const homePhotoMessageInput = homePhotoMessageForm ? homePhotoMessageForm.querySelector("textarea") : null;
+        let activeHomePhotoId = null;
+        let activeHomePhotoMessagesUrl = "";
 
         const renderHomePhotoMessages = (messages) => {
             homePhotoMessageList.innerHTML = "";
@@ -1000,25 +1004,50 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         };
 
+        const updateHomePhotoMessageCount = (photoId, count) => {
+            if (!photoId) {
+                return;
+            }
+            document.querySelectorAll(`[data-public-message-count][data-photo-id="${photoId}"]`).forEach((counter) => {
+                counter.textContent = `${count} ${count === 1 ? "comment" : "comments"}`;
+            });
+        };
+
         const closeHomePhotoModal = () => {
             homePhotoModal.hidden = true;
             homePhotoImage.removeAttribute("src");
             homePhotoMessageList.innerHTML = "";
+            activeHomePhotoId = null;
+            activeHomePhotoMessagesUrl = "";
+            if (homePhotoMessageInput) {
+                homePhotoMessageInput.value = "";
+            }
             document.body.classList.remove("modal-open");
         };
 
         const openHomePhotoModal = async (button) => {
+            activeHomePhotoId = button.dataset.photoId || "";
+            activeHomePhotoMessagesUrl = button.dataset.messagesUrl || "";
             homePhotoImage.src = button.dataset.fullSrc;
             homePhotoImage.alt = button.dataset.photoTitle || "Selected public photo";
             homePhotoOwner.textContent = button.dataset.photoOwner || "";
             homePhotoDate.textContent = button.dataset.photoDate || "";
+            if (homePhotoMessageInput) {
+                homePhotoMessageInput.value = "";
+            }
             renderHomePhotoMessages([]);
             homePhotoModal.hidden = false;
             document.body.classList.add("modal-open");
 
+            if (!activeHomePhotoMessagesUrl) {
+                return;
+            }
+
             try {
-                const response = await csrfFetch(button.dataset.messagesUrl);
-                renderHomePhotoMessages(response.ok ? await response.json() : []);
+                const response = await csrfFetch(activeHomePhotoMessagesUrl);
+                const messages = response.ok ? await response.json() : [];
+                renderHomePhotoMessages(messages);
+                updateHomePhotoMessageCount(activeHomePhotoId, messages.length);
             } catch (error) {
                 renderHomePhotoMessages([]);
             }
@@ -1031,6 +1060,47 @@ document.addEventListener("DOMContentLoaded", () => {
         homePhotoModal.querySelectorAll("[data-close-home-photo-modal]").forEach((button) => {
             button.addEventListener("click", closeHomePhotoModal);
         });
+
+        if (homePhotoMessageForm && homePhotoMessageInput) {
+            homePhotoMessageForm.addEventListener("submit", async (event) => {
+                event.preventDefault();
+                const body = homePhotoMessageInput.value.trim();
+                if (!body || !activeHomePhotoMessagesUrl) {
+                    return;
+                }
+
+                const submit = homePhotoMessageForm.querySelector("button[type='submit']");
+                if (submit) {
+                    submit.disabled = true;
+                }
+                try {
+                    const response = await csrfFetch(activeHomePhotoMessagesUrl, {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({body}),
+                    });
+
+                    if (!response.ok) {
+                        return;
+                    }
+
+                    const message = await response.json();
+                    const existingMessages = Array.from(homePhotoMessageList.querySelectorAll(".message-item")).map((item) => ({
+                        author_name: item.querySelector(".message-author")?.textContent || "",
+                        body: item.querySelector("p")?.textContent || "",
+                        created_at: item.querySelector("time")?.textContent || "",
+                    }));
+                    const messages = [...existingMessages, message];
+                    homePhotoMessageInput.value = "";
+                    renderHomePhotoMessages(messages);
+                    updateHomePhotoMessageCount(activeHomePhotoId, messages.length);
+                } finally {
+                    if (submit) {
+                        submit.disabled = false;
+                    }
+                }
+            });
+        }
 
         document.addEventListener("keydown", (event) => {
             if (event.key === "Escape" && !homePhotoModal.hidden) {

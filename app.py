@@ -1376,35 +1376,53 @@ def random_public_photos(db, limit=48):
         """
         SELECT
             p.id,
+            p.user_id,
             p.original_filename,
             p.photo_date,
             p.created_at,
             u.username,
             u.first_name,
-            u.last_name
+            u.last_name,
+            COALESCE(message_counts.message_count, 0) AS message_count
         FROM photos p
+        JOIN users u ON u.id = p.user_id
         JOIN photo_tags pt ON pt.photo_id = p.id
         JOIN tags t ON t.id = pt.tag_id
                    AND t.user_id = p.user_id
                    AND t.name = 'public'
-        JOIN users u ON u.id = p.user_id
+        LEFT JOIN (
+            SELECT photo_id, COUNT(*) AS message_count
+            FROM messages
+            GROUP BY photo_id
+        ) message_counts ON message_counts.photo_id = p.id
         ORDER BY RANDOM()
         LIMIT ?
         """,
         (limit,),
     ).fetchall()
-    photos = [
-        {
-            "kind": "photo",
-            "id": row["id"],
-            "image_url": url_for("public_photo_image", photo_id=row["id"]),
-            "messages_url": url_for("public_photo_messages", photo_id=row["id"]),
-            "title": row["original_filename"] or "Public photo",
-            "owner_name": user_full_name(row) or row["username"],
-            "display_date": row["photo_date"],
-        }
-        for row in rows
-    ]
+    photos = []
+    for row in rows:
+        owner_name = user_full_name(row) or row["username"]
+        connection_state = (
+            {"status": "self", "label": "Your photo", "can_request": False}
+            if row["user_id"] == g.user["id"]
+            else connection_state_for_user(db, row["user_id"])
+        )
+        photos.append(
+            {
+                "kind": "photo",
+                "id": row["id"],
+                "owner_id": row["user_id"],
+                "owner_username": row["username"],
+                "image_url": url_for("public_photo_image", photo_id=row["id"]),
+                "messages_url": url_for("public_photo_messages", photo_id=row["id"]),
+                "title": row["original_filename"] or "Public photo",
+                "owner_name": owner_name,
+                "display_date": row["photo_date"],
+                "message_count": row["message_count"],
+                "connection_state": connection_state,
+            }
+        )
     return attach_reactions(db, photos)
 
 
@@ -4747,6 +4765,12 @@ def create_connection_request():
     recipient_id = request.form.get("recipient_id", type=int)
     relation = request.form.get("relation", "")
 
+    def connection_redirect():
+        target = request.form.get("next", "")
+        if target and target.startswith("/") and not target.startswith("//"):
+            return redirect(target)
+        return redirect(url_for("search", q=query))
+
     recipient = None
     if recipient_id is not None:
         recipient = db.execute(
@@ -4760,22 +4784,22 @@ def create_connection_request():
 
     if recipient is None or recipient["id"] == g.user["id"]:
         flash("Choose a valid user to connect with.", "error")
-        return redirect(url_for("search", q=query))
+        return connection_redirect()
 
     if relation not in CONNECTION_RELATIONS:
         flash("Choose whether this connection is a friend or family.", "error")
-        return redirect(url_for("search", q=query))
+        return connection_redirect()
 
     state = connection_state_for_user(db, recipient["id"])
     if state["status"] == "connected":
         flash("You are already connected.", "error")
-        return redirect(url_for("search", q=query))
+        return connection_redirect()
     if state["status"] == "pending_sent":
         flash("A connection request has already been sent.", "error")
-        return redirect(url_for("search", q=query))
+        return connection_redirect()
     if state["status"] == "pending_received":
         flash("This user already sent you a request. Accept it on the Connections page.", "error")
-        return redirect(url_for("search", q=query))
+        return connection_redirect()
 
     db.execute(
         """
@@ -4786,7 +4810,7 @@ def create_connection_request():
     )
     db.commit()
     flash("Connection request sent.", "success")
-    return redirect(url_for("search", q=query))
+    return connection_redirect()
 
 
 @app.route("/connections/<int:request_id>/accept", methods=("POST",))
@@ -4919,11 +4943,22 @@ def public_photo_image(photo_id):
     return Response(photo["image_data"], mimetype=photo["mime_type"])
 
 
-@app.route("/public/photo/<int:photo_id>/messages")
+@app.route("/public/photo/<int:photo_id>/messages", methods=("GET", "POST"))
 @birthday_required
 def public_photo_messages(photo_id):
     get_public_photo(photo_id)
-    return jsonify(load_messages_for_timeline_item(get_db(), "photo", photo_id))
+    db = get_db()
+
+    if request.method == "POST":
+        payload = request.get_json(silent=True) or request.form
+        body = (payload.get("body") or "").strip()
+        if not body:
+            return jsonify({"error": "Message cannot be empty."}), 400
+
+        message = create_timeline_item_message(db, "photo", photo_id, body)
+        return jsonify(message), 201
+
+    return jsonify(load_messages_for_timeline_item(db, "photo", photo_id))
 
 
 @app.route("/api/photo/<int:photo_id>", methods=("DELETE",))

@@ -197,6 +197,75 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    const adminJobCards = Array.from(document.querySelectorAll("[data-admin-job]"));
+    if (adminJobCards.length) {
+        const terminalStatuses = new Set(["succeeded", "failed"]);
+        const updateJobCard = (card, job) => {
+            card.classList.remove("is-queued", "is-running", "is-succeeded", "is-failed");
+            card.classList.add(`is-${job.status}`);
+
+            const status = card.querySelector("[data-job-status]");
+            if (status) {
+                status.textContent = job.status;
+            }
+
+            const progress = card.querySelector("[data-job-progress]");
+            if (progress) {
+                progress.max = job.progress_total || 1;
+                progress.value = job.progress_total
+                    ? job.progress_current || 0
+                    : (job.status === "succeeded" ? 1 : 0);
+            }
+
+            const message = card.querySelector("[data-job-message]");
+            if (message) {
+                message.textContent = job.message || job.result_summary || "Waiting to start.";
+            }
+
+            const result = card.querySelector("[data-job-result]");
+            if (result) {
+                result.textContent = job.result_summary || "";
+                result.hidden = !job.result_summary;
+            }
+
+            const error = card.querySelector("[data-job-error]");
+            if (error) {
+                error.textContent = job.error ? job.error.split("\n")[0] : "";
+                error.hidden = !job.error;
+            }
+        };
+
+        const refreshAdminJobs = async () => {
+            const activeCards = adminJobCards.filter((card) => {
+                const status = card.querySelector("[data-job-status]")?.textContent || "";
+                return !terminalStatuses.has(status.trim());
+            });
+            if (!activeCards.length) {
+                return;
+            }
+
+            await Promise.all(activeCards.map(async (card) => {
+                if (!card.dataset.jobUrl) {
+                    return;
+                }
+                try {
+                    const response = await csrfFetch(card.dataset.jobUrl, {
+                        headers: {"Accept": "application/json"},
+                    });
+                    if (!response.ok) {
+                        return;
+                    }
+                    updateJobCard(card, await response.json());
+                } catch (error) {
+                    // The next poll will retry.
+                }
+            }));
+        };
+
+        refreshAdminJobs();
+        window.setInterval(refreshAdminJobs, 1500);
+    }
+
     const navToggle = document.querySelector("[data-nav-toggle]");
     const primaryNavigation = document.querySelector("[data-primary-navigation]");
     if (navToggle && primaryNavigation) {

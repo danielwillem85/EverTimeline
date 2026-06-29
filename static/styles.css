@@ -348,6 +348,73 @@ body.nav-open {
     font-weight: 800;
 }
 
+.admin-job-list {
+    display: grid;
+    gap: 12px;
+}
+
+.admin-job-card {
+    display: grid;
+    gap: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    background: var(--surface-strong);
+}
+
+.admin-job-card.is-running {
+    border-color: rgba(22, 109, 103, 0.44);
+}
+
+.admin-job-card.is-failed {
+    border-color: rgba(174, 45, 45, 0.42);
+}
+
+.admin-job-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.admin-job-header > div {
+    display: grid;
+    gap: 2px;
+}
+
+.admin-job-header strong {
+    color: var(--ink);
+}
+
+.admin-job-header span {
+    color: var(--muted);
+    font-weight: 800;
+}
+
+.admin-job-card progress {
+    width: 100%;
+    height: 12px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 999px;
+    background: var(--border);
+}
+
+.admin-job-card progress::-webkit-progress-bar {
+    border-radius: 999px;
+    background: var(--border);
+}
+
+.admin-job-card progress::-webkit-progress-value {
+    border-radius: 999px;
+    background: var(--primary);
+}
+
+.admin-job-card progress::-moz-progress-bar {
+    border-radius: 999px;
+    background: var(--primary);
+}
+
 .birthday-panel {
     position: relative;
     width: min(560px, 100%);

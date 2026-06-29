@@ -331,6 +331,12 @@ def test_admin_page_is_daniel_only_and_converts_existing_images(app, client, hel
     )
     assert convert_response.status_code == 200
     assert b"Converted" in convert_response.data
+    convert_job = helpers.row("SELECT * FROM jobs WHERE kind = ?", ("convert_images",))
+    assert convert_job["status"] == "succeeded"
+    assert convert_job["progress_current"] == convert_job["progress_total"] == 1
+    job_response = client.get(f"/admin/jobs/{convert_job['id']}")
+    assert job_response.status_code == 200
+    assert job_response.get_json()["result_summary"].startswith("Converted 1 image rows")
 
     converted = helpers.row("SELECT mime_type, image_data, image_hash FROM photos WHERE original_filename = ?", ("legacy.png",))
     assert converted["mime_type"] == "image/jpeg"
@@ -385,6 +391,9 @@ def test_admin_maintenance_compacts_existing_jpegs_and_vacuums_database(app, cli
     )
     assert compact_response.status_code == 200
     assert b"Compacted" in compact_response.data
+    compact_job = helpers.row("SELECT * FROM jobs WHERE kind = ?", ("compact_images",))
+    assert compact_job["status"] == "succeeded"
+    assert compact_job["progress_current"] == compact_job["progress_total"]
 
     compacted = helpers.row(
         "SELECT image_data, image_hash FROM photos WHERE original_filename = ?",
@@ -403,6 +412,9 @@ def test_admin_maintenance_compacts_existing_jpegs_and_vacuums_database(app, cli
     )
     assert vacuum_response.status_code == 200
     assert b"Database is now" in vacuum_response.data
+    vacuum_job = helpers.row("SELECT * FROM jobs WHERE kind = ?", ("vacuum_database",))
+    assert vacuum_job["status"] == "succeeded"
+    assert client.get(f"/admin/jobs/{vacuum_job['id']}").get_json()["progress_percent"] == 100
 
 
 def test_manual_people_tagging_for_items_search_and_updates(app, client, helpers):

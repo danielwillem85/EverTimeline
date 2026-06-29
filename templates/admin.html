@@ -73,4 +73,43 @@
         <button class="button secondary" type="submit">Compact image storage</button>
     </form>
 </section>
+
+<section class="auth-panel admin-panel">
+    <h2>Background jobs</h2>
+    {% if admin_jobs %}
+        <div class="admin-job-list" data-admin-job-list>
+            {% for job in admin_jobs %}
+                <article
+                    class="admin-job-card is-{{ job['status'] }}"
+                    data-admin-job
+                    data-job-url="{{ url_for('admin_job_status', job_id=job['id']) }}"
+                >
+                    <div class="admin-job-header">
+                        <div>
+                            <strong>{{ job["title"] }}</strong>
+                            <span>Job #{{ job["id"] }}</span>
+                        </div>
+                        <span class="status-badge" data-job-status>{{ job["status"] }}</span>
+                    </div>
+                    <progress
+                        max="{{ job['progress_total'] or 1 }}"
+                        value="{{ job['progress_current'] if job['progress_total'] else (1 if job['status'] == 'succeeded' else 0) }}"
+                        data-job-progress
+                    ></progress>
+                    <p class="muted" data-job-message>
+                        {{ job["message"] or job["result_summary"] or "Waiting to start." }}
+                    </p>
+                    <p class="muted" data-job-result {% if not job["result_summary"] %}hidden{% endif %}>
+                        {{ job["result_summary"] }}
+                    </p>
+                    <p class="form-error" data-job-error {% if not job["error"] %}hidden{% endif %}>
+                        {{ job["error"].splitlines()[0] if job["error"] else "" }}
+                    </p>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="muted">No background jobs yet.</p>
+    {% endif %}
+</section>
 {% endblock %}

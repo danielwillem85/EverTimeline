@@ -768,10 +768,15 @@ document.addEventListener("DOMContentLoaded", () => {
         const splashSelectable = splashPage.hasAttribute("data-splash-selectable");
         const splashAssignUrl = splashPage.dataset.splashAssignUrl || "";
         const splashAcceptSuggestionsUrl = splashPage.dataset.splashAcceptSuggestionsUrl || "";
+        const splashQuickEditUrl = splashPage.dataset.splashQuickEditUrl || "";
         const noDateAssignForm = document.querySelector("[data-no-date-assign-form]");
         const noDateAssignButton = document.querySelector("[data-no-date-assign-button]");
         const noDateAcceptSuggestionsButton = document.querySelector("[data-no-date-accept-suggestions-button]");
         const noDateSelectedCount = document.querySelector("[data-no-date-selected-count]");
+        const noDateEditModal = document.getElementById("no-date-edit-modal");
+        const noDateQuickEditForm = document.querySelector("[data-no-date-quick-edit-form]");
+        const noDateEditTitle = document.getElementById("no-date-edit-title");
+        const noDateEditSuggestion = document.querySelector("[data-no-date-edit-suggestion]");
         const minTileSize = 82;
         let splashPageIndex = 0;
         let splashPageSize = 0;
@@ -864,11 +869,59 @@ document.addEventListener("DOMContentLoaded", () => {
             syncModalOpenState();
         };
 
+        const closeNoDateQuickEdit = () => {
+            if (!noDateEditModal) {
+                return;
+            }
+            noDateEditModal.hidden = true;
+            syncModalOpenState();
+        };
+
+        const setSelectValue = (select, value) => {
+            if (!select) {
+                return;
+            }
+            select.value = String(value);
+        };
+
+        const openNoDateQuickEdit = (photo) => {
+            if (!noDateEditModal || !noDateQuickEditForm) {
+                return;
+            }
+            const suggestion = photo.suggestion || null;
+            const monthSelect = noDateQuickEditForm.elements.month;
+            const yearSelect = noDateQuickEditForm.elements.year;
+            const exactDateInput = noDateQuickEditForm.elements.photo_date;
+            noDateQuickEditForm.elements.photo_id.value = String(photo.id);
+            if (noDateEditTitle) {
+                noDateEditTitle.textContent = photo.title || "Set date";
+            }
+            if (noDateEditSuggestion) {
+                noDateEditSuggestion.textContent = suggestion
+                    ? `Suggested ${suggestion.label} from ${suggestion.source_label || "date clues"}.`
+                    : "No suggestion available.";
+            }
+            setSelectValue(monthSelect, suggestion ? suggestion.month : photo.month);
+            setSelectValue(yearSelect, suggestion ? suggestion.year : photo.year);
+            if (exactDateInput) {
+                exactDateInput.value = "";
+            }
+            noDateEditModal.hidden = false;
+            syncModalOpenState();
+            if (monthSelect && typeof monthSelect.focus === "function") {
+                monthSelect.focus({preventScroll: true});
+            }
+        };
+
         const renderSplashPhotos = (photos) => {
             splashGrid.innerHTML = "";
             photos.forEach((photo) => {
                 if (photo.suggestion) {
                     splashSuggestions.set(Number(photo.id), photo.suggestion);
+                }
+                const tile = splashSelectable ? document.createElement("div") : null;
+                if (tile) {
+                    tile.className = "splash-thumb-wrap";
                 }
                 const button = document.createElement("button");
                 button.className = "splash-thumb";
@@ -908,7 +961,22 @@ document.addEventListener("DOMContentLoaded", () => {
                     }
                     openSplashPhotoModal(photo);
                 });
-                splashGrid.appendChild(button);
+                if (tile) {
+                    const editButton = document.createElement("button");
+                    editButton.className = "no-date-photo-edit-button";
+                    editButton.type = "button";
+                    editButton.textContent = "Edit";
+                    editButton.setAttribute("aria-label", `Edit date for ${photo.title || "photo"}`);
+                    editButton.addEventListener("click", (event) => {
+                        event.stopPropagation();
+                        openNoDateQuickEdit(photo);
+                    });
+                    tile.appendChild(button);
+                    tile.appendChild(editButton);
+                    splashGrid.appendChild(tile);
+                } else {
+                    splashGrid.appendChild(button);
+                }
             });
             updateSplashSelectionState();
         };
@@ -1031,6 +1099,65 @@ document.addEventListener("DOMContentLoaded", () => {
                     updateSplashSelectionState();
                 }
             });
+        }
+
+        if (noDateQuickEditForm && splashSelectable) {
+            const exactDateInput = noDateQuickEditForm.elements.photo_date;
+            if (exactDateInput) {
+                exactDateInput.addEventListener("change", () => {
+                    if (!exactDateInput.value) {
+                        return;
+                    }
+                    const [yearValue, monthValue] = exactDateInput.value.split("-");
+                    setSelectValue(noDateQuickEditForm.elements.year, yearValue);
+                    setSelectValue(noDateQuickEditForm.elements.month, Number(monthValue));
+                });
+            }
+
+            noDateQuickEditForm.addEventListener("submit", async (event) => {
+                event.preventDefault();
+                if (!splashQuickEditUrl) {
+                    return;
+                }
+                const formData = new FormData(noDateQuickEditForm);
+                const photoId = Number(formData.get("photo_id"));
+                setSplashStatus("Saving photo date...");
+                try {
+                    const response = await csrfFetch(splashQuickEditUrl, {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({
+                            photo_id: photoId,
+                            month: formData.get("month"),
+                            year: formData.get("year"),
+                            photo_date: formData.get("photo_date") || "",
+                        }),
+                    });
+                    const payload = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        throw new Error(payload.error || "Photo date could not be saved.");
+                    }
+                    selectedSplashPhotoIds.delete(photoId);
+                    splashSuggestions.delete(photoId);
+                    closeNoDateQuickEdit();
+                    setSplashStatus("Moved 1 photo.");
+                    await loadSplashPage(splashPageIndex);
+                } catch (error) {
+                    setSplashStatus(error.message || "Photo date could not be saved.");
+                    updateSplashSelectionState();
+                }
+            });
+
+            if (noDateEditModal) {
+                noDateEditModal.querySelectorAll("[data-close-no-date-edit-modal]").forEach((button) => {
+                    button.addEventListener("click", closeNoDateQuickEdit);
+                });
+                document.addEventListener("keydown", (event) => {
+                    if (event.key === "Escape" && !noDateEditModal.hidden) {
+                        closeNoDateQuickEdit();
+                    }
+                });
+            }
         }
 
         if (splashPhotoModal) {

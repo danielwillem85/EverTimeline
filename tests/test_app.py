@@ -466,6 +466,81 @@ def test_no_date_photo_suggestions_can_be_accepted(client, helpers):
     assert client.get("/year/2022/no-date/photos?seed=test-seed&page=0&page_size=10").get_json()["total"] == 0
 
 
+def test_no_date_photo_quick_edit_sets_single_photo_date(client, helpers):
+    helpers.create_user(client, "owner")
+
+    for filename, color in (
+        ("quick-loose-a.png", (44, 88, 132)),
+        ("quick-loose-b.png", (132, 88, 44)),
+    ):
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (12, 12), color=color).save(image_buffer, format="PNG")
+        image_buffer.seek(0)
+        response = client.post(
+            "/year/2022/3",
+            data={
+                **helpers.csrf_form_data(client, "/year/2022/3"),
+                "photo": (image_buffer, filename, "image/png"),
+                "tags": "private",
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+    no_date_page = client.get("/year/2022/no-date")
+    assert no_date_page.status_code == 200
+    assert b"/year/2022/no-date/update-date" in no_date_page.data
+
+    photos_payload = client.get("/year/2022/no-date/photos?seed=test-seed&page=0&page_size=10").get_json()
+    photos = {photo["title"]: photo for photo in photos_payload["photos"]}
+
+    exact_response = client.post(
+        "/year/2022/no-date/update-date",
+        json={
+            "photo_id": photos["quick-loose-a.png"]["id"],
+            "photo_date": "2021-08-14",
+        },
+        headers=helpers.csrf_headers(client, "/year/2022/no-date"),
+    )
+    assert exact_response.status_code == 200
+    assert exact_response.get_json()["moved_count"] == 1
+
+    month_response = client.post(
+        "/year/2022/no-date/update-date",
+        json={
+            "photo_id": photos["quick-loose-b.png"]["id"],
+            "year": 2023,
+            "month": 6,
+        },
+        headers=helpers.csrf_headers(client, "/year/2022/no-date"),
+    )
+    assert month_response.status_code == 200
+    assert month_response.get_json()["moved_count"] == 1
+
+    moved_rows = helpers.rows(
+        """
+        SELECT original_filename, year, month, photo_date
+        FROM photos
+        ORDER BY original_filename
+        """
+    )
+    assert [dict(row) for row in moved_rows] == [
+        {
+            "original_filename": "quick-loose-a.png",
+            "year": 2021,
+            "month": 8,
+            "photo_date": "2021-08-14",
+        },
+        {
+            "original_filename": "quick-loose-b.png",
+            "year": 2023,
+            "month": 6,
+            "photo_date": "2023-06-01",
+        },
+    ]
+    assert client.get("/year/2022/no-date/photos?seed=test-seed&page=0&page_size=10").get_json()["total"] == 0
+
+
 def test_splash_page_api_and_thumbnails_are_owned(app, client, helpers):
     helpers.create_user(client, "owner")
     photo_id = helpers.upload_photo(

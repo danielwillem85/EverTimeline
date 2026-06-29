@@ -57,6 +57,7 @@
         data-splash-url="{{ url_for('year_no_date_photos', year=year) }}"
         data-splash-assign-url="{{ url_for('assign_no_date_photos', year=year) }}"
         data-splash-accept-suggestions-url="{{ url_for('accept_no_date_photo_suggestions', year=year) }}"
+        data-splash-quick-edit-url="{{ url_for('update_no_date_photo_date', year=year) }}"
         data-splash-seed="{{ splash_seed }}"
         aria-label="Undated photo organizer"
     >
@@ -67,6 +68,46 @@
         <div class="splash-page-count" data-splash-count></div>
     </section>
 </section>
+
+<div class="modal" id="no-date-edit-modal" hidden>
+    <div class="modal-backdrop" data-close-no-date-edit-modal></div>
+    <section class="modal-panel no-date-edit-panel" role="dialog" aria-modal="true" aria-labelledby="no-date-edit-title">
+        <header class="modal-header">
+            <div>
+                <h2 id="no-date-edit-title">Set date</h2>
+                <p class="muted" data-no-date-edit-suggestion></p>
+            </div>
+            <button class="icon-button" type="button" data-close-no-date-edit-modal aria-label="Close popup">x</button>
+        </header>
+        <form class="no-date-edit-form" data-no-date-quick-edit-form>
+            <input type="hidden" name="photo_id">
+            <label>
+                <span>Month</span>
+                <select name="month" required>
+                    {% for month_number, month_name in months %}
+                        <option value="{{ month_number }}">{{ month_name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>
+                <span>Year</span>
+                <select name="year" required>
+                    {% for option_year in years %}
+                        <option value="{{ option_year }}">{{ option_year }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label class="no-date-edit-exact-date">
+                <span>Exact date (optional)</span>
+                <input name="photo_date" type="date">
+            </label>
+            <div class="form-actions">
+                <button class="button primary" type="submit">Save</button>
+                <button class="button secondary" type="button" data-close-no-date-edit-modal>Cancel</button>
+            </div>
+        </form>
+    </section>
+</div>
 {% else %}
 <section class="photo-section">
     <div class="photo-grid">

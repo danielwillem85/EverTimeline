@@ -158,7 +158,7 @@ def test_uploads_text_entries_and_pdf_exports(client, helpers):
     oversized_photo = helpers.row("SELECT image_data FROM photos WHERE original_filename = ?", ("oversized.png",))
     with Image.open(io.BytesIO(oversized_photo["image_data"])) as stored_image:
         assert stored_image.format == "JPEG"
-        assert max(stored_image.size) == 1600
+        assert max(stored_image.size) == 1200
 
     text_response = client.get(f"/api/text-entry/{text_id}")
     assert text_response.status_code == 200
@@ -251,7 +251,7 @@ def test_admin_page_is_daniel_only_and_converts_existing_images(app, client, hel
     assert converted["image_hash"] != "legacy-hash"
     with Image.open(io.BytesIO(converted["image_data"])) as stored_image:
         assert stored_image.format == "JPEG"
-        assert max(stored_image.size) == 1600
+        assert max(stored_image.size) == 1200
 
 
 def test_manual_people_tagging_for_items_search_and_updates(app, client, helpers):

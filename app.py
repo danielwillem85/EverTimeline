@@ -3169,7 +3169,7 @@ def random_public_photos(db, limit=48):
     return attach_reactions(db, photos)
 
 
-def build_splash_photo_page(db):
+def build_splash_photo_page(db, *, year=None, no_date_only=False):
     page_size = request.args.get("page_size", default=80, type=int)
     if page_size is None:
         page_size = 80
@@ -3180,14 +3180,22 @@ def build_splash_photo_page(db):
         page = 0
 
     seed = (request.args.get("seed") or "").strip()[:80] or secrets.token_hex(8)
+    conditions = ["user_id = ?"]
+    params = [g.user["id"]]
+    if year is not None:
+        conditions.append("year = ?")
+        params.append(year)
+    if no_date_only:
+        conditions.append("photo_date IS NULL")
+
     rows = db.execute(
-        """
+        f"""
         SELECT id, original_filename, title, caption, photo_date, created_at
         FROM photos
-        WHERE user_id = ?
+        WHERE {" AND ".join(conditions)}
         ORDER BY id ASC
         """,
-        (g.user["id"],),
+        tuple(params),
     ).fetchall()
     photos = [dict(row) for row in rows]
     random.Random(seed).shuffle(photos)
@@ -8303,7 +8311,73 @@ def year_no_date_view(year):
         "no_date.html",
         year=year,
         items=items,
+        years=list(user_years()),
+        months=[(index + 1, month) for index, month in enumerate(MONTH_NAMES)],
+        splash_seed=secrets.token_hex(8),
         messages_url_builder=lambda photo_id: url_for("photo_messages", photo_id=photo_id),
+    )
+
+
+@app.route("/year/<int:year>/no-date/photos")
+@birthday_required
+def year_no_date_photos(year):
+    validate_year_month(year, 1)
+    return jsonify(build_splash_photo_page(get_db(), year=year, no_date_only=True))
+
+
+@app.route("/year/<int:year>/no-date/assign", methods=("POST",))
+@birthday_required
+def assign_no_date_photos(year):
+    validate_year_month(year, 1)
+    payload = request.get_json(silent=True) or {}
+    photo_ids = payload.get("photo_ids") or []
+    target_year = payload.get("year")
+    target_month = payload.get("month")
+
+    if not isinstance(photo_ids, list) or not photo_ids:
+        return jsonify({"error": "Select at least one photo."}), 400
+
+    try:
+        normalized_ids = sorted({int(photo_id) for photo_id in photo_ids})
+        target_year = int(target_year)
+        target_month = int(target_month)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Choose a valid year and month."}), 400
+
+    validate_year_month(target_year, target_month)
+    target_date = date(target_year, target_month, 1).isoformat()
+    placeholders = ",".join(["?"] * len(normalized_ids))
+    db = get_db()
+    rows = db.execute(
+        f"""
+        SELECT id
+        FROM photos
+        WHERE user_id = ?
+          AND year = ?
+          AND photo_date IS NULL
+          AND id IN ({placeholders})
+        """,
+        (g.user["id"], year, *normalized_ids),
+    ).fetchall()
+    found_ids = [row["id"] for row in rows]
+    if not found_ids:
+        return jsonify({"error": "No selected undated photos were found."}), 404
+
+    update_placeholders = ",".join(["?"] * len(found_ids))
+    db.execute(
+        f"""
+        UPDATE photos
+        SET year = ?, month = ?, photo_date = ?
+        WHERE user_id = ? AND id IN ({update_placeholders})
+        """,
+        (target_year, target_month, target_date, g.user["id"], *found_ids),
+    )
+    db.commit()
+    return jsonify(
+        {
+            "moved_count": len(found_ids),
+            "target_url": url_for("month_view", year=target_year, month=target_month),
+        }
     )
 
 

@@ -346,13 +346,50 @@ def test_bulk_upload_can_leave_photos_without_dates(client, helpers):
 
     no_date_page = client.get("/year/2022/no-date")
     assert no_date_page.status_code == 200
-    assert b"loose-memory-a.png" in no_date_page.data
-    assert b"loose-memory-b.png" in no_date_page.data
+    assert b"data-splash-selectable" in no_date_page.data
+    assert b"/year/2022/no-date/photos" in no_date_page.data
+
+    no_date_photos = client.get("/year/2022/no-date/photos?seed=test-seed&page=0&page_size=10")
+    assert no_date_photos.status_code == 200
+    payload = no_date_photos.get_json()
+    assert payload["total"] == 2
+    assert {photo["title"] for photo in payload["photos"]} == {
+        "loose-memory-a.png",
+        "loose-memory-b.png",
+    }
 
     month_page = client.get("/year/2022/3")
     assert month_page.status_code == 200
     assert b"loose-memory-a.png" not in month_page.data
     assert b"loose-memory-b.png" not in month_page.data
+
+    assign_response = client.post(
+        "/year/2022/no-date/assign",
+        json={
+            "photo_ids": [photo["id"] for photo in payload["photos"]],
+            "month": 6,
+            "year": 2023,
+        },
+        headers=helpers.csrf_headers(client, "/year/2022/no-date"),
+    )
+    assert assign_response.status_code == 200
+    assert assign_response.get_json()["moved_count"] == 2
+
+    moved_rows = helpers.rows(
+        "SELECT year, month, photo_date FROM photos ORDER BY original_filename"
+    )
+    assert [(row["year"], row["month"], row["photo_date"]) for row in moved_rows] == [
+        (2023, 6, "2023-06-01"),
+        (2023, 6, "2023-06-01"),
+    ]
+
+    no_date_after_assign = client.get("/year/2022/no-date/photos?seed=test-seed&page=0&page_size=10")
+    assert no_date_after_assign.get_json()["total"] == 0
+
+    target_month_page = client.get("/year/2023/6")
+    assert target_month_page.status_code == 200
+    assert b"loose-memory-a.png" in target_month_page.data
+    assert b"loose-memory-b.png" in target_month_page.data
 
 
 def test_splash_page_api_and_thumbnails_are_owned(app, client, helpers):

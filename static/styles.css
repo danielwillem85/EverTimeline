@@ -1512,6 +1512,7 @@ details.privacy-toggle-panel {
 }
 
 .splash-thumb {
+    position: relative;
     display: block;
     min-width: 0;
     min-height: 0;
@@ -1521,6 +1522,21 @@ details.privacy-toggle-panel {
     overflow: hidden;
     background: #101412;
     cursor: zoom-in;
+}
+
+.splash-thumb.is-selected::after {
+    content: "";
+    position: absolute;
+    inset: 5px;
+    border: 3px solid #fff;
+    border-radius: 5px;
+    box-shadow: 0 0 0 3px var(--primary);
+    pointer-events: none;
+}
+
+.splash-thumb[aria-pressed="true"] {
+    outline: 3px solid var(--primary);
+    outline-offset: -3px;
 }
 
 .splash-thumb:focus-visible {
@@ -1597,6 +1613,39 @@ details.privacy-toggle-panel {
 .splash-page-count {
     right: 12px;
     bottom: 12px;
+}
+
+.no-date-organizer {
+    display: grid;
+    gap: 12px;
+}
+
+.no-date-splash-toolbar {
+    display: grid;
+    grid-template-columns: minmax(150px, 190px) minmax(120px, 160px) auto minmax(90px, 1fr);
+    align-items: end;
+    gap: 10px;
+}
+
+.no-date-splash-toolbar label {
+    margin-bottom: 0;
+}
+
+.no-date-selected-count {
+    align-self: center;
+    color: var(--muted);
+    font-size: 0.86rem;
+    font-weight: 900;
+}
+
+.no-date-splash-page {
+    height: min(720px, calc(100dvh - 220px));
+    min-height: 360px;
+    border-radius: 8px;
+}
+
+.no-date-splash-page .splash-thumb {
+    cursor: pointer;
 }
 
 .reaction-bar {
@@ -3960,6 +4009,20 @@ details.privacy-toggle-panel {
     .splash-page {
         height: calc(100dvh - 58px);
         min-height: 360px;
+    }
+
+    .no-date-splash-toolbar {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .no-date-splash-toolbar .button,
+    .no-date-selected-count {
+        width: 100%;
+    }
+
+    .no-date-splash-page {
+        height: min(620px, calc(100dvh - 260px));
+        min-height: 320px;
     }
 
     .splash-grid {

@@ -375,7 +375,6 @@ document.addEventListener("DOMContentLoaded", () => {
         let pendingRandomize = false;
         let carouselDisplayMs = 1500;
         let carouselTimers = [];
-        let carouselWasPlayingBeforePhotoModal = false;
 
         const shuffleItems = (items) => {
             const shuffled = [...items];
@@ -428,10 +427,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 carouselPhotoModalImage.removeAttribute("src");
                 carouselPhotoModalImage.alt = "";
             }
-            if (restorePlayback && carouselWasPlayingBeforePhotoModal && !allItemsModal.hidden) {
+            if (restorePlayback && !allItemsModal.hidden) {
                 resumeCarousel();
             }
-            carouselWasPlayingBeforePhotoModal = false;
             if (!keepBodyOpen && allItemsModal.hidden) {
                 document.body.classList.remove("modal-open");
             }
@@ -442,7 +440,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 return;
             }
 
-            carouselWasPlayingBeforePhotoModal = !carouselPaused;
             if (!carouselPaused) {
                 pauseCarousel();
             }

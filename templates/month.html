@@ -46,29 +46,33 @@
 {% endmacro %}
 
 {% macro chapter_add_form(item) %}
-    {% if chapters %}
-        <details class="chapter-add-panel">
-            <summary>Chapter</summary>
-            <form method="post" action="{{ url_for('add_chapter_item') }}" class="chapter-add-form">
-                {{ csrf_field() }}
-                <input type="hidden" name="item_kind" value="{{ item['kind'] }}">
-                <input type="hidden" name="item_id" value="{{ item['id'] }}">
-                <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
-                <label>
-                    <span class="sr-only">Choose chapter</span>
-                    <select name="chapter_id" required>
-                        <option value="">Add to chapter</option>
-                        {% for chapter in chapters %}
-                            <option value="{{ chapter['id'] }}">{{ chapter["title"] }}</option>
-                        {% endfor %}
-                    </select>
-                </label>
-                <button class="button secondary small" type="submit">Add</button>
-            </form>
-        </details>
-    {% else %}
-        <a class="button secondary small chapter-create-link" href="{{ url_for('chapters') }}">Create chapter</a>
-    {% endif %}
+    <details class="chapter-add-panel">
+        <summary>Chapter</summary>
+        <form
+            method="post"
+            action="{{ url_for('add_chapter_item') }}"
+            class="chapter-add-form"
+            data-chapter-card-form
+            data-chapter-add-url="{{ url_for('api_add_chapter_item') }}"
+            data-chapter-create-url="{{ url_for('api_create_chapter_with_item') }}"
+        >
+            {{ csrf_field() }}
+            <input type="hidden" name="item_kind" value="{{ item['kind'] }}">
+            <input type="hidden" name="item_id" value="{{ item['id'] }}">
+            <input type="hidden" name="next" value="{{ request.full_path if request.query_string else request.path }}">
+            <label>
+                <span class="sr-only">Choose chapter</span>
+                <select name="chapter_id" required data-chapter-card-select>
+                    <option value="">Add to chapter</option>
+                    {% for chapter in chapters %}
+                        <option value="{{ chapter['id'] }}">{{ chapter["title"] }}</option>
+                    {% endfor %}
+                    <option value="__new__">New chapter</option>
+                </select>
+            </label>
+            <span class="chapter-add-status" data-chapter-card-status aria-live="polite"></span>
+        </form>
+    </details>
 {% endmacro %}
 
 {% block content %}
@@ -110,6 +114,10 @@
     </div>
     {% if not privacy_preview %}
         <div class="page-actions">
+            <a
+                class="button secondary"
+                href="{{ url_for('month_bulk_actions', year=year, month=month) }}"
+            >Bulk actions</a>
             <a
                 class="button secondary"
                 href="{{ url_for('export_month_pdf', year=year, month=month) }}"
@@ -276,6 +284,36 @@
         {% endfor %}
     </div>
 </section>
+
+{% if not privacy_preview %}
+<div class="modal" id="chapter-card-new-modal" hidden>
+    <div class="modal-backdrop" data-close-chapter-card-new></div>
+    <section class="modal-panel chapter-new-panel" role="dialog" aria-modal="true" aria-labelledby="chapter-card-new-title">
+        <header class="modal-header">
+            <div>
+                <h2 id="chapter-card-new-title">New chapter</h2>
+                <p class="muted" data-chapter-card-new-context>Add this item to a new chapter.</p>
+            </div>
+            <button class="icon-button" type="button" data-close-chapter-card-new aria-label="Close popup">x</button>
+        </header>
+        <form class="chapter-new-form" data-chapter-card-new-form>
+            <label>
+                <span>Name</span>
+                <input name="title" maxlength="140" required autocomplete="off">
+            </label>
+            <label>
+                <span>Description</span>
+                <textarea name="description" rows="5"></textarea>
+            </label>
+            <p class="form-status" data-chapter-card-new-status aria-live="polite"></p>
+            <div class="form-actions">
+                <button class="button secondary" type="button" data-close-chapter-card-new>Cancel</button>
+                <button class="button primary" type="submit">Save</button>
+            </div>
+        </form>
+    </section>
+</div>
+{% endif %}
 
 {% if privacy_preview %}
 <div class="modal" id="readonly-text-modal" hidden>

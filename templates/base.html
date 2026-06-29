@@ -40,11 +40,6 @@
                     {% if request.endpoint == 'splash' %}aria-current="page"{% endif %}
                 >Splash</a>
                 <a
-                    class="topbar-link{% if request.endpoint == 'on_this_day' %} is-active{% endif %}"
-                    href="{{ url_for('on_this_day') }}"
-                    {% if request.endpoint == 'on_this_day' %}aria-current="page"{% endif %}
-                >Today</a>
-                <a
                     class="topbar-link{% if request.endpoint in ('timeline', 'timeline_review', 'timeline_search', 'timeline_people', 'timeline_person', 'timeline_collections', 'timeline_stories', 'timeline_story', 'timeline_map', 'timeline_place', 'timeline_import', 'timeline_import_review', 'year_view', 'year_no_date_view', 'month_view', 'birthday') %} is-active{% endif %}"
                     href="{{ url_for('timeline') }}"
                     {% if request.endpoint in ('timeline', 'timeline_review', 'timeline_search', 'timeline_people', 'timeline_person', 'timeline_collections', 'timeline_stories', 'timeline_story', 'timeline_map', 'timeline_place', 'timeline_import', 'timeline_import_review', 'year_view', 'year_no_date_view', 'month_view', 'birthday') %}aria-current="page"{% endif %}

@@ -2,6 +2,7 @@ import io
 import json
 import re
 import zipfile
+import hashlib
 
 from PIL import Image
 
@@ -541,6 +542,317 @@ def test_no_date_photo_quick_edit_sets_single_photo_date(client, helpers):
     assert client.get("/year/2022/no-date/photos?seed=test-seed&page=0&page_size=10").get_json()["total"] == 0
 
 
+def test_photo_delete_removes_related_data_and_month_card(app, client, helpers):
+    user_id = helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="delete-me.png",
+        title="Delete me",
+        caption="This photo has related rows",
+        tag="friends",
+        people="Alice Example",
+    )
+
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Delete test chapter",
+            "description": "Contains the photo being deleted",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Delete test chapter",))["id"]
+    add_response = client.post(
+        "/chapters/items",
+        data={
+            **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+            "chapter_id": chapter_id,
+            "item_kind": "photo",
+            "item_id": photo_id,
+        },
+    )
+    assert add_response.status_code == 302
+
+    with app.app_context():
+        db = helpers.app_module.get_db()
+        message_id = db.execute(
+            "INSERT INTO messages (photo_id, user_id, body) VALUES (?, ?, ?)",
+            (photo_id, user_id, "A message on the photo"),
+        ).lastrowid
+        reaction_id = db.execute(
+            "INSERT INTO item_reactions (user_id, item_kind, item_id, reaction) VALUES (?, 'photo', ?, 'love')",
+            (user_id, photo_id),
+        ).lastrowid
+        db.execute(
+            "INSERT INTO message_notification_reads (user_id, message_kind, message_id) VALUES (?, 'photo', ?)",
+            (user_id, message_id),
+        )
+        db.execute(
+            "INSERT INTO reaction_notification_reads (user_id, reaction_id) VALUES (?, ?)",
+            (user_id, reaction_id),
+        )
+        db.commit()
+
+    month_page = client.get("/year/2020/5")
+    assert month_page.status_code == 200
+    assert f'data-photo-id="{photo_id}"'.encode() in month_page.data
+
+    delete_response = client.delete(
+        f"/api/photo/{photo_id}",
+        headers=helpers.csrf_headers(client, "/year/2020/5"),
+    )
+    assert delete_response.status_code == 204
+
+    assert helpers.row("SELECT COUNT(*) AS count FROM photos WHERE id = ?", (photo_id,))["count"] == 0
+    assert helpers.row("SELECT COUNT(*) AS count FROM messages WHERE photo_id = ?", (photo_id,))["count"] == 0
+    assert helpers.row("SELECT COUNT(*) AS count FROM photo_tags WHERE photo_id = ?", (photo_id,))["count"] == 0
+    assert helpers.row("SELECT COUNT(*) AS count FROM photo_people WHERE photo_id = ?", (photo_id,))["count"] == 0
+    assert helpers.row(
+        "SELECT COUNT(*) AS count FROM chapter_items WHERE item_kind = 'photo' AND item_id = ?",
+        (photo_id,),
+    )["count"] == 0
+    assert helpers.row(
+        "SELECT COUNT(*) AS count FROM item_reactions WHERE item_kind = 'photo' AND item_id = ?",
+        (photo_id,),
+    )["count"] == 0
+    assert helpers.row("SELECT COUNT(*) AS count FROM message_notification_reads")["count"] == 0
+    assert helpers.row("SELECT COUNT(*) AS count FROM reaction_notification_reads")["count"] == 0
+
+    refreshed_month_page = client.get("/year/2020/5")
+    assert refreshed_month_page.status_code == 200
+    assert f'data-photo-id="{photo_id}"'.encode() not in refreshed_month_page.data
+
+
+def test_month_bulk_actions_removes_selected_photos(app, client, helpers):
+    user_id = helpers.create_user(client, "owner")
+
+    def insert_test_photo(filename, title, year, month, photo_date, color):
+        buffer = io.BytesIO()
+        Image.new("RGB", (12, 12), color=color).save(buffer, format="JPEG")
+        image_data = buffer.getvalue()
+        with app.app_context():
+            db = helpers.app_module.get_db()
+            cursor = db.execute(
+                """
+                INSERT INTO photos (
+                    user_id, year, month, original_filename, title, caption,
+                    image_hash, mime_type, image_data, photo_date
+                )
+                VALUES (?, ?, ?, ?, ?, '', ?, 'image/jpeg', ?, ?)
+                """,
+                (
+                    user_id,
+                    year,
+                    month,
+                    filename,
+                    title,
+                    hashlib.sha256(image_data).hexdigest(),
+                    image_data,
+                    photo_date,
+                ),
+            )
+            db.commit()
+            return cursor.lastrowid
+
+    first_photo_id = insert_test_photo("bulk-delete-first.jpg", "Bulk delete first", 2020, 5, "2020-05-02", (22, 109, 103))
+    second_photo_id = insert_test_photo("bulk-delete-second.jpg", "Bulk delete second", 2020, 5, "2020-05-03", (184, 79, 62))
+    kept_photo_id = insert_test_photo("bulk-delete-keep.jpg", "Keep me", 2020, 6, "2020-06-04", (48, 87, 180))
+
+    with app.app_context():
+        db = helpers.app_module.get_db()
+        message_id = db.execute(
+            "INSERT INTO messages (photo_id, user_id, body) VALUES (?, ?, ?)",
+            (first_photo_id, user_id, "Bulk delete message"),
+        ).lastrowid
+        reaction_id = db.execute(
+            "INSERT INTO item_reactions (user_id, item_kind, item_id, reaction) VALUES (?, 'photo', ?, 'like')",
+            (user_id, second_photo_id),
+        ).lastrowid
+        db.execute(
+            "INSERT INTO message_notification_reads (user_id, message_kind, message_id) VALUES (?, 'photo', ?)",
+            (user_id, message_id),
+        )
+        db.execute(
+            "INSERT INTO reaction_notification_reads (user_id, reaction_id) VALUES (?, ?)",
+            (user_id, reaction_id),
+        )
+        db.commit()
+
+    month_page = client.get("/year/2020/5")
+    assert month_page.status_code == 200
+    assert b"Bulk actions" in month_page.data
+    assert b"/year/2020/5/bulk-actions" in month_page.data
+
+    legacy_redirect = client.get("/year/2020/5/bulk-delete")
+    assert legacy_redirect.status_code == 302
+    assert legacy_redirect.headers["Location"].endswith("/year/2020/5/bulk-actions")
+
+    bulk_page = client.get("/year/2020/5/bulk-actions")
+    assert bulk_page.status_code == 200
+    assert b"data-month-bulk-actions" in bulk_page.data
+    assert b"data-month-bulk-visibility-select" in bulk_page.data
+    assert b"data-month-bulk-chapter-select" in bulk_page.data
+    assert b"New chapter" in bulk_page.data
+    assert b"/api/year/2020/5/photos" in bulk_page.data
+    assert b"/api/year/2020/5/photos/delete" in bulk_page.data
+    assert b"/api/year/2020/5/photos/visibility" in bulk_page.data
+    assert b"/api/chapters/bulk-add" in bulk_page.data
+    assert b"/api/chapters/bulk-create" in bulk_page.data
+
+    payload = client.get("/api/year/2020/5/photos?page=0&page_size=20").get_json()
+    payload_ids = {photo["id"] for photo in payload["photos"]}
+    assert first_photo_id in payload_ids
+    assert second_photo_id in payload_ids
+    assert kept_photo_id not in payload_ids
+
+    delete_response = client.post(
+        "/api/year/2020/5/photos/delete",
+        headers=helpers.csrf_headers(client, "/year/2020/5/bulk-actions"),
+        json={"photo_ids": [first_photo_id, second_photo_id, kept_photo_id]},
+    )
+
+    assert delete_response.status_code == 200
+    delete_payload = delete_response.get_json()
+    assert delete_payload["deleted_count"] == 2
+    assert set(delete_payload["deleted_photo_ids"]) == {first_photo_id, second_photo_id}
+    assert helpers.row("SELECT COUNT(*) AS count FROM photos WHERE id IN (?, ?)", (first_photo_id, second_photo_id))["count"] == 0
+    assert helpers.row("SELECT COUNT(*) AS count FROM photos WHERE id = ?", (kept_photo_id,))["count"] == 1
+    assert helpers.row("SELECT COUNT(*) AS count FROM messages WHERE photo_id = ?", (first_photo_id,))["count"] == 0
+    assert helpers.row(
+        "SELECT COUNT(*) AS count FROM item_reactions WHERE item_kind = 'photo' AND item_id = ?",
+        (second_photo_id,),
+    )["count"] == 0
+    assert helpers.row("SELECT COUNT(*) AS count FROM message_notification_reads")["count"] == 0
+    assert helpers.row("SELECT COUNT(*) AS count FROM reaction_notification_reads")["count"] == 0
+
+    refreshed_payload = client.get("/api/year/2020/5/photos?page=0&page_size=20").get_json()
+    refreshed_ids = {photo["id"] for photo in refreshed_payload["photos"]}
+    assert first_photo_id not in refreshed_ids
+    assert second_photo_id not in refreshed_ids
+
+
+def test_month_bulk_actions_updates_selected_photo_visibility(app, client, helpers):
+    user_id = helpers.create_user(client, "owner")
+
+    def insert_test_photo(filename, title, year, month, photo_date, color):
+        buffer = io.BytesIO()
+        Image.new("RGB", (12, 12), color=color).save(buffer, format="JPEG")
+        image_data = buffer.getvalue()
+        with app.app_context():
+            db = helpers.app_module.get_db()
+            cursor = db.execute(
+                """
+                INSERT INTO photos (
+                    user_id, year, month, original_filename, title, caption,
+                    image_hash, mime_type, image_data, photo_date
+                )
+                VALUES (?, ?, ?, ?, ?, '', ?, 'image/jpeg', ?, ?)
+                """,
+                (
+                    user_id,
+                    year,
+                    month,
+                    filename,
+                    title,
+                    hashlib.sha256(image_data).hexdigest(),
+                    image_data,
+                    photo_date,
+                ),
+            )
+            photo_id = cursor.lastrowid
+            db.execute("INSERT OR IGNORE INTO tags (user_id, name) VALUES (?, 'private')", (user_id,))
+            tag_id = db.execute(
+                "SELECT id FROM tags WHERE user_id = ? AND name = 'private'",
+                (user_id,),
+            ).fetchone()["id"]
+            db.execute(
+                "INSERT INTO photo_tags (photo_id, tag_id) VALUES (?, ?)",
+                (photo_id, tag_id),
+            )
+            db.commit()
+            return photo_id
+
+    first_photo_id = insert_test_photo("bulk-actions-visible-first.jpg", "Visible first", 2020, 5, "2020-05-02", (22, 109, 103))
+    second_photo_id = insert_test_photo("bulk-actions-visible-second.jpg", "Visible second", 2020, 5, "2020-05-03", (184, 79, 62))
+    kept_photo_id = insert_test_photo("bulk-actions-visible-keep.jpg", "Keep private", 2020, 6, "2020-06-04", (48, 87, 180))
+
+    response = client.post(
+        "/api/year/2020/5/photos/visibility",
+        headers=helpers.csrf_headers(client, "/year/2020/5/bulk-actions"),
+        json={"photo_ids": [first_photo_id, second_photo_id, kept_photo_id], "visibility": "friends"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["updated_count"] == 2
+    assert set(payload["updated_photo_ids"]) == {first_photo_id, second_photo_id}
+
+    def photo_tag(photo_id):
+        return helpers.row(
+            """
+            SELECT t.name
+            FROM photo_tags pt
+            JOIN tags t ON t.id = pt.tag_id
+            WHERE pt.photo_id = ?
+            """,
+            (photo_id,),
+        )["name"]
+
+    assert photo_tag(first_photo_id) == "friends"
+    assert photo_tag(second_photo_id) == "friends"
+    assert photo_tag(kept_photo_id) == "private"
+
+
+def test_month_card_can_create_new_chapter_for_photo(client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="chapter-card-photo.png",
+        title="Chapter card photo",
+        caption="Created from the month card",
+    )
+
+    month_page = client.get("/year/2020/5")
+    assert month_page.status_code == 200
+    assert b"data-chapter-card-form" in month_page.data
+    assert b"data-chapter-add-url" in month_page.data
+    assert b"data-chapter-card-new-form" in month_page.data
+    assert b"New chapter" in month_page.data
+
+    response = client.post(
+        "/api/chapters/create-with-item",
+        headers=helpers.csrf_headers(client, "/year/2020/5"),
+        data={
+            "title": "Month card chapter",
+            "description": "Created while looking at a photo",
+            "item_kind": "photo",
+            "item_id": photo_id,
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.get_json()
+    assert payload["status"] == "created"
+    assert payload["chapter"]["title"] == "Month card chapter"
+    chapter = helpers.row(
+        "SELECT id, description, visibility FROM chapters WHERE title = ?",
+        ("Month card chapter",),
+    )
+    assert chapter["description"] == "Created while looking at a photo"
+    assert chapter["visibility"] == "private"
+    item = helpers.row(
+        """
+        SELECT item_kind, item_id, position
+        FROM chapter_items
+        WHERE chapter_id = ?
+        """,
+        (chapter["id"],),
+    )
+    assert dict(item) == {"item_kind": "photo", "item_id": photo_id, "position": 1}
+
+
 def test_splash_page_api_and_thumbnails_are_owned(app, client, helpers):
     helpers.create_user(client, "owner")
     photo_id = helpers.upload_photo(
@@ -942,44 +1254,6 @@ def test_guided_memory_prompts_surface_missing_context_and_refresh(client, helpe
         },
     ).get_json()
     assert "people" not in {prompt["target"] for prompt in text_update["guided_prompts"]}
-
-
-def test_on_this_day_shows_matching_dated_memories(client, helpers):
-    helpers.create_user(client, "owner")
-    helpers.upload_photo(
-        client,
-        year=2020,
-        month=5,
-        filename="picnic.png",
-        photo_date="2020-05-04",
-        title="Park picnic",
-        tag="private",
-    )
-    helpers.create_text(
-        client,
-        "A same-day text memory",
-        year=2021,
-        month=5,
-        entry_date="2021-05-04",
-        tag="friends",
-    )
-    helpers.create_text(
-        client,
-        "A different-day text memory",
-        year=2021,
-        month=5,
-        entry_date="2021-05-05",
-        tag="friends",
-    )
-
-    response = client.get("/on-this-day?date=2026-05-04")
-
-    assert response.status_code == 200
-    assert b"On this day" in response.data
-    assert b"May 4 across your timeline." in response.data
-    assert b"Park picnic" in response.data
-    assert b"A same-day text memory" in response.data
-    assert b"A different-day text memory" not in response.data
 
 
 def test_timeline_import_assistant_reviews_detected_dates_before_saving(client, helpers):
@@ -2612,3 +2886,4 @@ def test_activity_history_shows_uploads_chapters_connections_comments_and_reacti
     ]
     for expected in expectations:
         assert expected in activity.data
+

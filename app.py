@@ -3511,91 +3511,6 @@ def build_chapter_splash_photo_page(db, chapter_id):
     return paginated_splash_payload(photos, page, page_size)
 
 
-def build_on_this_day_items(db, owner_id, month, day, image_url_builder):
-    date_key = f"{month:02d}-{day:02d}"
-    photo_rows = db.execute(
-        """
-        SELECT id, year, month, original_filename, title, caption, photo_date,
-               location_name, latitude, longitude, created_at
-        FROM photos
-        WHERE user_id = ?
-          AND photo_date IS NOT NULL
-          AND substr(photo_date, 6, 5) = ?
-        ORDER BY photo_date ASC, id ASC
-        """,
-        (owner_id, date_key),
-    ).fetchall()
-    text_rows = db.execute(
-        """
-        SELECT id, year, month, body, entry_date, location_name, latitude, longitude,
-               created_at, updated_at
-        FROM text_entries
-        WHERE user_id = ?
-          AND entry_date IS NOT NULL
-          AND substr(entry_date, 6, 5) = ?
-        ORDER BY entry_date ASC, id ASC
-        """,
-        (owner_id, date_key),
-    ).fetchall()
-    photo_tags = load_tags_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
-    text_tags = load_tags_for_items(db, "text", [entry["id"] for entry in text_rows], owner_id)
-    photo_people = load_people_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
-    text_people = load_people_for_items(db, "text", [entry["id"] for entry in text_rows], owner_id)
-    items = []
-    for photo in photo_rows:
-        tags = photo_tags.get(photo["id"], [])
-        people = photo_people.get(photo["id"], [])
-        items.append(
-            {
-                "kind": "photo",
-                "id": photo["id"],
-                "year": photo["year"],
-                "month": photo["month"],
-                "original_filename": photo["original_filename"],
-                "title": photo["title"] or "",
-                "display_title": photo_display_title(photo),
-                "caption": photo["caption"] or "",
-                "display_date": photo["photo_date"],
-                "date_label": format_timeline_date_label(photo["year"], photo["month"], photo["photo_date"]),
-                **timeline_location_payload(photo),
-                "created_at": photo["created_at"],
-                "image_url": image_url_builder(photo["id"]),
-                "messages_url": url_for("timeline_item_messages", item_kind="photo", item_id=photo["id"]),
-                "entry_ref": timeline_item_focus("photo", photo["id"]),
-                "tags": tags,
-                "tags_text": tags_to_text(tags),
-                **people_payload(people),
-                **privacy_payload_for_tags(tags),
-                "guided_prompts": guided_prompts_for_item("photo", photo, people),
-            }
-        )
-    for entry in text_rows:
-        tags = text_tags.get(entry["id"], [])
-        people = text_people.get(entry["id"], [])
-        items.append(
-            {
-                "kind": "text",
-                "id": entry["id"],
-                "year": entry["year"],
-                "month": entry["month"],
-                "body": entry["body"],
-                "display_date": entry["entry_date"],
-                "date_label": format_timeline_date_label(entry["year"], entry["month"], entry["entry_date"]),
-                **timeline_location_payload(entry),
-                "created_at": entry["created_at"],
-                "updated_at": entry["updated_at"],
-                "entry_ref": timeline_item_focus("text", entry["id"]),
-                "tags": tags,
-                "tags_text": tags_to_text(tags),
-                **people_payload(people),
-                **privacy_payload_for_tags(tags),
-                "guided_prompts": guided_prompts_for_item("text", entry, people),
-            }
-        )
-    items.sort(key=timeline_item_sort_key)
-    return attach_reactions(db, items)
-
-
 def timeline_item_focus(kind, item_id):
     return f"{kind}-{item_id}"
 
@@ -8312,36 +8227,6 @@ def timeline_import_item_thumbnail(token, item_id):
     return response
 
 
-@app.route("/on-this-day")
-@birthday_required
-def on_this_day():
-    raw_date = request.args.get("date", "").strip()
-    selected_date = date.today()
-    if raw_date:
-        try:
-            selected_date = date.fromisoformat(raw_date)
-        except ValueError:
-            flash("Choose a valid date.", "error")
-            return redirect(url_for("on_this_day"))
-
-    items = build_on_this_day_items(
-        get_db(),
-        g.user["id"],
-        selected_date.month,
-        selected_date.day,
-        lambda photo_id: url_for("photo_image", photo_id=photo_id),
-    )
-    years = sorted({item["year"] for item in items})
-    return render_template(
-        "on_this_day.html",
-        selected_date=selected_date,
-        selected_date_value=selected_date.isoformat(),
-        month_day_label=f"{MONTH_NAMES[selected_date.month - 1]} {selected_date.day}",
-        items=items,
-        years=years,
-    )
-
-
 @app.route("/timeline/search")
 @birthday_required
 def timeline_search():
@@ -8841,16 +8726,23 @@ def month_view(year, month):
     )
 
 
-@app.route("/year/<int:year>/<int:month>/bulk-delete")
+@app.route("/year/<int:year>/<int:month>/bulk-actions")
 @birthday_required
-def month_bulk_delete(year, month):
+def month_bulk_actions(year, month):
     validate_year_month(year, month)
     return render_template(
-        "month_bulk_delete.html",
+        "month_bulk_actions.html",
         year=year,
         month=month,
         month_name=MONTH_NAMES[month - 1],
+        chapters=get_chapter_options(get_db()),
     )
+
+
+@app.route("/year/<int:year>/<int:month>/bulk-delete")
+@birthday_required
+def month_bulk_delete(year, month):
+    return redirect(url_for("month_bulk_actions", year=year, month=month))
 
 
 @app.route("/api/year/<int:year>/<int:month>/photos")
@@ -8882,6 +8774,51 @@ def api_month_bulk_delete_photos(year, month):
             "deleted_photo_ids": deleted_ids,
             "deleted_count": deleted_count,
             "message": f"Deleted {deleted_count} photo{'s' if deleted_count != 1 else ''}.",
+        }
+    )
+
+
+@app.route("/api/year/<int:year>/<int:month>/photos/visibility", methods=("POST",))
+@birthday_required
+def api_month_bulk_photo_visibility(year, month):
+    validate_year_month(year, month)
+    payload = request.get_json(silent=True) or request.form
+    photo_ids = parse_chapter_bulk_photo_ids(payload.get("photo_ids") or payload.get("selected_photo_ids"))
+    tag = normalize_tag_choice(payload.get("tags") or payload.get("visibility"))
+    if not photo_ids:
+        return jsonify({"error": "Choose at least one photo."}), 400
+    if not tag:
+        return jsonify({"error": "Choose a valid visibility option."}), 400
+
+    placeholders = ",".join(["?"] * len(photo_ids))
+    db = get_db()
+    rows = db.execute(
+        f"""
+        SELECT id
+        FROM photos
+        WHERE user_id = ?
+          AND year = ?
+          AND month = ?
+          AND id IN ({placeholders})
+        """,
+        (g.user["id"], year, month, *photo_ids),
+    ).fetchall()
+    month_photo_ids = {row["id"] for row in rows}
+    ordered_photo_ids = [photo_id for photo_id in photo_ids if photo_id in month_photo_ids]
+    if not ordered_photo_ids:
+        return jsonify({"error": "No matching photos were found."}), 404
+
+    for photo_id in ordered_photo_ids:
+        set_tags_for_item(db, "photo", photo_id, [tag])
+    db.commit()
+    updated_count = len(ordered_photo_ids)
+    return jsonify(
+        {
+            "status": "updated",
+            "updated_photo_ids": ordered_photo_ids,
+            "updated_count": updated_count,
+            "visibility": tag,
+            "message": f"Updated visibility for {updated_count} photo{'s' if updated_count != 1 else ''}.",
         }
     )
 

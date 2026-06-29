@@ -1604,41 +1604,6 @@ details.privacy-toggle-panel {
     gap: 14px;
 }
 
-.on-this-day-controls {
-    margin-bottom: 14px;
-}
-
-.on-this-day-summary {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 12px;
-    margin-bottom: 18px;
-}
-
-.on-this-day-summary p {
-    margin-bottom: 0;
-}
-
-.on-this-day-card .open-month-button {
-    width: 100%;
-    min-height: 34px;
-}
-
-.memory-year-badge {
-    position: absolute;
-    top: 8px;
-    left: 8px;
-    z-index: 5;
-    border-radius: 6px;
-    padding: 5px 8px;
-    background: rgba(255, 255, 255, 0.92);
-    color: var(--ink);
-    font-size: 0.82rem;
-    font-weight: 900;
-    box-shadow: 0 8px 18px rgba(24, 31, 28, 0.12);
-}
-
 .public-photo-section {
     min-height: 240px;
 }
@@ -2021,6 +1986,76 @@ details.privacy-toggle-panel {
 
 .chapter-bulk-thumb.is-selected .chapter-bulk-check {
     display: inline-flex;
+}
+
+.month-bulk-actions-toolbar {
+    display: grid;
+    grid-template-columns: auto auto minmax(180px, 1fr);
+    align-items: center;
+    column-gap: 10px;
+    row-gap: 8px;
+}
+
+.month-bulk-actions-page {
+    padding-top: 92px;
+}
+
+.month-bulk-actions-toolbar > .button {
+    grid-column: 1;
+    grid-row: 1;
+    z-index: 1;
+}
+
+.month-bulk-actions-toolbar > strong {
+    grid-column: 2;
+    grid-row: 1;
+    z-index: 1;
+}
+
+.month-bulk-action-controls {
+    display: flex;
+    align-items: end;
+    justify-content: center;
+    grid-column: 1 / -1;
+    grid-row: 1;
+    justify-self: center;
+    width: max-content;
+    max-width: 100%;
+    flex: none;
+    min-width: 0;
+    margin: 0;
+    gap: 8px;
+}
+
+.month-bulk-actions-toolbar .chapter-bulk-progress {
+    grid-column: 3;
+    grid-row: 1;
+    justify-self: end;
+    width: min(260px, 100%);
+    margin-left: 0;
+    z-index: 1;
+}
+
+.month-bulk-control {
+    display: grid;
+    flex: 0 1 170px;
+    min-width: 150px;
+    gap: 3px;
+}
+
+.month-bulk-action-controls .month-bulk-delete-form {
+    flex: 0 0 auto;
+    min-width: 0;
+}
+
+.month-bulk-action-controls .chapter-bulk-action-status:empty {
+    display: none;
+}
+
+.month-bulk-control span {
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 900;
 }
 
 .chapter-bulk-save-form {
@@ -4740,6 +4775,10 @@ details.privacy-toggle-panel {
         flex-direction: column;
     }
 
+    .month-bulk-actions-toolbar {
+        display: flex;
+    }
+
     .chapter-bulk-toolbar .button {
         width: 100%;
     }
@@ -4753,6 +4792,17 @@ details.privacy-toggle-panel {
     .chapter-bulk-save-form {
         width: 100%;
         flex-basis: auto;
+    }
+
+    .month-bulk-action-controls {
+        align-items: stretch;
+        flex-direction: column;
+        flex-basis: auto;
+        width: 100%;
+    }
+
+    .month-bulk-control {
+        min-width: 0;
     }
 
     .chapter-bulk-chapter-select {

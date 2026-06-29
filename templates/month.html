@@ -116,8 +116,8 @@
         <div class="page-actions">
             <a
                 class="button secondary"
-                href="{{ url_for('month_bulk_delete', year=year, month=month) }}"
-            >Bulk delete</a>
+                href="{{ url_for('month_bulk_actions', year=year, month=month) }}"
+            >Bulk actions</a>
             <a
                 class="button secondary"
                 href="{{ url_for('export_month_pdf', year=year, month=month) }}"

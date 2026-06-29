@@ -337,7 +337,7 @@ def test_photo_delete_removes_related_data_and_month_card(app, client, helpers):
     assert f'data-photo-id="{photo_id}"'.encode() not in refreshed_month_page.data
 
 
-def test_month_bulk_delete_removes_selected_photos(app, client, helpers):
+def test_month_bulk_actions_removes_selected_photos(app, client, helpers):
     user_id = helpers.create_user(client, "owner")
 
     def insert_test_photo(filename, title, year, month, photo_date, color):
@@ -394,14 +394,24 @@ def test_month_bulk_delete_removes_selected_photos(app, client, helpers):
 
     month_page = client.get("/year/2020/5")
     assert month_page.status_code == 200
-    assert b"Bulk delete" in month_page.data
-    assert b"/year/2020/5/bulk-delete" in month_page.data
+    assert b"Bulk actions" in month_page.data
+    assert b"/year/2020/5/bulk-actions" in month_page.data
 
-    bulk_page = client.get("/year/2020/5/bulk-delete")
+    legacy_redirect = client.get("/year/2020/5/bulk-delete")
+    assert legacy_redirect.status_code == 302
+    assert legacy_redirect.headers["Location"].endswith("/year/2020/5/bulk-actions")
+
+    bulk_page = client.get("/year/2020/5/bulk-actions")
     assert bulk_page.status_code == 200
-    assert b"data-month-bulk-delete" in bulk_page.data
+    assert b"data-month-bulk-actions" in bulk_page.data
+    assert b"data-month-bulk-visibility-select" in bulk_page.data
+    assert b"data-month-bulk-chapter-select" in bulk_page.data
+    assert b"New chapter" in bulk_page.data
     assert b"/api/year/2020/5/photos" in bulk_page.data
     assert b"/api/year/2020/5/photos/delete" in bulk_page.data
+    assert b"/api/year/2020/5/photos/visibility" in bulk_page.data
+    assert b"/api/chapters/bulk-add" in bulk_page.data
+    assert b"/api/chapters/bulk-create" in bulk_page.data
 
     payload = client.get("/api/year/2020/5/photos?page=0&page_size=20").get_json()
     payload_ids = {photo["id"] for photo in payload["photos"]}
@@ -411,7 +421,7 @@ def test_month_bulk_delete_removes_selected_photos(app, client, helpers):
 
     delete_response = client.post(
         "/api/year/2020/5/photos/delete",
-        headers=helpers.csrf_headers(client, "/year/2020/5/bulk-delete"),
+        headers=helpers.csrf_headers(client, "/year/2020/5/bulk-actions"),
         json={"photo_ids": [first_photo_id, second_photo_id, kept_photo_id]},
     )
 
@@ -433,6 +443,78 @@ def test_month_bulk_delete_removes_selected_photos(app, client, helpers):
     refreshed_ids = {photo["id"] for photo in refreshed_payload["photos"]}
     assert first_photo_id not in refreshed_ids
     assert second_photo_id not in refreshed_ids
+
+
+def test_month_bulk_actions_updates_selected_photo_visibility(app, client, helpers):
+    user_id = helpers.create_user(client, "owner")
+
+    def insert_test_photo(filename, title, year, month, photo_date, color):
+        buffer = io.BytesIO()
+        Image.new("RGB", (12, 12), color=color).save(buffer, format="JPEG")
+        image_data = buffer.getvalue()
+        with app.app_context():
+            db = helpers.app_module.get_db()
+            cursor = db.execute(
+                """
+                INSERT INTO photos (
+                    user_id, year, month, original_filename, title, caption,
+                    image_hash, mime_type, image_data, photo_date
+                )
+                VALUES (?, ?, ?, ?, ?, '', ?, 'image/jpeg', ?, ?)
+                """,
+                (
+                    user_id,
+                    year,
+                    month,
+                    filename,
+                    title,
+                    hashlib.sha256(image_data).hexdigest(),
+                    image_data,
+                    photo_date,
+                ),
+            )
+            photo_id = cursor.lastrowid
+            db.execute("INSERT OR IGNORE INTO tags (user_id, name) VALUES (?, 'private')", (user_id,))
+            tag_id = db.execute(
+                "SELECT id FROM tags WHERE user_id = ? AND name = 'private'",
+                (user_id,),
+            ).fetchone()["id"]
+            db.execute(
+                "INSERT INTO photo_tags (photo_id, tag_id) VALUES (?, ?)",
+                (photo_id, tag_id),
+            )
+            db.commit()
+            return photo_id
+
+    first_photo_id = insert_test_photo("bulk-actions-visible-first.jpg", "Visible first", 2020, 5, "2020-05-02", (22, 109, 103))
+    second_photo_id = insert_test_photo("bulk-actions-visible-second.jpg", "Visible second", 2020, 5, "2020-05-03", (184, 79, 62))
+    kept_photo_id = insert_test_photo("bulk-actions-visible-keep.jpg", "Keep private", 2020, 6, "2020-06-04", (48, 87, 180))
+
+    response = client.post(
+        "/api/year/2020/5/photos/visibility",
+        headers=helpers.csrf_headers(client, "/year/2020/5/bulk-actions"),
+        json={"photo_ids": [first_photo_id, second_photo_id, kept_photo_id], "visibility": "friends"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["updated_count"] == 2
+    assert set(payload["updated_photo_ids"]) == {first_photo_id, second_photo_id}
+
+    def photo_tag(photo_id):
+        return helpers.row(
+            """
+            SELECT t.name
+            FROM photo_tags pt
+            JOIN tags t ON t.id = pt.tag_id
+            WHERE pt.photo_id = ?
+            """,
+            (photo_id,),
+        )["name"]
+
+    assert photo_tag(first_photo_id) == "friends"
+    assert photo_tag(second_photo_id) == "friends"
+    assert photo_tag(kept_photo_id) == "private"
 
 
 def test_month_card_can_create_new_chapter_for_photo(client, helpers):
@@ -884,44 +966,6 @@ def test_guided_memory_prompts_surface_missing_context_and_refresh(client, helpe
         },
     ).get_json()
     assert "people" not in {prompt["target"] for prompt in text_update["guided_prompts"]}
-
-
-def test_on_this_day_shows_matching_dated_memories(client, helpers):
-    helpers.create_user(client, "owner")
-    helpers.upload_photo(
-        client,
-        year=2020,
-        month=5,
-        filename="picnic.png",
-        photo_date="2020-05-04",
-        title="Park picnic",
-        tag="private",
-    )
-    helpers.create_text(
-        client,
-        "A same-day text memory",
-        year=2021,
-        month=5,
-        entry_date="2021-05-04",
-        tag="friends",
-    )
-    helpers.create_text(
-        client,
-        "A different-day text memory",
-        year=2021,
-        month=5,
-        entry_date="2021-05-05",
-        tag="friends",
-    )
-
-    response = client.get("/on-this-day?date=2026-05-04")
-
-    assert response.status_code == 200
-    assert b"On this day" in response.data
-    assert b"May 4 across your timeline." in response.data
-    assert b"Park picnic" in response.data
-    assert b"A same-day text memory" in response.data
-    assert b"A different-day text memory" not in response.data
 
 
 def test_timeline_import_assistant_reviews_detected_dates_before_saving(client, helpers):

@@ -159,6 +159,11 @@ def test_password_reset_token_changes_password_and_cannot_be_reused(app, client,
 def test_uploads_text_entries_and_pdf_exports(client, helpers):
     helpers.create_user(client, "owner")
 
+    month_page = client.get("/year/2020/5")
+    assert month_page.status_code == 200
+    assert b"data-upload-progress" in month_page.data
+    assert b"data-upload-progress-bar" in month_page.data
+
     photo_id = helpers.upload_photo(
         client,
         filename="public-photo.png",
@@ -593,6 +598,11 @@ def test_on_this_day_shows_matching_dated_memories(client, helpers):
 
 def test_timeline_import_assistant_reviews_detected_dates_before_saving(client, helpers):
     helpers.create_user(client, "owner")
+
+    import_page = client.get("/timeline/import")
+    assert import_page.status_code == 200
+    assert b"data-upload-progress" in import_page.data
+    assert b"data-upload-progress-bar" in import_page.data
 
     upload_response = client.post(
         "/timeline/import",

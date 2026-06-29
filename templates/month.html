@@ -119,7 +119,7 @@
 <section class="month-entry-actions" aria-label="Add timeline entries">
     <details class="upload-panel form-toggle-panel">
         <summary class="form-toggle-summary">Add picture(s)</summary>
-        <form method="post" enctype="multipart/form-data" class="upload-form">
+        <form method="post" enctype="multipart/form-data" class="upload-form" data-upload-progress>
             {{ csrf_field() }}
             <label class="file-field">
                 <span>Pictures</span>
@@ -141,6 +141,13 @@
             {{ location_fields() }}
             {{ tag_radio_group() }}
             <button class="button primary" type="submit">Upload</button>
+            <div class="upload-progress" data-upload-progress-panel hidden>
+                <div class="upload-progress-row">
+                    <span data-upload-progress-label>Uploading...</span>
+                    <span data-upload-progress-percent>0%</span>
+                </div>
+                <progress max="100" value="0" data-upload-progress-bar></progress>
+            </div>
         </form>
     </details>
 

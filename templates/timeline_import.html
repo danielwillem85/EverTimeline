@@ -11,13 +11,20 @@
 </section>
 
 <section class="upload-panel import-upload-panel">
-    <form method="post" enctype="multipart/form-data" class="import-upload-form">
+    <form method="post" enctype="multipart/form-data" class="import-upload-form" data-upload-progress>
         {{ csrf_field() }}
         <label class="file-field">
             <span>Photos</span>
             <input name="photo" type="file" accept="image/*" multiple required>
         </label>
         <button class="button primary" type="submit">Review detected dates</button>
+        <div class="upload-progress" data-upload-progress-panel hidden>
+            <div class="upload-progress-row">
+                <span data-upload-progress-label>Uploading...</span>
+                <span data-upload-progress-percent>0%</span>
+            </div>
+            <progress max="100" value="0" data-upload-progress-bar></progress>
+        </div>
     </form>
 </section>
 {% endblock %}

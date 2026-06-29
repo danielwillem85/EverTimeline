@@ -197,6 +197,86 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    document.querySelectorAll("form[data-upload-progress]").forEach((form) => {
+        const progressPanel = form.querySelector("[data-upload-progress-panel]");
+        const progressBar = form.querySelector("[data-upload-progress-bar]");
+        const progressPercent = form.querySelector("[data-upload-progress-percent]");
+        const progressLabel = form.querySelector("[data-upload-progress-label]");
+        const submitButton = form.querySelector("button[type='submit']");
+        const fileInput = form.querySelector("input[type='file']");
+
+        if (!progressPanel || !progressBar || !progressPercent || !window.FormData || !window.XMLHttpRequest) {
+            return;
+        }
+
+        const setUploadProgress = (percent, label = "Uploading...") => {
+            const normalizedPercent = Math.max(0, Math.min(100, Math.round(percent)));
+            progressPanel.hidden = false;
+            progressBar.value = normalizedPercent;
+            progressPercent.textContent = `${normalizedPercent}%`;
+            if (progressLabel) {
+                progressLabel.textContent = label;
+            }
+        };
+
+        form.addEventListener("submit", (event) => {
+            if (form.dataset.nativeSubmit === "true") {
+                delete form.dataset.nativeSubmit;
+                return;
+            }
+
+            event.preventDefault();
+            if (submitButton) {
+                submitButton.disabled = true;
+            }
+
+            const selectedFiles = fileInput && fileInput.files ? fileInput.files.length : 0;
+            const uploadLabel = selectedFiles > 1 ? `Uploading ${selectedFiles} photos...` : "Uploading photo...";
+            setUploadProgress(0, uploadLabel);
+
+            const request = new XMLHttpRequest();
+            request.open((form.method || "POST").toUpperCase(), form.action || window.location.href);
+            request.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+            if (csrfToken) {
+                request.setRequestHeader("X-CSRF-Token", csrfToken);
+            }
+
+            request.upload.addEventListener("progress", (progressEvent) => {
+                if (!progressEvent.lengthComputable) {
+                    return;
+                }
+                setUploadProgress((progressEvent.loaded / progressEvent.total) * 100, uploadLabel);
+            });
+
+            request.addEventListener("load", () => {
+                setUploadProgress(100, "Processing...");
+                const responseUrl = request.responseURL || window.location.href;
+                if (responseUrl) {
+                    window.history.replaceState({}, "", responseUrl);
+                }
+                document.open();
+                document.write(request.responseText);
+                document.close();
+            });
+
+            request.addEventListener("error", () => {
+                if (submitButton) {
+                    submitButton.disabled = false;
+                }
+                setUploadProgress(progressBar.value || 0, "Upload failed.");
+            });
+
+            request.addEventListener("abort", () => {
+                if (submitButton) {
+                    submitButton.disabled = false;
+                }
+                setUploadProgress(progressBar.value || 0, "Upload canceled.");
+            });
+
+            request.send(new FormData(form));
+        });
+    });
+
     const adminJobCards = Array.from(document.querySelectorAll("[data-admin-job]"));
     if (adminJobCards.length) {
         const terminalStatuses = new Set(["succeeded", "failed"]);

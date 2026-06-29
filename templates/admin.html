@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block title %}Admin - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
+        <h1>Admin</h1>
+    </div>
+</section>
+
+<section class="auth-panel admin-panel">
+    <h2>Image storage</h2>
+    {% set non_jpeg_count = image_summary["photo_non_jpeg"] + image_summary["import_non_jpeg"] %}
+    <div class="admin-stat-grid">
+        <article>
+            <strong>{{ image_summary["photo_total"] }}</strong>
+            <span>Photos</span>
+            <small>{{ image_summary["photo_non_jpeg"] }} not JPEG</small>
+        </article>
+        <article>
+            <strong>{{ image_summary["import_total"] }}</strong>
+            <span>Import items</span>
+            <small>{{ image_summary["import_non_jpeg"] }} not JPEG</small>
+        </article>
+        <article>
+            <strong>{{ image_summary["image_size_label"] }}</strong>
+            <span>Stored image data</span>
+            <small>Inside SQLite</small>
+        </article>
+        <article>
+            <strong>{{ image_summary["database_size_label"] }}</strong>
+            <span>Database file</span>
+            <small>{{ image_summary["reclaimable_size_label"] }} reclaimable</small>
+        </article>
+    </div>
+    <form
+        method="post"
+        action="{{ url_for('admin_convert_images_to_jpeg') }}"
+        data-confirm
+        data-confirm-title="Convert all stored images?"
+        data-confirm-message="This rewrites stored image bytes as compressed JPEG. Timeline entries remain in place."
+        data-confirm-action="Convert images"
+    >
+        {{ csrf_field() }}
+        <button class="button primary" type="submit" {% if not non_jpeg_count %}disabled{% endif %}>
+            Convert all images to JPEG
+        </button>
+    </form>
+    <form
+        method="post"
+        action="{{ url_for('admin_vacuum_database') }}"
+        data-confirm
+        data-confirm-title="Reclaim database space?"
+        data-confirm-message="This compacts the SQLite file after image rewrites. It does not lower photo quality."
+        data-confirm-action="Reclaim space"
+    >
+        {{ csrf_field() }}
+        <button class="button secondary" type="submit" {% if not image_summary["reclaimable_size"] %}disabled{% endif %}>
+            Reclaim database space
+        </button>
+    </form>
+    <form
+        method="post"
+        action="{{ url_for('admin_compact_images') }}"
+        data-confirm
+        data-confirm-title="Compact stored images?"
+        data-confirm-message="This recompresses existing JPEGs with a smaller 1200px max edge and lower quality, then compacts the database. This reduces disk usage but can reduce image detail."
+        data-confirm-action="Compact images"
+    >
+        {{ csrf_field() }}
+        <button class="button secondary" type="submit">Compact image storage</button>
+    </form>
+</section>
+{% endblock %}

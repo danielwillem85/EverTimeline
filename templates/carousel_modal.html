@@ -52,19 +52,21 @@
             <p class="empty-state carousel-empty" id="carousel-empty" hidden>No entries yet.</p>
         </div>
     </section>
-    <div class="carousel-image-viewer" id="carousel-image-viewer" hidden>
-        <div class="carousel-image-viewer-backdrop" data-close-carousel-image-viewer></div>
-        <section class="carousel-image-viewer-panel" role="dialog" aria-modal="true" aria-labelledby="carousel-image-viewer-title">
-            <header class="modal-header carousel-image-viewer-header">
-                <div>
-                    <h3 id="carousel-image-viewer-title">Picture</h3>
-                    <p id="carousel-image-viewer-meta" class="muted"></p>
-                </div>
-                <button class="icon-button" type="button" data-close-carousel-image-viewer aria-label="Close full-size picture">x</button>
-            </header>
-            <div class="carousel-image-viewer-body">
-                <img id="carousel-image-viewer-image" alt="">
+</div>
+
+<div class="modal" id="carousel-photo-modal" hidden>
+    <div class="modal-backdrop" data-close-carousel-photo-modal></div>
+    <section class="modal-panel photo-modal-panel carousel-photo-modal-panel" role="dialog" aria-modal="true" aria-labelledby="carousel-photo-modal-title">
+        <header class="modal-header">
+            <div>
+                <h2 id="carousel-photo-modal-title">Picture</h2>
+                <p id="carousel-photo-modal-date" class="muted"></p>
+                <p id="carousel-photo-modal-caption" class="photo-caption-view"></p>
             </div>
-        </section>
-    </div>
+            <button class="icon-button" type="button" data-close-carousel-photo-modal aria-label="Close popup">x</button>
+        </header>
+        <div class="carousel-photo-modal-body">
+            <img id="carousel-photo-modal-image" class="modal-image" alt="Selected carousel picture">
+        </div>
+    </section>
 </div>

@@ -2,6 +2,8 @@ import io
 import json
 import zipfile
 
+from PIL import Image
+
 
 def test_auth_registration_birthday_login_and_logout(client, helpers):
     response = client.get("/timeline")
@@ -140,6 +142,23 @@ def test_uploads_text_entries_and_pdf_exports(client, helpers):
     stored_photo = helpers.row("SELECT mime_type, image_data FROM photos WHERE id = ?", (photo_id,))
     assert stored_photo["mime_type"] == "image/jpeg"
     assert stored_photo["image_data"].startswith(b"\xff\xd8")
+    oversized_png = io.BytesIO()
+    Image.new("RGB", (2200, 1200), color=(31, 126, 116)).save(oversized_png, format="PNG")
+    oversized_response = client.post(
+        "/year/2020/5",
+        data={
+            **helpers.csrf_form_data(client, "/year/2020/5"),
+            "photo": (io.BytesIO(oversized_png.getvalue()), "oversized.png", "image/png"),
+            "photo_date": "2020-05-06",
+            "tags": "private",
+        },
+        content_type="multipart/form-data",
+    )
+    assert oversized_response.status_code == 302
+    oversized_photo = helpers.row("SELECT image_data FROM photos WHERE original_filename = ?", ("oversized.png",))
+    with Image.open(io.BytesIO(oversized_photo["image_data"])) as stored_image:
+        assert stored_image.format == "JPEG"
+        assert max(stored_image.size) == 1600
 
     text_response = client.get(f"/api/text-entry/{text_id}")
     assert text_response.status_code == 200
@@ -177,6 +196,62 @@ def test_uploads_text_entries_and_pdf_exports(client, helpers):
     assert month_pdf.status_code == 200
     assert month_pdf.mimetype == "application/pdf"
     assert month_pdf.data.startswith(b"%PDF")
+
+
+def test_admin_page_is_daniel_only_and_converts_existing_images(app, client, helpers):
+    helpers.create_user(client, "alice")
+
+    response = client.get("/admin")
+    assert response.status_code == 404
+
+    assert client.post(
+        "/logout",
+        data=helpers.csrf_form_data(client, "/timeline"),
+    ).status_code == 302
+
+    daniel_id = helpers.create_user(client, "Daniel")
+    admin_page = client.get("/admin")
+    assert admin_page.status_code == 200
+    assert b"Convert all images to JPEG" in admin_page.data
+
+    legacy_png = io.BytesIO()
+    Image.new("RGB", (1800, 900), color=(31, 126, 116)).save(legacy_png, format="PNG")
+    with app.app_context():
+        db = helpers.app_module.get_db()
+        db.execute(
+            """
+            INSERT INTO photos (
+                user_id, year, month, original_filename, mime_type, image_data, image_hash
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                daniel_id,
+                2020,
+                5,
+                "legacy.png",
+                "image/png",
+                legacy_png.getvalue(),
+                "legacy-hash",
+            ),
+        )
+        db.commit()
+
+    convert_response = client.post(
+        "/admin/images/convert-jpeg",
+        data=helpers.csrf_form_data(client, "/admin"),
+        follow_redirects=True,
+    )
+    assert convert_response.status_code == 200
+    assert b"Converted" in convert_response.data
+
+    converted = helpers.row("SELECT mime_type, image_data, image_hash FROM photos WHERE original_filename = ?", ("legacy.png",))
+    assert converted["mime_type"] == "image/jpeg"
+    assert converted["image_data"].startswith(b"\xff\xd8")
+    assert converted["image_hash"] != "legacy-hash"
+    with Image.open(io.BytesIO(converted["image_data"])) as stored_image:
+        assert stored_image.format == "JPEG"
+        assert max(stored_image.size) == 1600
 
 
 def test_manual_people_tagging_for_items_search_and_updates(app, client, helpers):

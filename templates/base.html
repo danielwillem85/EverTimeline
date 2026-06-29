@@ -87,6 +87,13 @@
                             href="{{ url_for('profile') }}"
                             {% if request.endpoint == 'profile' %}aria-current="page"{% endif %}
                         >Profile</a>
+                        {% if is_admin_user() %}
+                            <a
+                                class="account-menu-link{% if request.endpoint == 'admin' %} is-active{% endif %}"
+                                href="{{ url_for('admin') }}"
+                                {% if request.endpoint == 'admin' %}aria-current="page"{% endif %}
+                            >Admin</a>
+                        {% endif %}
                         <form action="{{ url_for('logout') }}" method="post">
                             {{ csrf_field() }}
                             <button class="button secondary small" type="submit">Log out</button>

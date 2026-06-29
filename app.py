@@ -3402,6 +3402,8 @@ def no_date_photo_suggestion(photo):
 def splash_photo_payload(photo, *, include_suggestion=False):
     payload = {
         "id": photo["id"],
+        "year": photo["year"],
+        "month": photo["month"],
         "title": photo_display_title(photo),
         "caption": photo["caption"] or "",
         "display_date": photo["photo_date"] or "",
@@ -9092,6 +9094,67 @@ def accept_no_date_photo_suggestions(year):
 
     db.commit()
     return jsonify({"moved_count": moved_count, "skipped_count": skipped_count})
+
+
+@app.route("/year/<int:year>/no-date/update-date", methods=("POST",))
+@birthday_required
+def update_no_date_photo_date(year):
+    validate_year_month(year, 1)
+    payload = request.get_json(silent=True) or {}
+
+    try:
+        photo_id = int(payload.get("photo_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Choose a valid photo."}), 400
+
+    exact_date = (payload.get("photo_date") or "").strip()
+    if exact_date:
+        try:
+            parsed_date = normalize_import_photo_date(exact_date)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        target_year = parsed_date.year
+        target_month = parsed_date.month
+        target_date = parsed_date.isoformat()
+    else:
+        try:
+            target_year = int(payload.get("year"))
+            target_month = int(payload.get("month"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Choose a valid year and month."}), 400
+        validate_year_month(target_year, target_month)
+        target_date = date(target_year, target_month, 1).isoformat()
+
+    db = get_db()
+    row = db.execute(
+        """
+        SELECT id
+        FROM photos
+        WHERE user_id = ?
+          AND year = ?
+          AND photo_date IS NULL
+          AND id = ?
+        """,
+        (g.user["id"], year, photo_id),
+    ).fetchone()
+    if row is None:
+        return jsonify({"error": "Selected undated photo was not found."}), 404
+
+    db.execute(
+        """
+        UPDATE photos
+        SET year = ?, month = ?, photo_date = ?
+        WHERE user_id = ? AND id = ?
+        """,
+        (target_year, target_month, target_date, g.user["id"], photo_id),
+    )
+    db.commit()
+    return jsonify(
+        {
+            "moved_count": 1,
+            "target_url": url_for("month_view", year=target_year, month=target_month),
+        }
+    )
 
 
 @app.route("/year/<int:year>/export.pdf")

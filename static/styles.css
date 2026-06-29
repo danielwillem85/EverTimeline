@@ -2156,6 +2156,39 @@ details.privacy-toggle-panel {
     cursor: pointer;
 }
 
+.splash-thumb-wrap {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.splash-thumb-wrap .splash-thumb {
+    width: 100%;
+    height: 100%;
+}
+
+.no-date-photo-edit-button {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 3;
+    min-height: 28px;
+    border: 1px solid rgba(255, 255, 255, 0.42);
+    border-radius: 999px;
+    padding: 0 9px;
+    background: rgba(16, 20, 18, 0.76);
+    color: #fff;
+    cursor: pointer;
+    font-size: 0.72rem;
+    font-weight: 900;
+}
+
+.no-date-photo-edit-button:hover,
+.no-date-photo-edit-button:focus-visible {
+    background: var(--primary);
+}
+
 .splash-suggestion-chip {
     position: absolute;
     right: 6px;
@@ -2172,6 +2205,20 @@ details.privacy-toggle-panel {
     line-height: 1;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.no-date-edit-panel {
+    max-width: 460px;
+}
+
+.no-date-edit-form {
+    display: grid;
+    gap: 12px;
+}
+
+.no-date-edit-exact-date {
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
 }
 
 .reaction-bar {

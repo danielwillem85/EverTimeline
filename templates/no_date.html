@@ -26,6 +26,46 @@
     {% include "_privacy_preview.html" %}
 {% endif %}
 
+{% if not is_connection_view and not privacy_preview %}
+<section class="no-date-organizer">
+    <form class="no-date-splash-toolbar" data-no-date-assign-form>
+        <label>
+            <span>Month</span>
+            <select name="month" required>
+                {% for month_number, month_name in months %}
+                    <option value="{{ month_number }}">{{ month_name }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>
+            <span>Year</span>
+            <select name="year" required>
+                {% for option_year in years %}
+                    <option value="{{ option_year }}" {% if option_year == year %}selected{% endif %}>{{ option_year }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <button class="button primary" type="submit" data-no-date-assign-button disabled>Save</button>
+        <span class="no-date-selected-count" data-no-date-selected-count>0 selected</span>
+    </form>
+
+    <section
+        class="splash-page no-date-splash-page"
+        data-splash
+        data-splash-selectable
+        data-splash-url="{{ url_for('year_no_date_photos', year=year) }}"
+        data-splash-assign-url="{{ url_for('assign_no_date_photos', year=year) }}"
+        data-splash-seed="{{ splash_seed }}"
+        aria-label="Undated photo organizer"
+    >
+        <div class="splash-grid" data-splash-grid aria-live="polite"></div>
+        <p class="splash-status" data-splash-status>Loading photos...</p>
+        <button class="splash-page-button splash-page-prev" type="button" data-splash-prev aria-label="Previous thumbnails">&lt;</button>
+        <button class="splash-page-button splash-page-next" type="button" data-splash-next aria-label="Next thumbnails">&gt;</button>
+        <div class="splash-page-count" data-splash-count></div>
+    </section>
+</section>
+{% else %}
 <section class="photo-section">
     <div class="photo-grid">
         {% for item in items %}
@@ -70,6 +110,7 @@
         {% endfor %}
     </div>
 </section>
+{% endif %}
 
 <div class="modal" id="readonly-text-modal" hidden>
     <div class="modal-backdrop" data-close-readonly-text-modal></div>

@@ -765,11 +765,17 @@ document.addEventListener("DOMContentLoaded", () => {
         const splashPhotoDate = document.getElementById("splash-photo-modal-date");
         const splashSeed = splashPage.dataset.splashSeed || String(Date.now());
         const splashUrl = splashPage.dataset.splashUrl || "/api/splash-photos";
+        const splashSelectable = splashPage.hasAttribute("data-splash-selectable");
+        const splashAssignUrl = splashPage.dataset.splashAssignUrl || "";
+        const noDateAssignForm = document.querySelector("[data-no-date-assign-form]");
+        const noDateAssignButton = document.querySelector("[data-no-date-assign-button]");
+        const noDateSelectedCount = document.querySelector("[data-no-date-selected-count]");
         const minTileSize = 82;
         let splashPageIndex = 0;
         let splashPageSize = 0;
         let splashTotalPages = 0;
         let splashResizeTimer = null;
+        const selectedSplashPhotoIds = new Set();
 
         const setSplashStatus = (message) => {
             if (!splashStatus) {
@@ -791,6 +797,25 @@ document.addEventListener("DOMContentLoaded", () => {
                 splashCount.hidden = splashTotalPages <= 0;
                 splashCount.textContent = splashTotalPages > 0 ? `${splashPageIndex + 1} of ${splashTotalPages}` : "";
             }
+        };
+
+        const updateSplashSelectionState = () => {
+            if (!splashSelectable) {
+                return;
+            }
+            const selectedCount = selectedSplashPhotoIds.size;
+            if (noDateSelectedCount) {
+                noDateSelectedCount.textContent = `${selectedCount} selected`;
+            }
+            if (noDateAssignButton) {
+                noDateAssignButton.disabled = selectedCount === 0;
+            }
+            splashGrid.querySelectorAll(".splash-thumb").forEach((button) => {
+                const photoId = Number(button.dataset.photoId);
+                const selected = selectedSplashPhotoIds.has(photoId);
+                button.classList.toggle("is-selected", selected);
+                button.setAttribute("aria-pressed", selected ? "true" : "false");
+            });
         };
 
         const splashGridSize = () => {
@@ -836,8 +861,12 @@ document.addEventListener("DOMContentLoaded", () => {
                 const button = document.createElement("button");
                 button.className = "splash-thumb";
                 button.type = "button";
+                button.dataset.photoId = String(photo.id);
                 button.title = photo.display_date ? `${photo.title} - ${photo.display_date}` : photo.title;
-                button.setAttribute("aria-label", `Open ${photo.title || "photo"}`);
+                button.setAttribute("aria-label", splashSelectable ? `Select ${photo.title || "photo"}` : `Open ${photo.title || "photo"}`);
+                if (splashSelectable) {
+                    button.setAttribute("aria-pressed", selectedSplashPhotoIds.has(Number(photo.id)) ? "true" : "false");
+                }
 
                 const image = document.createElement("img");
                 image.src = photo.thumbnail_url;
@@ -846,9 +875,22 @@ document.addEventListener("DOMContentLoaded", () => {
                 image.decoding = "async";
 
                 button.appendChild(image);
-                button.addEventListener("click", () => openSplashPhotoModal(photo));
+                button.addEventListener("click", () => {
+                    if (splashSelectable) {
+                        const photoId = Number(photo.id);
+                        if (selectedSplashPhotoIds.has(photoId)) {
+                            selectedSplashPhotoIds.delete(photoId);
+                        } else {
+                            selectedSplashPhotoIds.add(photoId);
+                        }
+                        updateSplashSelectionState();
+                        return;
+                    }
+                    openSplashPhotoModal(photo);
+                });
                 splashGrid.appendChild(button);
             });
+            updateSplashSelectionState();
         };
 
         const loadSplashPage = async (page) => {
@@ -868,6 +910,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 const payload = await response.json();
                 splashPageIndex = payload.page || 0;
                 splashTotalPages = payload.total_pages || 0;
+                if (splashSelectable) {
+                    selectedSplashPhotoIds.forEach((photoId) => {
+                        const stillExists = (payload.photos || []).some((photo) => Number(photo.id) === photoId);
+                        if (!stillExists && payload.total === 0) {
+                            selectedSplashPhotoIds.delete(photoId);
+                        }
+                    });
+                }
                 renderSplashPhotos(payload.photos || []);
                 setSplashStatus(payload.total ? "" : "No photos yet.");
                 updateSplashControls();
@@ -893,6 +943,41 @@ document.addEventListener("DOMContentLoaded", () => {
             splashNextButton.addEventListener("click", () => moveSplashPage(1));
         }
 
+        if (noDateAssignForm && splashSelectable) {
+            noDateAssignForm.addEventListener("submit", async (event) => {
+                event.preventDefault();
+                if (!selectedSplashPhotoIds.size || !splashAssignUrl) {
+                    return;
+                }
+                const formData = new FormData(noDateAssignForm);
+                if (noDateAssignButton) {
+                    noDateAssignButton.disabled = true;
+                }
+                setSplashStatus("Saving selected photos...");
+                try {
+                    const response = await csrfFetch(splashAssignUrl, {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({
+                            photo_ids: Array.from(selectedSplashPhotoIds),
+                            month: formData.get("month"),
+                            year: formData.get("year"),
+                        }),
+                    });
+                    const payload = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        throw new Error(payload.error || "Selected photos could not be saved.");
+                    }
+                    selectedSplashPhotoIds.clear();
+                    setSplashStatus(`Moved ${payload.moved_count || 0} photos.`);
+                    await loadSplashPage(splashPageIndex);
+                } catch (error) {
+                    setSplashStatus(error.message || "Selected photos could not be saved.");
+                    updateSplashSelectionState();
+                }
+            });
+        }
+
         if (splashPhotoModal) {
             splashPhotoModal.querySelectorAll("[data-close-splash-photo-modal]").forEach((button) => {
                 button.addEventListener("click", closeSplashPhotoModal);
@@ -900,6 +985,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         document.addEventListener("keydown", (event) => {
+            if (splashSelectable) {
+                return;
+            }
             if (splashPhotoModal && !splashPhotoModal.hidden && event.key === "Escape") {
                 closeSplashPhotoModal();
                 return;

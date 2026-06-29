@@ -348,6 +348,7 @@ def test_bulk_upload_can_leave_photos_without_dates(client, helpers):
     assert no_date_page.status_code == 200
     assert b"data-splash-selectable" in no_date_page.data
     assert b"/year/2022/no-date/photos" in no_date_page.data
+    assert b"/year/2022/no-date/accept-suggestions" in no_date_page.data
 
     no_date_photos = client.get("/year/2022/no-date/photos?seed=test-seed&page=0&page_size=10")
     assert no_date_photos.status_code == 200
@@ -357,6 +358,7 @@ def test_bulk_upload_can_leave_photos_without_dates(client, helpers):
         "loose-memory-a.png",
         "loose-memory-b.png",
     }
+    assert {photo["suggestion"]["label"] for photo in payload["photos"]} == {"March 2022"}
 
     month_page = client.get("/year/2022/3")
     assert month_page.status_code == 200
@@ -390,6 +392,78 @@ def test_bulk_upload_can_leave_photos_without_dates(client, helpers):
     assert target_month_page.status_code == 200
     assert b"loose-memory-a.png" in target_month_page.data
     assert b"loose-memory-b.png" in target_month_page.data
+
+
+def test_no_date_photo_suggestions_can_be_accepted(client, helpers):
+    helpers.create_user(client, "owner")
+
+    uploads = [
+        ("PXL_20210710_153012.png", (144, 61, 55), "/year/2022/3"),
+        ("loose-scan.png", (31, 126, 77), "/year/2022/4"),
+    ]
+    for filename, color, path in uploads:
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (12, 12), color=color).save(image_buffer, format="PNG")
+        image_buffer.seek(0)
+        response = client.post(
+            path,
+            data={
+                **helpers.csrf_form_data(client, path),
+                "photo": (image_buffer, filename, "image/png"),
+                "tags": "private",
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+    no_date_photos = client.get("/year/2022/no-date/photos?seed=test-seed&page=0&page_size=10")
+    assert no_date_photos.status_code == 200
+    photos = {photo["title"]: photo for photo in no_date_photos.get_json()["photos"]}
+    assert photos["PXL_20210710_153012.png"]["suggestion"] == {
+        "year": 2021,
+        "month": 7,
+        "label": "July 2021",
+        "source": "filename",
+        "source_label": "Filename",
+    }
+    assert photos["loose-scan.png"]["suggestion"] == {
+        "year": 2022,
+        "month": 4,
+        "label": "April 2022",
+        "source": "upload_bucket",
+        "source_label": "Upload month",
+    }
+
+    response = client.post(
+        "/year/2022/no-date/accept-suggestions",
+        json={"photo_ids": [photo["id"] for photo in photos.values()]},
+        headers=helpers.csrf_headers(client, "/year/2022/no-date"),
+    )
+    assert response.status_code == 200
+    assert response.get_json() == {"moved_count": 2, "skipped_count": 0}
+
+    moved_rows = helpers.rows(
+        """
+        SELECT original_filename, year, month, photo_date
+        FROM photos
+        ORDER BY original_filename
+        """
+    )
+    assert [dict(row) for row in moved_rows] == [
+        {
+            "original_filename": "PXL_20210710_153012.png",
+            "year": 2021,
+            "month": 7,
+            "photo_date": "2021-07-01",
+        },
+        {
+            "original_filename": "loose-scan.png",
+            "year": 2022,
+            "month": 4,
+            "photo_date": "2022-04-01",
+        },
+    ]
+    assert client.get("/year/2022/no-date/photos?seed=test-seed&page=0&page_size=10").get_json()["total"] == 0
 
 
 def test_splash_page_api_and_thumbnails_are_owned(app, client, helpers):

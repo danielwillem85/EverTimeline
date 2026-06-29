@@ -44,6 +44,14 @@
     </form>
 </section>
 
+<section class="connection-section chapter-draft-entry">
+    <div>
+        <h2>Draft from timeline</h2>
+        <p class="muted">Suggest a chapter from a date range, person, place, keyword, or visibility view.</p>
+    </div>
+    <a class="button secondary" href="{{ url_for('chapter_draft') }}">Draft chapter</a>
+</section>
+
 <section class="connection-section">
     <h2>Shared with you</h2>
     {% if shared_chapters %}

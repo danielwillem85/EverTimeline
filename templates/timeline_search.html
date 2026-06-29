@@ -78,6 +78,9 @@
         <div class="search-actions">
             <button class="button primary" type="submit">Search</button>
             <a class="button secondary" href="{{ url_for('timeline_search') }}">Reset</a>
+            {% if has_query %}
+                <a class="button secondary" href="{{ url_for('timeline_stories', source_mode='search', **filters) }}">Create story</a>
+            {% endif %}
         </div>
     </form>
     <div class="search-quick-links" aria-label="Quick searches">

@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block title %}{{ story['title'] }} - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline_stories') }}">Stories</a>
+        <h1>{{ story['title'] }}</h1>
+    </div>
+    <div class="page-actions">
+        <form
+            method="post"
+            action="{{ url_for('delete_timeline_story', story_id=story['id']) }}"
+            data-confirm
+            data-confirm-title="Delete story?"
+            data-confirm-message="This removes the saved story permanently."
+            data-confirm-action="Delete story"
+        >
+            {{ csrf_field() }}
+            <button class="button secondary" type="submit">Delete</button>
+        </form>
+    </div>
+</section>
+
+<section class="search-panel">
+    {% if story['subtitle'] %}
+        <p><strong>{{ story['subtitle'] }}</strong></p>
+    {% endif %}
+    <p>
+        <strong>Source:</strong> {{ source_label }}
+    </p>
+    <p>
+        <strong>Created:</strong> {{ story['created_at'][:10] }}
+    </p>
+</section>
+
+<section class="search-results">
+    <div class="section-title-row">
+        <h2>Story timeline</h2>
+        {% if has_filters %}
+            <span class="status-badge">{{ items|length }}</span>
+        {% endif %}
+    </div>
+    {% if has_filters %}
+        {% if items %}
+            <div class="timeline-search-list">
+                {% for item in items %}
+                    <article class="timeline-search-card">
+                        <div class="timeline-search-content">
+                            {% if item.get('image_url') %}
+                                <img class="timeline-search-thumb" src="{{ item['image_url'] }}" alt="">
+                            {% endif %}
+                            <div class="timeline-search-main">
+                                <span class="status-badge">
+                                    {% if item.get('kind_key') == 'photo' %}Photo{% elif item.get('kind_key') == 'text' %}Text{% else %}{{ item['kind'] }}{% endif %}
+                                </span>
+                                <h2>{{ item['title'] }}</h2>
+                                <span>{{ item.get('context') or item.get('date_label') }}</span>
+                                <p>{{ item.get('preview') }}</p>
+                                {% if item.get('location_name') %}
+                                    <p><strong>Location:</strong> {{ item['location_name'] }}</p>
+                                {% endif %}
+                                {% if item.get('meta') %}
+                                    <div class="timeline-search-meta">
+                                        {% for piece in item['meta'] %}
+                                            <span>{{ piece }}</span>
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        <a class="button primary small" href="{{ item['url'] }}">Open</a>
+                    </article>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p class="empty-state">No memories matched these filters.</p>
+        {% endif %}
+    {% else %}
+        <p class="empty-state">This story has no filters and no timeline items.</p>
+    {% endif %}
+</section>
+{% endblock %}

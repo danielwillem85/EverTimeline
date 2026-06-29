@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path, PurePosixPath
+import random
 import re
 import secrets
 import sqlite3
@@ -458,6 +459,18 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS timeline_stories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                subtitle TEXT NOT NULL DEFAULT '',
+                source_mode TEXT NOT NULL DEFAULT 'search' CHECK (source_mode IN ('search', 'collections')),
+                filter_payload TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS photo_import_batches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
@@ -634,6 +647,12 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS saved_timeline_views_user_updated
             ON saved_timeline_views (user_id, updated_at, created_at)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS timeline_stories_user_updated
+            ON timeline_stories (user_id, updated_at, created_at)
             """
         )
         db.execute(
@@ -2706,6 +2725,58 @@ def random_public_photos(db, limit=48):
     return attach_reactions(db, photos)
 
 
+def build_splash_photo_page(db):
+    page_size = request.args.get("page_size", default=80, type=int)
+    if page_size is None:
+        page_size = 80
+    page_size = max(1, min(page_size, 240))
+
+    page = request.args.get("page", default=0, type=int)
+    if page is None:
+        page = 0
+
+    seed = (request.args.get("seed") or "").strip()[:80] or secrets.token_hex(8)
+    rows = db.execute(
+        """
+        SELECT id, original_filename, title, caption, photo_date, created_at
+        FROM photos
+        WHERE user_id = ?
+        ORDER BY id ASC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    photos = [dict(row) for row in rows]
+    random.Random(seed).shuffle(photos)
+
+    total = len(photos)
+    total_pages = (total + page_size - 1) // page_size if total else 0
+    if total_pages:
+        page = page % total_pages
+    else:
+        page = 0
+
+    start = page * page_size
+    page_photos = photos[start:start + page_size]
+    return {
+        "seed": seed,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": total_pages,
+        "photos": [
+            {
+                "id": photo["id"],
+                "title": photo_display_title(photo),
+                "caption": photo["caption"] or "",
+                "display_date": photo["photo_date"] or "",
+                "thumbnail_url": url_for("splash_photo_thumbnail", photo_id=photo["id"]),
+                "full_url": url_for("photo_image", photo_id=photo["id"]),
+            }
+            for photo in page_photos
+        ],
+    }
+
+
 def build_on_this_day_items(db, owner_id, month, day, image_url_builder):
     date_key = f"{month:02d}-{day:02d}"
     photo_rows = db.execute(
@@ -2954,6 +3025,223 @@ def get_chapters_with_counts(db):
         )
         chapters.append(chapter)
     return chapters
+
+
+def parse_optional_year(value):
+    try:
+        year = int((value or "").strip())
+    except (TypeError, ValueError):
+        return None
+    if year in user_years():
+        return year
+    return None
+
+
+def chapter_draft_filters(args=None):
+    args = args or request.args
+    year_from = parse_optional_year(args.get("year_from"))
+    year_to = parse_optional_year(args.get("year_to"))
+    if year_from is not None and year_to is not None and year_from > year_to:
+        year_from, year_to = year_to, year_from
+    visibility = normalized_search_filter(args.get("visibility"), ("all", *TAG_CHOICES))
+    return {
+        "q": (args.get("q") or "").strip(),
+        "person": (args.get("person") or "").strip(),
+        "place": (args.get("place") or "").strip(),
+        "year_from": year_from,
+        "year_to": year_to,
+        "visibility": visibility,
+    }
+
+
+def chapter_draft_has_filters(filters):
+    return any(
+        (
+            filters["q"],
+            filters["person"],
+            filters["place"],
+            filters["year_from"] is not None,
+            filters["year_to"] is not None,
+            filters["visibility"] != "all",
+        )
+    )
+
+
+def text_matches_query(fields, query):
+    if not query:
+        return True
+    needle = query.lower()
+    return any(needle in str(field or "").lower() for field in fields)
+
+
+def chapter_draft_item_matches(filters, item, tags, people):
+    if filters["visibility"] != "all" and tags_to_text(tags) != filters["visibility"]:
+        return False
+    if filters["year_from"] is not None and item["year"] < filters["year_from"]:
+        return False
+    if filters["year_to"] is not None and item["year"] > filters["year_to"]:
+        return False
+    if filters["person"] and not text_matches_query(people, filters["person"]):
+        return False
+    if filters["place"] and not text_matches_query((item["location_name"],), filters["place"]):
+        return False
+    return True
+
+
+def chapter_draft_item_payload(item, tags, people):
+    date_label = format_timeline_date_label(item["year"], item["month"], item["display_date"])
+    preview = item["caption"] if item["kind"] == "photo" else item["body"]
+    return {
+        "kind": item["kind"],
+        "id": item["id"],
+        "ref": f"{item['kind']}:{item['id']}",
+        "year": item["year"],
+        "month": item["month"],
+        "date_label": date_label,
+        "source_label": item_source_label(item["year"], item["month"]),
+        "title": item["title"],
+        "preview": short_preview(preview or "", 150),
+        "location_name": item["location_name"] or "",
+        "people_text": people_to_text(people),
+        "privacy_label": privacy_label_for_tags(tags),
+        "sort_key": timeline_item_sort_key(item),
+    }
+
+
+def chapter_draft_title(filters, items):
+    if filters["person"]:
+        return f"{filters['person']} Memories"
+    if filters["place"]:
+        return f"{filters['place']} Memories"
+    if filters["q"]:
+        return f"{filters['q']} Story"
+    years = sorted({item["year"] for item in items})
+    if len(years) == 1:
+        return f"{years[0]} Memories"
+    if years:
+        return f"{years[0]}-{years[-1]} Memories"
+    return "New Chapter Draft"
+
+
+def chapter_draft_description(filters, items):
+    labels = []
+    if filters["person"]:
+        labels.append(f"featuring {filters['person']}")
+    if filters["place"]:
+        labels.append(f"around {filters['place']}")
+    if filters["q"]:
+        labels.append(f"matching '{filters['q']}'")
+    years = sorted({item["year"] for item in items})
+    if years:
+        year_label = str(years[0]) if len(years) == 1 else f"{years[0]}-{years[-1]}"
+        labels.append(f"from {year_label}")
+    detail = ", ".join(labels)
+    if detail:
+        return f"Suggested from {len(items)} timeline memories {detail}."
+    return f"Suggested from {len(items)} recent timeline memories."
+
+
+def build_chapter_draft(db, filters, limit=24):
+    photo_rows = db.execute(
+        """
+        SELECT id, year, month, original_filename, title, caption, photo_date AS display_date,
+               location_name, latitude, longitude, created_at
+        FROM photos
+        WHERE user_id = ?
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    text_rows = db.execute(
+        """
+        SELECT id, year, month, body, entry_date AS display_date,
+               location_name, latitude, longitude, created_at
+        FROM text_entries
+        WHERE user_id = ?
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    photo_tags = load_tags_for_items(db, "photo", [row["id"] for row in photo_rows])
+    text_tags = load_tags_for_items(db, "text", [row["id"] for row in text_rows])
+    photo_people = load_people_for_items(db, "photo", [row["id"] for row in photo_rows])
+    text_people = load_people_for_items(db, "text", [row["id"] for row in text_rows])
+    items = []
+
+    for row in photo_rows:
+        tags = photo_tags.get(row["id"], [DEFAULT_TAG])
+        people = photo_people.get(row["id"], [])
+        item = {
+            "kind": "photo",
+            "id": row["id"],
+            "year": row["year"],
+            "month": row["month"],
+            "display_date": row["display_date"],
+            "title": photo_display_title(row),
+            "caption": row["caption"] or "",
+            "location_name": row["location_name"] or "",
+        }
+        if not chapter_draft_item_matches(filters, item, tags, people):
+            continue
+        if not text_matches_query(
+            (row["original_filename"], row["title"], row["caption"], row["display_date"], item["location_name"], *people),
+            filters["q"],
+        ):
+            continue
+        items.append(chapter_draft_item_payload(item, tags, people))
+
+    for row in text_rows:
+        tags = text_tags.get(row["id"], [DEFAULT_TAG])
+        people = text_people.get(row["id"], [])
+        item = {
+            "kind": "text",
+            "id": row["id"],
+            "year": row["year"],
+            "month": row["month"],
+            "display_date": row["display_date"],
+            "title": "Text entry",
+            "body": row["body"],
+            "location_name": row["location_name"] or "",
+        }
+        if not chapter_draft_item_matches(filters, item, tags, people):
+            continue
+        if not text_matches_query(
+            (row["body"], row["display_date"], item["location_name"], *people),
+            filters["q"],
+        ):
+            continue
+        items.append(chapter_draft_item_payload(item, tags, people))
+
+    items.sort(key=lambda item: item["sort_key"])
+    if not chapter_draft_has_filters(filters):
+        items = list(reversed(items))[:limit]
+        items.reverse()
+    else:
+        items = items[:limit]
+    for item in items:
+        item.pop("sort_key", None)
+    return {
+        "title": chapter_draft_title(filters, items),
+        "description": chapter_draft_description(filters, items),
+        "items": items,
+    }
+
+
+def parse_chapter_draft_refs(values):
+    refs = []
+    seen = set()
+    for value in values:
+        try:
+            kind, raw_id = value.split(":", 1)
+            item_id = int(raw_id)
+        except (AttributeError, ValueError):
+            continue
+        if kind not in ("photo", "text") or item_id <= 0:
+            continue
+        key = (kind, item_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        refs.append(key)
+    return refs
 
 
 def accepted_connection_between(db, user_id, other_user_id):
@@ -4291,7 +4579,7 @@ def timeline_search_filters(args=None):
     if year_from is not None and year_to is not None and year_from > year_to:
         year_from, year_to = year_to, year_from
     return {
-        "query": (args.get("q") or "").strip(),
+        "query": (args.get("q") or args.get("query") or "").strip(),
         "kind": normalized_search_filter(args.get("kind"), TIMELINE_SEARCH_KIND_CHOICES),
         "visibility": normalized_search_filter(args.get("visibility"), ("all", *TAG_CHOICES)),
         "year_from": year_from,
@@ -4451,7 +4739,14 @@ def timeline_search_parent_filters(filters):
     return parent_filters
 
 
-def search_timeline_content(db, filters):
+def search_timeline_content(
+    db,
+    filters,
+    *,
+    include_messages=True,
+    include_chapters=True,
+    item_limit=80,
+):
     if isinstance(filters, str):
         filters = timeline_search_filters({"q": filters})
     normalized_query = filters["query"]
@@ -4474,9 +4769,9 @@ def search_timeline_content(db, filters):
         FROM photos
         WHERE user_id = ?
         ORDER BY COALESCE(photo_date, created_at) DESC, id DESC
-        LIMIT 200
+        LIMIT ?
         """,
-        (g.user["id"],),
+        (g.user["id"], item_limit),
     ).fetchall()
     photo_ids = [row["id"] for row in photo_rows]
     photo_tags = load_tags_for_items(db, "photo", photo_ids)
@@ -4532,9 +4827,9 @@ def search_timeline_content(db, filters):
         FROM text_entries
         WHERE user_id = ?
         ORDER BY COALESCE(entry_date, created_at) DESC, id DESC
-        LIMIT 200
+        LIMIT ?
         """,
-        (g.user["id"],),
+        (g.user["id"], item_limit),
     ).fetchall()
     text_ids = [row["id"] for row in text_rows]
     text_tags = load_tags_for_items(db, "text", text_ids)
@@ -4581,7 +4876,9 @@ def search_timeline_content(db, filters):
             },
         )
 
-    include_message_results = filters["kind"] == "message" or (filters["kind"] == "all" and normalized_query)
+    include_message_results = include_messages and (
+        filters["kind"] == "message" or (filters["kind"] == "all" and normalized_query)
+    )
     if include_message_results and filters["messages"] != "without":
         photo_message_rows = db.execute(
             """
@@ -4697,51 +4994,110 @@ def search_timeline_content(db, filters):
                 },
             )
 
-    chapter_rows = db.execute(
-        """
-        SELECT
-            c.id,
-            c.title,
-            c.description,
-            c.visibility,
-            c.created_at,
-            COUNT(ci.id) AS item_count
-        FROM chapters c
-        LEFT JOIN chapter_items ci ON ci.chapter_id = c.id
-        WHERE c.user_id = ?
-        GROUP BY c.id
-        ORDER BY c.created_at DESC, c.id DESC
-        LIMIT 40
-        """,
-        (g.user["id"],),
-    ).fetchall()
-    for row in chapter_rows:
-        if filters["kind"] not in ("all", "chapter"):
-            continue
-        if timeline_search_chapter_filters_apply(filters):
-            continue
-        if filters["visibility"] != "all" and row["visibility"] != filters["visibility"]:
-            continue
-        if not timeline_search_query_matches((row["title"], row["description"]), normalized_query):
-            continue
-        item_word = "item" if row["item_count"] == 1 else "items"
-        add_result(
-            ("chapter", row["id"]),
-            {
-                "kind": "Chapter",
-                "kind_key": "chapter",
-                "title": row["title"],
-                "context": f"{row['item_count']} {item_word}",
-                "preview": short_preview(row["description"] or "Chapter title matched.", 180),
-                "meta": [f"Visible: {PRIVACY_AUDIENCE_LABELS[row['visibility']]}"],
-                "url": url_for("chapter_detail", chapter_id=row["id"]),
-            },
-        )
+    if include_chapters:
+        chapter_rows = db.execute(
+            """
+            SELECT
+                c.id,
+                c.title,
+                c.description,
+                c.visibility,
+                c.created_at,
+                COUNT(ci.id) AS item_count
+            FROM chapters c
+            LEFT JOIN chapter_items ci ON ci.chapter_id = c.id
+            WHERE c.user_id = ?
+            GROUP BY c.id
+            ORDER BY c.created_at DESC, c.id DESC
+            LIMIT 40
+            """,
+            (g.user["id"],),
+        ).fetchall()
+        for row in chapter_rows:
+            if filters["kind"] not in ("all", "chapter"):
+                continue
+            if timeline_search_chapter_filters_apply(filters):
+                continue
+            if filters["visibility"] != "all" and row["visibility"] != filters["visibility"]:
+                continue
+            if not timeline_search_query_matches((row["title"], row["description"]), normalized_query):
+                continue
+            item_word = "item" if row["item_count"] == 1 else "items"
+            add_result(
+                ("chapter", row["id"]),
+                {
+                    "kind": "Chapter",
+                    "kind_key": "chapter",
+                    "title": row["title"],
+                    "context": f"{row['item_count']} {item_word}",
+                    "preview": short_preview(row["description"] or "Chapter title matched.", 180),
+                    "meta": [f"Visible: {PRIVACY_AUDIENCE_LABELS[row['visibility']]}"],
+                    "url": url_for("chapter_detail", chapter_id=row["id"]),
+                },
+            )
 
-    return results[:80]
+    return results[:item_limit]
 
 
 COLLECTION_KIND_CHOICES = ("", "photo", "text")
+TIMELINE_STORY_SOURCE_CHOICES = ("search", "collections")
+
+
+def timeline_story_source_mode(source):
+    mode = (source.get("source_mode") or source.get("mode") or "search").strip().lower()
+    if mode not in TIMELINE_STORY_SOURCE_CHOICES:
+        return "search"
+    return mode
+
+
+def normalize_story_filter_payload(source):
+    if source is None:
+        return {}
+    if isinstance(source, str):
+        try:
+            return json.loads(source)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+    if isinstance(source, dict):
+        return source
+    if hasattr(source, "to_dict"):
+        return source.to_dict(flat=True)
+    try:
+        return dict(source)
+    except (TypeError, ValueError):
+        return {}
+
+
+def timeline_story_filters(source):
+    source = normalize_story_filter_payload(source)
+    mode = timeline_story_source_mode(source)
+    return mode, parse_story_filters(source, mode)
+
+
+def parse_story_filters(payload, mode):
+    payload = normalize_story_filter_payload(payload)
+    if mode == "collections":
+        return collection_filters_from_source(payload)
+    filters = timeline_search_filters(payload)
+    if filters["kind"] == "message":
+        filters["kind"] = "all"
+    return filters
+
+
+def timeline_story_has_filters(mode, filters):
+    if mode == "collections":
+        return collection_filters_have_values(filters)
+    return timeline_search_has_active_filters(filters)
+
+
+def timeline_story_filter_values(mode, filters):
+    if mode == "collections":
+        return collection_query_values(filters)
+    values = {}
+    for key, value in filters.items():
+        if value not in (None, "", "all"):
+            values[key] = value
+    return values
 
 
 def normalize_collection_date(value):
@@ -4837,6 +5193,60 @@ def load_saved_collection_views(db):
         (g.user["id"],),
     ).fetchall()
     return [collection_view_payload(row) for row in rows]
+
+
+def build_timeline_stories_query(db, mode, filters):
+    if mode == "collections":
+        results = search_collection_items(db, filters)
+        return [dict(item, kind_key=item["kind"]) for item in results]
+    normalized_filters = dict(filters)
+    items = search_timeline_content(
+        db,
+        normalized_filters,
+        include_messages=False,
+        include_chapters=False,
+        item_limit=240,
+    )
+    return [item for item in items if item.get("kind_key") in ("photo", "text")]
+
+
+def load_timeline_stories(db):
+    rows = db.execute(
+        """
+        SELECT *
+        FROM timeline_stories
+        WHERE user_id = ?
+        ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "title": row["title"],
+            "subtitle": row["subtitle"],
+            "source_mode": row["source_mode"],
+            "filter_payload": normalize_story_filter_payload(row["filter_payload"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "url": url_for("timeline_story", story_id=row["id"]),
+        }
+        for row in rows
+    ]
+
+
+def get_timeline_story(db, story_id):
+    row = db.execute(
+        """
+        SELECT *
+        FROM timeline_stories
+        WHERE id = ? AND user_id = ?
+        """,
+        (story_id, g.user["id"]),
+    ).fetchone()
+    if row is None:
+        abort(404)
+    return row
 
 
 def collection_item_date_expr(table_alias, date_column):
@@ -4974,6 +5384,7 @@ def search_collection_items(db, filters):
             results.append(
                 {
                     "kind": "photo",
+                    "kind_key": "photo",
                     "id": row["id"],
                     "year": row["year"],
                     "month": row["month"],
@@ -5027,6 +5438,7 @@ def search_collection_items(db, filters):
             results.append(
                 {
                     "kind": "text",
+                    "kind_key": "text",
                     "id": row["id"],
                     "year": row["year"],
                     "month": row["month"],
@@ -6404,6 +6816,35 @@ def home():
     return render_template("home.html", photos=random_public_photos(get_db()))
 
 
+@app.route("/splash")
+@birthday_required
+def splash():
+    return render_template("splash.html", seed=secrets.token_hex(8))
+
+
+@app.route("/api/splash-photos")
+@birthday_required
+def splash_photos():
+    return jsonify(build_splash_photo_page(get_db()))
+
+
+@app.route("/photo/<int:photo_id>/thumbnail")
+@birthday_required
+def splash_photo_thumbnail(photo_id):
+    photo = get_owned_photo(photo_id)
+    try:
+        thumbnail_data = storage_jpeg_from_image(
+            photo["image_data"],
+            quality=46,
+            max_edge=260,
+        )
+    except ValueError:
+        abort(404)
+    response = Response(thumbnail_data, mimetype=JPEG_STORAGE_MIME)
+    response.headers["Cache-Control"] = "private, max-age=86400"
+    return response
+
+
 @app.route("/register", methods=("GET", "POST"))
 def register():
     if request.method == "POST":
@@ -7174,6 +7615,108 @@ def delete_timeline_collection(view_id):
     return redirect(url_for("timeline_collections"))
 
 
+@app.route("/timeline/stories", methods=("GET", "POST"))
+@birthday_required
+def timeline_stories():
+    db = get_db()
+
+    if request.method == "POST":
+        title = " ".join((request.form.get("title") or "").strip().split())[:120]
+        if not title:
+            flash("Give your story a title.", "error")
+            return redirect(request.url)
+
+        try:
+            source_mode, story_filters = timeline_story_filters(request.form)
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(request.url)
+        if not timeline_story_has_filters(source_mode, story_filters):
+            flash("Pick at least one filter before saving a story.", "error")
+            return redirect(
+                url_for(
+                    "timeline_stories",
+                    source_mode=source_mode,
+                    **timeline_story_filter_values(source_mode, story_filters),
+                )
+            )
+
+        subtitle = (request.form.get("subtitle") or "").strip()[:240]
+        db.execute(
+            """
+            INSERT INTO timeline_stories (
+                user_id, title, subtitle, source_mode, filter_payload
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                g.user["id"],
+                title,
+                subtitle,
+                source_mode,
+                json.dumps(story_filters),
+            ),
+        )
+        story_id = db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+        db.commit()
+        flash("Saved memory story.", "success")
+        return redirect(url_for("timeline_story", story_id=story_id))
+
+    try:
+        source_mode, filters = timeline_story_filters(request.args)
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("timeline_stories"))
+    has_filters = timeline_story_has_filters(source_mode, filters)
+    items = build_timeline_stories_query(db, source_mode, filters) if has_filters else []
+    return render_template(
+        "timeline_stories.html",
+        stories=load_timeline_stories(db),
+        source_mode=source_mode,
+        filters=filters,
+        filter_values=timeline_story_filter_values(source_mode, filters),
+        has_filters=has_filters,
+        items=items,
+    )
+
+
+@app.route("/timeline/stories/<int:story_id>")
+@birthday_required
+def timeline_story(story_id):
+    db = get_db()
+    story = get_timeline_story(db, story_id)
+    source_mode = story["source_mode"]
+    story_filters = parse_story_filters(story["filter_payload"], source_mode)
+    has_filters = timeline_story_has_filters(source_mode, story_filters)
+    items = build_timeline_stories_query(db, source_mode, story_filters) if has_filters else []
+    source_label = "Timeline search" if source_mode == "search" else "Saved collection filters"
+    return render_template(
+        "timeline_story.html",
+        story=story,
+        source_label=source_label,
+        filters=story_filters,
+        items=items,
+        has_filters=has_filters,
+    )
+
+
+@app.route("/timeline/stories/<int:story_id>/delete", methods=("POST",))
+@birthday_required
+def delete_timeline_story(story_id):
+    db = get_db()
+    get_timeline_story(db, story_id)
+    db.execute(
+        """
+        DELETE FROM timeline_stories
+        WHERE id = ? AND user_id = ?
+        """,
+        (story_id, g.user["id"]),
+    )
+    db.commit()
+    flash("Deleted memory story.", "success")
+    return redirect(url_for("timeline_stories"))
+
+
 @app.route("/timeline/people")
 @birthday_required
 def timeline_people():
@@ -7194,9 +7737,6 @@ def timeline_person(person_id):
         person=person,
         items=items,
     )
- 
-@app.route("/timeline/people")
- 
 
 @app.route("/timeline/map")
 @birthday_required
@@ -7592,6 +8132,69 @@ def chapters():
         "chapters.html",
         chapters=get_chapters_with_counts(db),
         shared_chapters=get_shared_chapters(db),
+    )
+
+
+@app.route("/chapters/draft", methods=("GET", "POST"))
+@birthday_required
+def chapter_draft():
+    db = get_db()
+    filters = chapter_draft_filters()
+    draft = build_chapter_draft(db, filters)
+    form_title = request.form.get("title", draft["title"]).strip()
+    form_description = request.form.get("description", draft["description"]).strip()
+    form_visibility = chapter_visibility(request.form.get("visibility", DEFAULT_TAG))
+    selected_refs = request.form.getlist("item_refs") if request.method == "POST" else [item["ref"] for item in draft["items"]]
+
+    if request.method == "POST":
+        refs = parse_chapter_draft_refs(selected_refs)
+        if not form_title:
+            flash("Chapter title is required.", "error")
+        elif not refs:
+            flash("Choose at least one memory for the chapter.", "error")
+        else:
+            owned_refs = [
+                (item_kind, get_owned_timeline_item(item_kind, item_id)["id"])
+                for item_kind, item_id in refs
+            ]
+            cursor = db.execute(
+                """
+                INSERT INTO chapters (
+                    user_id, title, description, visibility, cover_item_kind, cover_item_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    g.user["id"],
+                    form_title,
+                    form_description or None,
+                    form_visibility,
+                    owned_refs[0][0],
+                    owned_refs[0][1],
+                ),
+            )
+            chapter_id = cursor.lastrowid
+            for position, (item_kind, item_id) in enumerate(owned_refs, start=1):
+                db.execute(
+                    """
+                    INSERT INTO chapter_items (chapter_id, item_kind, item_id, position)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (chapter_id, item_kind, item_id, position),
+                )
+            db.commit()
+            flash("Chapter draft created.", "success")
+            return redirect(url_for("chapter_detail", chapter_id=chapter_id))
+
+    return render_template(
+        "chapter_draft.html",
+        filters=filters,
+        draft=draft,
+        title=form_title,
+        description=form_description,
+        visibility=form_visibility,
+        selected_refs=set(selected_refs),
+        years=list(user_years()),
     )
 
 

@@ -248,6 +248,43 @@ def test_uploads_text_entries_and_pdf_exports(client, helpers):
     assert month_pdf.data.startswith(b"%PDF")
 
 
+def test_splash_page_api_and_thumbnails_are_owned(app, client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="splash-photo.png",
+        title="Splash photo",
+        caption="A wall-ready memory",
+    )
+
+    other_client = app.test_client()
+    helpers.create_user(other_client, "other")
+    other_photo_id = helpers.upload_photo(
+        other_client,
+        filename="other-splash-photo.png",
+        title="Other splash photo",
+    )
+
+    page = client.get("/splash")
+    assert page.status_code == 200
+    assert b"data-splash" in page.data
+
+    response = client.get("/api/splash-photos?seed=test-seed&page=0&page_size=1")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total"] == 1
+    assert payload["total_pages"] == 1
+    assert payload["photos"][0]["id"] == photo_id
+    assert payload["photos"][0]["title"] == "Splash photo"
+    assert payload["photos"][0]["full_url"] == f"/photo/{photo_id}/image"
+
+    thumbnail = client.get(payload["photos"][0]["thumbnail_url"])
+    assert thumbnail.status_code == 200
+    assert thumbnail.mimetype == "image/jpeg"
+    assert thumbnail.data.startswith(b"\xff\xd8")
+    assert client.get(f"/photo/{other_photo_id}/thumbnail").status_code == 404
+
+
 def test_admin_page_is_daniel_only_and_converts_existing_images(app, client, helpers):
     helpers.create_user(client, "alice")
 
@@ -940,6 +977,70 @@ def test_chapter_items_can_be_reordered_with_json_api(client, helpers):
     assert bad_response.status_code == 400
 
 
+def test_chapter_draft_suggests_filtered_items_and_creates_chapter(client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="draft-photo.png",
+        title="Harbor arrival",
+        caption="Walking into the harbor",
+        photo_date="2020-05-04",
+        people="Maya Lake",
+        location_name="Lisbon",
+        tag="friends",
+    )
+    text_id = helpers.create_text(
+        client,
+        "Dinner with Maya after the ferry ride",
+        entry_date="2020-05-06",
+        people="Maya Lake",
+        location_name="Lisbon",
+        tag="friends",
+    )
+    helpers.create_text(
+        client,
+        "Unrelated cabin weekend",
+        entry_date="2020-05-07",
+        people="Noah Woods",
+        tag="private",
+    )
+
+    draft = client.get("/chapters/draft?person=Maya&place=Lisbon&visibility=friends")
+    assert draft.status_code == 200
+    assert b"Maya Memories" in draft.data
+    assert b"Harbor arrival" in draft.data
+    assert b"Dinner with Maya" in draft.data
+    assert b"Unrelated cabin weekend" not in draft.data
+
+    response = client.post(
+        "/chapters/draft?person=Maya&place=Lisbon&visibility=friends",
+        data={
+            **helpers.csrf_form_data(client, "/chapters/draft?person=Maya&place=Lisbon&visibility=friends"),
+            "title": "Maya in Lisbon",
+            "description": "Edited draft description",
+            "visibility": "friends",
+            "item_refs": [f"photo:{photo_id}", f"text:{text_id}"],
+        },
+    )
+    assert response.status_code == 302
+    chapter = helpers.row("SELECT id, title, description, visibility FROM chapters WHERE title = ?", ("Maya in Lisbon",))
+    assert chapter["description"] == "Edited draft description"
+    assert chapter["visibility"] == "friends"
+    items = helpers.rows(
+        """
+        SELECT item_kind, item_id, position
+        FROM chapter_items
+        WHERE chapter_id = ?
+        ORDER BY position ASC
+        """,
+        (chapter["id"],),
+    )
+    assert [(row["item_kind"], row["item_id"], row["position"]) for row in items] == [
+        ("photo", photo_id, 1),
+        ("text", text_id, 2),
+    ]
+
+
 def test_privacy_preview_filters_owner_timeline_views(client, helpers):
     helpers.create_user(client, "owner")
     helpers.create_text(
@@ -1150,6 +1251,124 @@ def test_saved_timeline_collections_filter_save_and_delete(app, client, helpers)
     )
     assert delete_response.status_code == 302
     assert helpers.row("SELECT COUNT(*) AS count FROM saved_timeline_views")["count"] == 0
+
+
+def test_timeline_stories_can_save_and_delete_from_search_filters(app, client, helpers):
+    helpers.create_user(client, "owner")
+    helpers.upload_photo(
+        client,
+        filename="story-photo.png",
+        title="Weekend walk",
+        caption="Summer walk by the river",
+        tag="private",
+    )
+    helpers.create_text(
+        client,
+        "Family picnic notes",
+        entry_date="2020-05-06",
+        tag="private",
+    )
+    other = app.test_client()
+    helpers.create_user(other, "other")
+    helpers.upload_photo(
+        other,
+        filename="other-story-photo.png",
+        title="Other photo walk",
+        tag="private",
+    )
+
+    save_response = client.post(
+        "/timeline/stories",
+        data={
+            **helpers.csrf_form_data(client, "/timeline/stories"),
+            "source_mode": "search",
+            "q": "walk",
+            "kind": "all",
+            "title": "Weekend memories",
+            "subtitle": "An easy one",
+        },
+    )
+    assert save_response.status_code == 302
+    story_id = save_response.headers["Location"].rsplit("/", 1)[-1]
+
+    stories = helpers.row(
+        "SELECT * FROM timeline_stories WHERE title = ?",
+        ("Weekend memories",),
+    )
+    assert stories
+    assert stories["source_mode"] == "search"
+    assert json.loads(stories["filter_payload"])["query"] == "walk"
+
+    story_page = client.get(f"/timeline/stories/{story_id}")
+    assert story_page.status_code == 200
+    assert b"Weekend memories" in story_page.data
+    assert b"Weekend walk" in story_page.data
+    assert b"Other photo walk" not in story_page.data
+
+    saved_stories_page = client.get("/timeline/stories")
+    assert saved_stories_page.status_code == 200
+    assert b"Weekend memories" in saved_stories_page.data
+
+    delete_response = client.post(
+        f"/timeline/stories/{story_id}/delete",
+        data=helpers.csrf_form_data(client, "/timeline/stories"),
+    )
+    assert delete_response.status_code == 302
+    assert helpers.row("SELECT COUNT(*) AS count FROM timeline_stories")["count"] == 0
+
+
+def test_timeline_stories_can_save_and_delete_from_collections_filters(app, client, helpers):
+    helpers.create_user(client, "owner")
+    helpers.create_text(
+        client,
+        "Family trail notes",
+        entry_date="2020-05-03",
+        tag="friends",
+        people="Alice Walker",
+        location_name="Trailhead",
+    )
+    helpers.upload_photo(
+        client,
+        filename="trail-photo.png",
+        title="Trail photo",
+        photo_date="2020-05-04",
+        tag="friends",
+        people="Alice Walker",
+        location_name="Trailhead",
+    )
+
+    save_response = client.post(
+        "/timeline/stories",
+        data={
+            **helpers.csrf_form_data(client, "/timeline/stories"),
+            "source_mode": "collections",
+            "item_kind": "photo",
+            "people": "Alice Walker",
+            "location": "Trailhead",
+            "privacy_tag": "friends",
+            "title": "Trail stories",
+            "subtitle": "Friendship routes",
+            "date_start": "2020-05-01",
+            "date_end": "2020-05-31",
+        },
+    )
+    assert save_response.status_code == 302
+    story_id = save_response.headers["Location"].rsplit("/", 1)[-1]
+
+    story = helpers.row("SELECT * FROM timeline_stories WHERE id = ?", (story_id,))
+    assert story["source_mode"] == "collections"
+
+    story_page = client.get(f"/timeline/stories/{story_id}")
+    assert story_page.status_code == 200
+    assert b"Trail stories" in story_page.data
+    assert b"Trail photo" in story_page.data
+    assert b"Family trail notes" not in story_page.data
+
+    delete_response = client.post(
+        f"/timeline/stories/{story_id}/delete",
+        data=helpers.csrf_form_data(client, "/timeline/stories"),
+    )
+    assert delete_response.status_code == 302
 
 
 def test_timeline_map_shows_owned_locations_and_updates_photo_place(app, client, helpers):

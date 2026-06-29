@@ -35,14 +35,19 @@
                     {% if request.endpoint == 'home' %}aria-current="page"{% endif %}
                 >Home</a>
                 <a
+                    class="topbar-link{% if request.endpoint == 'splash' %} is-active{% endif %}"
+                    href="{{ url_for('splash') }}"
+                    {% if request.endpoint == 'splash' %}aria-current="page"{% endif %}
+                >Splash</a>
+                <a
                     class="topbar-link{% if request.endpoint == 'on_this_day' %} is-active{% endif %}"
                     href="{{ url_for('on_this_day') }}"
                     {% if request.endpoint == 'on_this_day' %}aria-current="page"{% endif %}
                 >Today</a>
                 <a
-                    class="topbar-link{% if request.endpoint in ('timeline', 'timeline_search', 'timeline_people', 'timeline_person', 'timeline_collections', 'timeline_map', 'timeline_import', 'timeline_import_review', 'year_view', 'month_view', 'birthday') %} is-active{% endif %}"
+                    class="topbar-link{% if request.endpoint in ('timeline', 'timeline_search', 'timeline_people', 'timeline_person', 'timeline_collections', 'timeline_stories', 'timeline_story', 'timeline_map', 'timeline_import', 'timeline_import_review', 'year_view', 'month_view', 'birthday') %} is-active{% endif %}"
                     href="{{ url_for('timeline') }}"
-                    {% if request.endpoint in ('timeline', 'timeline_search', 'timeline_people', 'timeline_person', 'timeline_collections', 'timeline_map', 'timeline_import', 'timeline_import_review', 'year_view', 'month_view', 'birthday') %}aria-current="page"{% endif %}
+                    {% if request.endpoint in ('timeline', 'timeline_search', 'timeline_people', 'timeline_person', 'timeline_collections', 'timeline_stories', 'timeline_story', 'timeline_map', 'timeline_import', 'timeline_import_review', 'year_view', 'month_view', 'birthday') %}aria-current="page"{% endif %}
                 >Timeline</a>
                 <a
                     class="topbar-link{% if request.endpoint in ('chapters', 'chapter_detail', 'shared_chapter_detail') %} is-active{% endif %}"
@@ -104,7 +109,7 @@
         {% endif %}
     </header>
 
-    <main class="shell">
+    <main class="shell {% block shell_class %}{% endblock %}">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 <div class="flash-stack" aria-live="polite">

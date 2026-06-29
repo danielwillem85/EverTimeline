@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path, PurePosixPath
+import random
 import re
 import secrets
 import sqlite3
@@ -2704,6 +2705,58 @@ def random_public_photos(db, limit=48):
             }
         )
     return attach_reactions(db, photos)
+
+
+def build_splash_photo_page(db):
+    page_size = request.args.get("page_size", default=80, type=int)
+    if page_size is None:
+        page_size = 80
+    page_size = max(1, min(page_size, 240))
+
+    page = request.args.get("page", default=0, type=int)
+    if page is None:
+        page = 0
+
+    seed = (request.args.get("seed") or "").strip()[:80] or secrets.token_hex(8)
+    rows = db.execute(
+        """
+        SELECT id, original_filename, title, caption, photo_date, created_at
+        FROM photos
+        WHERE user_id = ?
+        ORDER BY id ASC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    photos = [dict(row) for row in rows]
+    random.Random(seed).shuffle(photos)
+
+    total = len(photos)
+    total_pages = (total + page_size - 1) // page_size if total else 0
+    if total_pages:
+        page = page % total_pages
+    else:
+        page = 0
+
+    start = page * page_size
+    page_photos = photos[start:start + page_size]
+    return {
+        "seed": seed,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": total_pages,
+        "photos": [
+            {
+                "id": photo["id"],
+                "title": photo_display_title(photo),
+                "caption": photo["caption"] or "",
+                "display_date": photo["photo_date"] or "",
+                "thumbnail_url": url_for("splash_photo_thumbnail", photo_id=photo["id"]),
+                "full_url": url_for("photo_image", photo_id=photo["id"]),
+            }
+            for photo in page_photos
+        ],
+    }
 
 
 def build_on_this_day_items(db, owner_id, month, day, image_url_builder):
@@ -6619,6 +6672,35 @@ def index():
 @birthday_required
 def home():
     return render_template("home.html", photos=random_public_photos(get_db()))
+
+
+@app.route("/splash")
+@birthday_required
+def splash():
+    return render_template("splash.html", seed=secrets.token_hex(8))
+
+
+@app.route("/api/splash-photos")
+@birthday_required
+def splash_photos():
+    return jsonify(build_splash_photo_page(get_db()))
+
+
+@app.route("/photo/<int:photo_id>/thumbnail")
+@birthday_required
+def splash_photo_thumbnail(photo_id):
+    photo = get_owned_photo(photo_id)
+    try:
+        thumbnail_data = storage_jpeg_from_image(
+            photo["image_data"],
+            quality=46,
+            max_edge=260,
+        )
+    except ValueError:
+        abort(404)
+    response = Response(thumbnail_data, mimetype=JPEG_STORAGE_MIME)
+    response.headers["Cache-Control"] = "private, max-age=86400"
+    return response
 
 
 @app.route("/register", methods=("GET", "POST"))

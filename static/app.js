@@ -336,6 +336,181 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    const splashPage = document.querySelector("[data-splash]");
+    if (splashPage) {
+        const splashGrid = splashPage.querySelector("[data-splash-grid]");
+        const splashStatus = splashPage.querySelector("[data-splash-status]");
+        const splashCount = splashPage.querySelector("[data-splash-count]");
+        const splashPrevButton = splashPage.querySelector("[data-splash-prev]");
+        const splashNextButton = splashPage.querySelector("[data-splash-next]");
+        const splashPhotoModal = document.getElementById("splash-photo-modal");
+        const splashPhotoImage = document.getElementById("splash-photo-modal-image");
+        const splashPhotoTitle = document.getElementById("splash-photo-modal-title");
+        const splashPhotoDate = document.getElementById("splash-photo-modal-date");
+        const splashSeed = splashPage.dataset.splashSeed || String(Date.now());
+        const splashUrl = splashPage.dataset.splashUrl || "/api/splash-photos";
+        const minTileSize = 82;
+        let splashPageIndex = 0;
+        let splashPageSize = 0;
+        let splashTotalPages = 0;
+        let splashResizeTimer = null;
+
+        const setSplashStatus = (message) => {
+            if (!splashStatus) {
+                return;
+            }
+            splashStatus.textContent = message;
+            splashStatus.hidden = !message;
+        };
+
+        const updateSplashControls = () => {
+            const hasPages = splashTotalPages > 1;
+            if (splashPrevButton) {
+                splashPrevButton.hidden = !hasPages;
+            }
+            if (splashNextButton) {
+                splashNextButton.hidden = !hasPages;
+            }
+            if (splashCount) {
+                splashCount.hidden = splashTotalPages <= 0;
+                splashCount.textContent = splashTotalPages > 0 ? `${splashPageIndex + 1} of ${splashTotalPages}` : "";
+            }
+        };
+
+        const splashGridSize = () => {
+            const bounds = splashGrid.getBoundingClientRect();
+            const columns = Math.max(1, Math.floor(bounds.width / minTileSize));
+            const rows = Math.max(1, Math.floor(bounds.height / minTileSize));
+            splashGrid.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
+            splashGrid.style.gridTemplateRows = `repeat(${rows}, minmax(0, 1fr))`;
+            return columns * rows;
+        };
+
+        const closeSplashPhotoModal = () => {
+            if (!splashPhotoModal) {
+                return;
+            }
+            splashPhotoModal.hidden = true;
+            if (splashPhotoImage) {
+                splashPhotoImage.removeAttribute("src");
+                splashPhotoImage.alt = "";
+            }
+            syncModalOpenState();
+        };
+
+        const openSplashPhotoModal = (photo) => {
+            if (!splashPhotoModal || !splashPhotoImage) {
+                return;
+            }
+            if (splashPhotoTitle) {
+                splashPhotoTitle.textContent = photo.title || "Picture";
+            }
+            if (splashPhotoDate) {
+                splashPhotoDate.textContent = photo.display_date || "";
+            }
+            splashPhotoImage.src = photo.full_url;
+            splashPhotoImage.alt = photo.title || "Splash picture";
+            splashPhotoModal.hidden = false;
+            syncModalOpenState();
+        };
+
+        const renderSplashPhotos = (photos) => {
+            splashGrid.innerHTML = "";
+            photos.forEach((photo) => {
+                const button = document.createElement("button");
+                button.className = "splash-thumb";
+                button.type = "button";
+                button.title = photo.display_date ? `${photo.title} - ${photo.display_date}` : photo.title;
+                button.setAttribute("aria-label", `Open ${photo.title || "photo"}`);
+
+                const image = document.createElement("img");
+                image.src = photo.thumbnail_url;
+                image.alt = photo.title || "Splash photo";
+                image.loading = "lazy";
+                image.decoding = "async";
+
+                button.appendChild(image);
+                button.addEventListener("click", () => openSplashPhotoModal(photo));
+                splashGrid.appendChild(button);
+            });
+        };
+
+        const loadSplashPage = async (page) => {
+            const nextPageSize = splashGridSize();
+            splashPageSize = nextPageSize;
+            setSplashStatus("Loading photos...");
+            const url = new URL(splashUrl, window.location.href);
+            url.searchParams.set("seed", splashSeed);
+            url.searchParams.set("page", String(page));
+            url.searchParams.set("page_size", String(splashPageSize));
+
+            try {
+                const response = await csrfFetch(url.toString());
+                if (!response.ok) {
+                    throw new Error("Splash photos could not be loaded.");
+                }
+                const payload = await response.json();
+                splashPageIndex = payload.page || 0;
+                splashTotalPages = payload.total_pages || 0;
+                renderSplashPhotos(payload.photos || []);
+                setSplashStatus(payload.total ? "" : "No photos yet.");
+                updateSplashControls();
+            } catch (error) {
+                renderSplashPhotos([]);
+                splashTotalPages = 0;
+                setSplashStatus("Photos could not be loaded.");
+                updateSplashControls();
+            }
+        };
+
+        const moveSplashPage = (delta) => {
+            if (splashTotalPages <= 0) {
+                return;
+            }
+            loadSplashPage(splashPageIndex + delta);
+        };
+
+        if (splashPrevButton) {
+            splashPrevButton.addEventListener("click", () => moveSplashPage(-1));
+        }
+        if (splashNextButton) {
+            splashNextButton.addEventListener("click", () => moveSplashPage(1));
+        }
+
+        if (splashPhotoModal) {
+            splashPhotoModal.querySelectorAll("[data-close-splash-photo-modal]").forEach((button) => {
+                button.addEventListener("click", closeSplashPhotoModal);
+            });
+        }
+
+        document.addEventListener("keydown", (event) => {
+            if (splashPhotoModal && !splashPhotoModal.hidden && event.key === "Escape") {
+                closeSplashPhotoModal();
+                return;
+            }
+            if (splashPhotoModal && !splashPhotoModal.hidden) {
+                return;
+            }
+            if (event.key === "ArrowLeft") {
+                moveSplashPage(-1);
+            } else if (event.key === "ArrowRight") {
+                moveSplashPage(1);
+            }
+        });
+
+        window.addEventListener("resize", () => {
+            window.clearTimeout(splashResizeTimer);
+            splashResizeTimer = window.setTimeout(() => {
+                const nextPageSize = splashGridSize();
+                if (nextPageSize !== splashPageSize) {
+                    loadSplashPage(splashPageIndex);
+                }
+            }, 120);
+        });
+
+        loadSplashPage(0);
+    }
+
     const viewAllButton = document.getElementById("view-all-button");
     const viewRandomButton = document.getElementById("view-random-button");
     const allItemsModal = document.getElementById("all-items-modal");
@@ -375,7 +550,6 @@ document.addEventListener("DOMContentLoaded", () => {
         let pendingRandomize = false;
         let carouselDisplayMs = 1500;
         let carouselTimers = [];
-        let carouselWasPlayingBeforePhotoModal = false;
 
         const shuffleItems = (items) => {
             const shuffled = [...items];
@@ -428,10 +602,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 carouselPhotoModalImage.removeAttribute("src");
                 carouselPhotoModalImage.alt = "";
             }
-            if (restorePlayback && carouselWasPlayingBeforePhotoModal && !allItemsModal.hidden) {
+            if (restorePlayback && !allItemsModal.hidden) {
                 resumeCarousel();
             }
-            carouselWasPlayingBeforePhotoModal = false;
             if (!keepBodyOpen && allItemsModal.hidden) {
                 document.body.classList.remove("modal-open");
             }
@@ -442,7 +615,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 return;
             }
 
-            carouselWasPlayingBeforePhotoModal = !carouselPaused;
             if (!carouselPaused) {
                 pauseCarousel();
             }

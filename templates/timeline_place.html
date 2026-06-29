@@ -7,9 +7,46 @@
     <div>
         <a class="back-link" href="{{ url_for('timeline_map') }}">Map</a>
         <h1>{{ place_name }}</h1>
-        <p class="muted">{{ items|length }} {{ "memory" if items|length == 1 else "memories" }} · {{ year_label }}</p>
+        <p class="muted">{{ items|length }} {{ "memory" if items|length == 1 else "memories" }} &middot; {{ year_label }}</p>
+    </div>
+    <div class="page-actions">
+        <a class="button primary" href="{{ hub['draft_url'] }}">Draft chapter</a>
+        <a class="button secondary" href="{{ hub['search_url'] }}">Collections</a>
     </div>
 </section>
+
+<section class="hub-stat-grid" aria-label="{{ place_name }} summary">
+    {% for stat in hub["stats"] %}
+        <article class="hub-stat">
+            <strong>{{ stat["value"] }}</strong>
+            <span>{{ stat["label"] }}</span>
+        </article>
+    {% endfor %}
+</section>
+
+{% if hub["gap_notes"] or hub["chapters"] %}
+<section class="hub-insight-grid">
+    {% if hub["gap_notes"] %}
+        <article class="hub-insight-panel">
+            <h2>Context gaps</h2>
+            {% for note in hub["gap_notes"] %}
+                <p>{{ note }}</p>
+            {% endfor %}
+        </article>
+    {% endif %}
+    {% if hub["chapters"] %}
+        <article class="hub-insight-panel">
+            <h2>Related chapters</h2>
+            {% for chapter in hub["chapters"] %}
+                <a class="hub-related-row" href="{{ chapter['url'] }}">
+                    <strong>{{ chapter["title"] }}</strong>
+                    <span>{{ chapter["matched_count"] }} {{ "memory" if chapter["matched_count"] == 1 else "memories" }} &middot; {{ chapter["privacy_label"] }}</span>
+                </a>
+            {% endfor %}
+        </article>
+    {% endif %}
+</section>
+{% endif %}
 
 <section class="timeline-map-panel" aria-label="{{ place_name }} map">
     <div class="timeline-map-canvas compact-map-canvas">

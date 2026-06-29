@@ -2186,6 +2186,14 @@ def people_year_label(years):
     return f"{years[0]}-{years[-1]}"
 
 
+def memory_word(count):
+    return "memory" if count == 1 else "memories"
+
+
+def chapter_word(count):
+    return "chapter" if count == 1 else "chapters"
+
+
 def get_timeline_person(db, person_id):
     person = db.execute(
         """
@@ -2239,6 +2247,7 @@ def build_people_summaries(db):
                 "latest_sort_key": None,
                 "latest_label": "",
                 "url": url_for("timeline_person", person_id=person_id),
+                "draft_url": "",
             },
         )
         if kind == "photo":
@@ -2272,12 +2281,112 @@ def build_people_summaries(db):
     for summary in summaries.values():
         summary["item_count"] = summary["photo_count"] + summary["text_count"]
         summary["year_label"] = people_year_label(summary["years"])
+        summary["draft_url"] = url_for("chapter_draft", person=summary["name"])
         summary.pop("years", None)
         summary.pop("latest_sort_key", None)
         people.append(summary)
 
     people.sort(key=lambda item: (-item["item_count"], item["name"].casefold()))
     return people
+
+
+def item_refs_for_items(items):
+    return [(item["kind"], item["id"]) for item in items if item["kind"] in ("photo", "text")]
+
+
+def load_message_count_for_refs(db, refs):
+    photo_ids = [item_id for kind, item_id in refs if kind == "photo"]
+    text_ids = [item_id for kind, item_id in refs if kind == "text"]
+    return sum(load_timeline_search_message_counts(db, "photo", photo_ids).values()) + sum(
+        load_timeline_search_message_counts(db, "text", text_ids).values()
+    )
+
+
+def load_chapters_for_refs(db, refs):
+    chapters = {}
+    for kind in ("photo", "text"):
+        item_ids = [item_id for ref_kind, item_id in refs if ref_kind == kind]
+        if not item_ids:
+            continue
+        placeholders = ",".join(["?"] * len(item_ids))
+        rows = db.execute(
+            f"""
+            SELECT c.id, c.title, c.description, c.visibility, COUNT(ci.id) AS matched_count
+            FROM chapter_items ci
+            JOIN chapters c ON c.id = ci.chapter_id
+            WHERE c.user_id = ? AND ci.item_kind = ? AND ci.item_id IN ({placeholders})
+            GROUP BY c.id
+            """,
+            (g.user["id"], kind, *item_ids),
+        ).fetchall()
+        for row in rows:
+            chapter = chapters.setdefault(
+                row["id"],
+                {
+                    "id": row["id"],
+                    "title": row["title"],
+                    "description": row["description"] or "",
+                    "visibility": chapter_visibility(row["visibility"]),
+                    "matched_count": 0,
+                    "url": url_for("chapter_detail", chapter_id=row["id"]),
+                },
+            )
+            chapter["matched_count"] += row["matched_count"]
+    results = list(chapters.values())
+    for chapter in results:
+        chapter.update(privacy_payload_for_tags([chapter["visibility"]]))
+    results.sort(key=lambda chapter: (-chapter["matched_count"], chapter["title"].casefold()))
+    return results
+
+
+def hub_stat(label, value):
+    return {"label": label, "value": value}
+
+
+def build_people_hub_overview(people):
+    total_memories = sum(person["item_count"] for person in people)
+    total_photos = sum(person["photo_count"] for person in people)
+    total_text = sum(person["text_count"] for person in people)
+    return [
+        hub_stat("Tagged people", len(people)),
+        hub_stat("Tagged memories", total_memories),
+        hub_stat("Photos", total_photos),
+        hub_stat("Text entries", total_text),
+    ]
+
+
+def build_person_hub(db, person, items):
+    refs = item_refs_for_items(items)
+    places = sorted({normalize_place_name(item.get("location_name", "")) for item in items if normalize_place_name(item.get("location_name", ""))})
+    chapters = load_chapters_for_refs(db, refs)
+    missing_place_count = sum(1 for item in items if not normalize_place_name(item.get("location_name", "")))
+    missing_caption_count = sum(1 for item in items if item["kind"] == "photo" and not item.get("has_caption"))
+    photo_count = sum(1 for item in items if item["kind"] == "photo")
+    text_count = sum(1 for item in items if item["kind"] == "text")
+    years = sorted({item["year"] for item in items})
+    return {
+        "stats": [
+            hub_stat("Memories", len(items)),
+            hub_stat("Photos", photo_count),
+            hub_stat("Text entries", text_count),
+            hub_stat("Places", len(places)),
+            hub_stat("Messages", load_message_count_for_refs(db, refs)),
+            hub_stat("Chapters", len(chapters)),
+        ],
+        "chapters": chapters[:6],
+        "places": places[:8],
+        "year_label": people_year_label(years),
+        "gap_notes": [
+            note
+            for note in (
+                f"{missing_place_count} {memory_word(missing_place_count)} without a place" if missing_place_count else "",
+                f"{missing_caption_count} {'photo needs' if missing_caption_count == 1 else 'photos need'} captions" if missing_caption_count else "",
+            )
+            if note
+        ],
+        "draft_url": url_for("chapter_draft", person=person["name"]),
+        "search_url": url_for("timeline_search", q=person["name"]),
+    }
 
 
 def build_person_timeline_items(db, person_id):
@@ -2330,8 +2439,12 @@ def build_person_timeline_items(db, person_id):
                 "id": row["id"],
                 "title": photo_display_title(row),
                 "preview": short_preview(row["caption"] or "Photo"),
+                "has_caption": bool((row["caption"] or "").strip()),
                 "date_label": format_timeline_date_label(row["year"], row["month"], row["photo_date"]),
                 "source_label": item_source_label(row["year"], row["month"]),
+                "year": row["year"],
+                "month": row["month"],
+                "location_name": row["location_name"] or "",
                 "image_url": url_for("photo_image", photo_id=row["id"]),
                 "url": timeline_item_link(g.user["id"], row["year"], row["month"], "photo", row["id"]),
                 "tags": tags,
@@ -2363,6 +2476,9 @@ def build_person_timeline_items(db, person_id):
                 "preview": short_preview(row["body"], 180),
                 "date_label": format_timeline_date_label(row["year"], row["month"], row["entry_date"]),
                 "source_label": item_source_label(row["year"], row["month"]),
+                "year": row["year"],
+                "month": row["month"],
+                "location_name": row["location_name"] or "",
                 "url": timeline_item_link(g.user["id"], row["year"], row["month"], "text", row["id"]),
                 "tags": tags,
                 "tags_text": tags_to_text(tags),
@@ -5496,6 +5612,7 @@ def build_timeline_map_items(db):
             "month": row["month"],
             "title": photo_display_title(row),
             "preview": short_preview(row["caption"] or "Photo"),
+            "has_caption": bool((row["caption"] or "").strip()),
             "date_label": format_timeline_date_label(row["year"], row["month"], row["photo_date"]),
             "location_name": row["location_name"] or "",
             "latitude": row["latitude"],
@@ -5610,6 +5727,38 @@ def build_place_summaries(items):
 
     summaries.sort(key=lambda group: (-group["item_count"], group["location_name"].casefold()))
     return summaries
+
+
+def build_place_hub(db, place_name, items):
+    refs = item_refs_for_items(items)
+    chapters = load_chapters_for_refs(db, refs)
+    missing_coordinates = sum(1 for item in items if not item["has_coordinates"])
+    missing_captions = sum(1 for item in items if item["kind"] == "photo" and not item.get("has_caption"))
+    photo_count = sum(1 for item in items if item["kind"] == "photo")
+    text_count = sum(1 for item in items if item["kind"] == "text")
+    years = sorted({item["year"] for item in items})
+    return {
+        "stats": [
+            hub_stat("Memories", len(items)),
+            hub_stat("Photos", photo_count),
+            hub_stat("Text entries", text_count),
+            hub_stat("Messages", load_message_count_for_refs(db, refs)),
+            hub_stat("Chapters", len(chapters)),
+            hub_stat("Years", len(years)),
+        ],
+        "chapters": chapters[:6],
+        "year_label": people_year_label(years),
+        "gap_notes": [
+            note
+            for note in (
+                f"{missing_coordinates} {memory_word(missing_coordinates)} need coordinates" if missing_coordinates else "",
+                f"{missing_captions} {'photo needs' if missing_captions == 1 else 'photos need'} captions" if missing_captions else "",
+            )
+            if note
+        ],
+        "draft_url": url_for("chapter_draft", place=place_name),
+        "search_url": url_for("timeline_collections", location=place_name),
+    }
 
 
 def current_profile_form_values():
@@ -7720,9 +7869,11 @@ def delete_timeline_story(story_id):
 @app.route("/timeline/people")
 @birthday_required
 def timeline_people():
+    people = build_people_summaries(get_db())
     return render_template(
         "timeline_people.html",
-        people=build_people_summaries(get_db()),
+        people=people,
+        overview=build_people_hub_overview(people),
     )
 
 
@@ -7736,12 +7887,14 @@ def timeline_person(person_id):
         "timeline_person.html",
         person=person,
         items=items,
+        hub=build_person_hub(db, person, items),
     )
 
 @app.route("/timeline/map")
 @birthday_required
 def timeline_map():
-    all_items = build_timeline_map_items(get_db())
+    db = get_db()
+    all_items = build_timeline_map_items(db)
     item_type = request.args.get("type", "all")
     if item_type not in ("all", "photo", "text"):
         item_type = "all"
@@ -7777,7 +7930,8 @@ def timeline_place():
     if not place_name:
         abort(404)
 
-    all_items = build_timeline_map_items(get_db())
+    db = get_db()
+    all_items = build_timeline_map_items(db)
     target_key = place_group_key(place_name)
     items = [
         item
@@ -7793,6 +7947,7 @@ def timeline_place():
         items=items,
         mapped_items=[item for item in items if item["has_coordinates"]],
         year_label=build_place_summaries(items)[0]["year_label"],
+        hub=build_place_hub(db, normalize_place_name(items[0]["location_name"]), items),
     )
 
 

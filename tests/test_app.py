@@ -322,12 +322,42 @@ def test_manual_people_tagging_for_items_search_and_updates(app, client, helpers
     assert b"Tagged photo" in search.data
     assert b"Dinner after the show" in search.data
 
+    message_response = client.post(
+        f"/api/timeline-item/text/{text_id}/messages",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={"body": "Alice remembered the dessert"},
+    )
+    assert message_response.status_code == 201
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Alice Story",
+            "description": "Memories with Alice",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Alice Story",))["id"]
+    for item_kind, item_id in (("photo", photo_id), ("text", text_id)):
+        assert client.post(
+            "/chapters/items",
+            data={
+                **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+                "chapter_id": chapter_id,
+                "item_kind": item_kind,
+                "item_id": item_id,
+            },
+        ).status_code == 302
+
     people_index = client.get("/timeline/people")
     assert people_index.status_code == 200
     assert b"Alice Example" in people_index.data
     assert b"Bob Friend" in people_index.data
     assert b"Carol Cousin" in people_index.data
     assert b"2 memories" in people_index.data
+    assert b"Tagged memories" in people_index.data
+    assert b"/chapters/draft?person=Alice+Example" in people_index.data
 
     alice = helpers.row(
         "SELECT id FROM people WHERE user_id = ? AND name = ?",
@@ -337,6 +367,10 @@ def test_manual_people_tagging_for_items_search_and_updates(app, client, helpers
     assert alice_page.status_code == 200
     assert b"Tagged photo" in alice_page.data
     assert b"Dinner after the show" in alice_page.data
+    assert b"Related chapters" in alice_page.data
+    assert b"Alice Story" in alice_page.data
+    assert b"Messages" in alice_page.data
+    assert b"Draft chapter" in alice_page.data
 
     other = app.test_client()
     helpers.create_user(other, "other")
@@ -1273,7 +1307,7 @@ def test_timeline_map_shows_owned_locations_and_updates_photo_place(app, client,
         location_name="Old station",
         tag="private",
     )
-    helpers.create_text(
+    lisbon_text_id = helpers.create_text(
         client,
         "A second Lisbon memory",
         entry_date="2020-05-05",
@@ -1282,6 +1316,27 @@ def test_timeline_map_shows_owned_locations_and_updates_photo_place(app, client,
         longitude="-9.1393",
         tag="private",
     )
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Lisbon Chapter",
+            "description": "Place hub chapter",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Lisbon Chapter",))["id"]
+    for item_kind, item_id in (("photo", photo_id), ("text", lisbon_text_id)):
+        assert client.post(
+            "/chapters/items",
+            data={
+                **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+                "chapter_id": chapter_id,
+                "item_kind": item_kind,
+                "item_id": item_id,
+            },
+        ).status_code == 302
 
     other = app.test_client()
     helpers.create_user(other, "other")
@@ -1306,6 +1361,9 @@ def test_timeline_map_shows_owned_locations_and_updates_photo_place(app, client,
     assert b"A second Lisbon memory" in place_response.data
     assert b"lisbon-photo.png" in place_response.data
     assert b"2 memories" in place_response.data
+    assert b"Lisbon Chapter" in place_response.data
+    assert b"Related chapters" in place_response.data
+    assert b"/chapters/draft?place=Lisbon" in place_response.data
 
     photo_filter_response = client.get("/timeline/map?type=photo&year=2020")
     assert photo_filter_response.status_code == 200

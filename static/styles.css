@@ -3680,6 +3680,107 @@ details.privacy-toggle-panel {
     font-weight: 900;
 }
 
+.hub-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 10px;
+    margin-bottom: 18px;
+}
+
+.hub-stat {
+    display: grid;
+    gap: 2px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    background: #fff;
+}
+
+.hub-stat strong {
+    color: var(--ink);
+    font-size: 1.25rem;
+}
+
+.hub-stat span {
+    color: var(--muted);
+    font-size: 0.8rem;
+    font-weight: 900;
+}
+
+.hub-insight-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+    margin-bottom: 18px;
+}
+
+.hub-insight-panel {
+    display: grid;
+    align-content: start;
+    gap: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    background: #fff;
+}
+
+.hub-insight-panel h2,
+.hub-insight-panel p {
+    margin-bottom: 0;
+}
+
+.hub-insight-panel p {
+    color: var(--muted);
+    font-weight: 800;
+}
+
+.hub-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+}
+
+.hub-chip-list a,
+.hub-related-row {
+    color: var(--ink);
+    text-decoration: none;
+}
+
+.hub-chip-list a {
+    border: 1px solid rgba(22, 109, 103, 0.24);
+    border-radius: 999px;
+    padding: 5px 9px;
+    background: #f5fbfa;
+    color: var(--primary);
+    font-size: 0.8rem;
+    font-weight: 900;
+}
+
+.hub-related-row {
+    display: grid;
+    gap: 3px;
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+}
+
+.hub-related-row:first-of-type {
+    border-top: 0;
+    padding-top: 0;
+}
+
+.hub-related-row strong,
+.hub-related-row span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.hub-related-row span {
+    color: var(--muted);
+    font-size: 0.82rem;
+    font-weight: 800;
+}
+
 .map-place-list {
     display: grid;
     gap: 12px;
@@ -4018,7 +4119,9 @@ details.privacy-toggle-panel {
     .chapter-draft-main strong,
     .chapter-draft-main span,
     .chapter-draft-main small,
-    .chapter-draft-main em {
+    .chapter-draft-main em,
+    .hub-related-row strong,
+    .hub-related-row span {
         white-space: normal;
     }
 

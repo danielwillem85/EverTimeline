@@ -9,6 +9,18 @@
         <h1>People tags</h1>
         <p class="muted">{{ people|length }} tagged {{ "person" if people|length == 1 else "people" }}</p>
     </div>
+    <div class="page-actions">
+        <a class="button secondary" href="{{ url_for('chapter_draft') }}">Draft chapter</a>
+    </div>
+</section>
+
+<section class="hub-stat-grid" aria-label="People tag summary">
+    {% for stat in overview %}
+        <article class="hub-stat">
+            <strong>{{ stat["value"] }}</strong>
+            <span>{{ stat["label"] }}</span>
+        </article>
+    {% endfor %}
 </section>
 
 <section class="timeline-people-list" aria-label="Tagged people">
@@ -19,7 +31,10 @@
                 <span>{{ person["item_count"] }} {{ "memory" if person["item_count"] == 1 else "memories" }} &middot; {{ person["year_label"] }}</span>
                 <span>{{ person["photo_count"] }} photos &middot; {{ person["text_count"] }} text entries{% if person["latest_label"] %} &middot; Latest {{ person["latest_label"] }}{% endif %}</span>
             </div>
-            <a class="button primary small" href="{{ person['url'] }}">Open</a>
+            <div class="person-actions">
+                <a class="button secondary small" href="{{ person['draft_url'] }}">Draft</a>
+                <a class="button primary small" href="{{ person['url'] }}">Open</a>
+            </div>
         </article>
     {% else %}
         <p class="empty-state">No people tags yet.</p>

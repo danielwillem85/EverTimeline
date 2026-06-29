@@ -3495,6 +3495,15 @@ details.privacy-toggle-panel {
     white-space: nowrap;
 }
 
+.timeline-search-main h3 {
+    overflow: hidden;
+    margin-bottom: 0;
+    color: var(--ink);
+    font-size: 1rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .timeline-search-main span:not(.status-badge) {
     overflow: hidden;
     color: var(--muted);
@@ -3526,6 +3535,72 @@ details.privacy-toggle-panel {
     color: var(--muted);
     font-size: 0.76rem;
     font-weight: 900;
+}
+
+.review-stat-link {
+    color: inherit;
+    text-decoration: none;
+}
+
+.review-stat-link:hover {
+    border-color: rgba(22, 109, 103, 0.42);
+}
+
+.review-focus-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 18px;
+    border: 1px solid rgba(22, 109, 103, 0.28);
+    border-radius: 8px;
+    padding: 18px;
+    background: #f7fbfa;
+}
+
+.review-focus-panel h2,
+.review-issue-header h2 {
+    margin: 6px 0 4px;
+    color: var(--ink);
+    font-size: 1.12rem;
+}
+
+.review-focus-panel p,
+.review-issue-header p {
+    margin-bottom: 0;
+    color: var(--muted);
+    line-height: 1.45;
+}
+
+.review-queue-list {
+    display: grid;
+    gap: 14px;
+}
+
+.review-issue-card {
+    display: grid;
+    gap: 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.review-issue-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+}
+
+.review-sample-list {
+    display: grid;
+    gap: 10px;
+}
+
+.review-sample-card {
+    box-shadow: none;
 }
 
 .timeline-map-panel {
@@ -4047,6 +4122,8 @@ details.privacy-toggle-panel {
     .request-card,
     .activity-card,
     .timeline-search-card,
+    .review-focus-panel,
+    .review-issue-header,
     .map-place-card,
     .collections-layout,
     .saved-view-card,
@@ -4060,6 +4137,8 @@ details.privacy-toggle-panel {
     .request-card .button,
     .activity-card .button,
     .timeline-search-card .button,
+    .review-focus-panel .button,
+    .review-issue-header .button,
     .map-place-card .button,
     .saved-view-card .button,
     .collection-result-card .button,
@@ -4069,6 +4148,7 @@ details.privacy-toggle-panel {
     }
 
     .timeline-search-main h2,
+    .timeline-search-main h3,
     .timeline-search-main span:not(.status-badge),
     .saved-view-card strong,
     .saved-view-card span,

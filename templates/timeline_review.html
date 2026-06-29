@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}Review queue - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
+        <h1>Review queue</h1>
+    </div>
+    <div class="page-actions">
+        <a class="button secondary" href="{{ url_for('timeline_search') }}">Search timeline</a>
+        <a class="button secondary" href="{{ url_for('timeline_people') }}">People tags</a>
+        <a class="button primary" href="{{ url_for('chapter_draft') }}">Draft chapter</a>
+    </div>
+</section>
+
+<section class="hub-stat-grid" aria-label="Review summary">
+    {% for stat in queue["stats"] %}
+        <a class="hub-stat review-stat-link" href="{{ stat['url'] }}">
+            <span>{{ stat["label"] }}</span>
+            <strong>{{ stat["count"] }}</strong>
+        </a>
+    {% endfor %}
+</section>
+
+{% if queue["top_issue"] %}
+    <section class="review-focus-panel">
+        <div>
+            <span class="status-badge">Start here</span>
+            <h2>{{ queue["top_issue"]["title"] }}</h2>
+            <p>{{ queue["top_issue"]["description"] }}</p>
+        </div>
+        <a class="button primary" href="{{ queue['top_issue']['url'] }}">{{ queue["top_issue"]["action_label"] }}</a>
+    </section>
+{% endif %}
+
+<section class="review-queue-list" aria-label="Review issues">
+    {% if queue["issues"] %}
+        {% for issue in queue["issues"] %}
+            <article class="review-issue-card">
+                <header class="review-issue-header">
+                    <div>
+                        <span class="status-badge">{{ issue["count"] }}</span>
+                        <h2>{{ issue["title"] }}</h2>
+                        <p>{{ issue["description"] }}</p>
+                    </div>
+                    <a class="button secondary" href="{{ issue['url'] }}">{{ issue["action_label"] }}</a>
+                </header>
+                {% if issue["items"] %}
+                    <div class="review-sample-list">
+                        {% for item in issue["items"] %}
+                            <article class="timeline-search-card review-sample-card">
+                                <div class="timeline-search-content">
+                                    {% if item.get("image_url") %}
+                                        <img class="timeline-search-thumb" src="{{ item['image_url'] }}" alt="">
+                                    {% endif %}
+                                    <div class="timeline-search-main">
+                                        <span class="status-badge">{{ item["kind"] }}</span>
+                                        <h3>{{ item["title"] }}</h3>
+                                        <span>{{ item["context"] }}</span>
+                                        <p>{{ item["preview"] }}</p>
+                                        {% if item.get("meta") %}
+                                            <div class="timeline-search-meta">
+                                                {% for meta in item["meta"] %}
+                                                    <span>{{ meta }}</span>
+                                                {% endfor %}
+                                            </div>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                <a class="button primary small" href="{{ item['url'] }}">Open</a>
+                            </article>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            </article>
+        {% endfor %}
+    {% elif queue["complete"] %}
+        <p class="empty-state">Your timeline has no review issues right now.</p>
+    {% else %}
+        <p class="empty-state">Add memories to start building your review queue.</p>
+    {% endif %}
+</section>
+{% endblock %}

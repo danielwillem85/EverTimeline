@@ -5155,6 +5155,207 @@ def search_timeline_content(
     return results[:item_limit]
 
 
+def review_issue_stat(label, count, url):
+    return {
+        "label": label,
+        "count": count,
+        "url": url,
+    }
+
+
+def memory_review_context(row):
+    display_date = row["photo_date"] if "photo_date" in row.keys() else row["entry_date"]
+    return timeline_search_context(row, format_timeline_date_label(row["year"], row["month"], display_date))
+
+
+def memory_review_item(kind, row, tags, people, chapter_membership=None):
+    chapter_membership = chapter_membership or {}
+    if kind == "photo":
+        title = photo_display_title(row)
+        preview = row["caption"] or "Photo needs a caption."
+        image_url = url_for("photo_image", photo_id=row["id"])
+    else:
+        title = "Text entry"
+        preview = row["body"]
+        image_url = ""
+    return {
+        "kind": "Photo" if kind == "photo" else "Text entry",
+        "title": title,
+        "context": memory_review_context(row),
+        "preview": short_preview(preview, 150),
+        "meta": timeline_search_meta(row, tags, 0, chapter_membership, people),
+        "image_url": image_url,
+        "url": timeline_item_link(g.user["id"], row["year"], row["month"], kind, row["id"]),
+    }
+
+
+def build_memory_review_queue(db, sample_limit=4):
+    photo_rows = db.execute(
+        """
+        SELECT id, year, month, original_filename, title, caption, photo_date,
+               location_name, latitude, longitude, image_hash, created_at
+        FROM photos
+        WHERE user_id = ?
+        ORDER BY COALESCE(photo_date, created_at) DESC, id DESC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    text_rows = db.execute(
+        """
+        SELECT id, year, month, body, entry_date, location_name, latitude, longitude, created_at
+        FROM text_entries
+        WHERE user_id = ?
+        ORDER BY COALESCE(entry_date, created_at) DESC, id DESC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    photo_ids = [row["id"] for row in photo_rows]
+    text_ids = [row["id"] for row in text_rows]
+    photo_tags = load_tags_for_items(db, "photo", photo_ids)
+    text_tags = load_tags_for_items(db, "text", text_ids)
+    photo_people = load_people_for_items(db, "photo", photo_ids)
+    text_people = load_people_for_items(db, "text", text_ids)
+    photo_chapters = load_timeline_search_chapter_memberships(db, "photo", photo_ids)
+    text_chapters = load_timeline_search_chapter_memberships(db, "text", text_ids)
+
+    issue_defs = {
+        "captions": {
+            "title": "Photos need captions",
+            "description": "Captionless photos are harder to browse, export, and turn into chapters.",
+            "action_label": "Caption photos",
+            "url": url_for("timeline_search", kind="photo", caption="without"),
+            "items": [],
+            "count": 0,
+            "priority": 1,
+        },
+        "places": {
+            "title": "Memories need places",
+            "description": "Adding places makes maps, place hubs, and family browsing more useful.",
+            "action_label": "Add places",
+            "url": url_for("timeline_search", location="without"),
+            "items": [],
+            "count": 0,
+            "priority": 2,
+        },
+        "people": {
+            "title": "Memories need people",
+            "description": "People tags connect scattered photos and notes into personal timelines.",
+            "action_label": "Tag people",
+            "url": url_for("timeline_people"),
+            "items": [],
+            "count": 0,
+            "priority": 3,
+        },
+        "chapters": {
+            "title": "Memories not in chapters",
+            "description": "These memories are ready to become stories instead of staying loose.",
+            "action_label": "Draft chapter",
+            "url": url_for("chapter_draft"),
+            "items": [],
+            "count": 0,
+            "priority": 4,
+        },
+        "public": {
+            "title": "Public photos need polish",
+            "description": "Public memories without captions are visible but may lack useful context.",
+            "action_label": "Review public photos",
+            "url": url_for("timeline_search", kind="photo", visibility="public", caption="without"),
+            "items": [],
+            "count": 0,
+            "priority": 5,
+        },
+    }
+
+    def add_issue(key, item):
+        issue = issue_defs[key]
+        issue["count"] += 1
+        if len(issue["items"]) < sample_limit:
+            issue["items"].append(item)
+
+    for row in photo_rows:
+        tags = photo_tags.get(row["id"], [DEFAULT_TAG])
+        people = photo_people.get(row["id"], [])
+        chapter_membership = photo_chapters.get(row["id"], {})
+        item = memory_review_item("photo", row, tags, people, chapter_membership)
+        if not (row["caption"] or "").strip():
+            add_issue("captions", item)
+        if not timeline_search_has_location(row):
+            add_issue("places", item)
+        if not people:
+            add_issue("people", item)
+        if not chapter_membership.get("count"):
+            add_issue("chapters", item)
+        if tags_to_text(tags) == "public" and not (row["caption"] or "").strip():
+            add_issue("public", item)
+
+    for row in text_rows:
+        tags = text_tags.get(row["id"], [DEFAULT_TAG])
+        people = text_people.get(row["id"], [])
+        chapter_membership = text_chapters.get(row["id"], {})
+        item = memory_review_item("text", row, tags, people, chapter_membership)
+        if not timeline_search_has_location(row):
+            add_issue("places", item)
+        if not people:
+            add_issue("people", item)
+        if not chapter_membership.get("count"):
+            add_issue("chapters", item)
+
+    duplicate_groups = db.execute(
+        """
+        SELECT image_hash, COUNT(*) AS count, MIN(id) AS first_id
+        FROM photos
+        WHERE user_id = ? AND COALESCE(image_hash, '') <> ''
+        GROUP BY image_hash
+        HAVING COUNT(*) > 1
+        ORDER BY count DESC, first_id ASC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    duplicate_issue = {
+        "title": "Possible duplicate photos",
+        "description": "These image matches may be accidental repeats from older uploads or imports.",
+        "action_label": "Review duplicates",
+        "url": url_for("timeline_search", kind="photo"),
+        "items": [],
+        "count": sum(row["count"] for row in duplicate_groups),
+        "priority": 0,
+    }
+    for group in duplicate_groups[:sample_limit]:
+        row = db.execute(
+            """
+            SELECT id, year, month, original_filename, title, caption, photo_date,
+                   location_name, latitude, longitude, image_hash, created_at
+            FROM photos
+            WHERE id = ? AND user_id = ?
+            """,
+            (group["first_id"], g.user["id"]),
+        ).fetchone()
+        if row is not None:
+            tags = photo_tags.get(row["id"], get_tags_for_item(db, "photo", row["id"]))
+            people = photo_people.get(row["id"], get_people_for_item(db, "photo", row["id"]))
+            item = memory_review_item("photo", row, tags, people, photo_chapters.get(row["id"], {}))
+            item["meta"] = [*item["meta"], f"{group['count']} matching copies"]
+            duplicate_issue["items"].append(item)
+
+    issues = [duplicate_issue, *issue_defs.values()]
+    issues = [issue for issue in issues if issue["count"]]
+    issues.sort(key=lambda issue: (issue["priority"], -issue["count"], issue["title"].casefold()))
+    total_memories = len(photo_rows) + len(text_rows)
+    total_issues = sum(issue["count"] for issue in issues)
+    return {
+        "stats": [
+            review_issue_stat("Review issues", total_issues, url_for("timeline_review")),
+            review_issue_stat("Memories", total_memories, url_for("timeline")),
+            review_issue_stat("Photos", len(photo_rows), url_for("timeline_search", kind="photo")),
+            review_issue_stat("Text entries", len(text_rows), url_for("timeline_search", kind="text")),
+        ],
+        "issues": issues,
+        "complete": total_memories > 0 and not issues,
+        "empty": total_memories == 0,
+        "top_issue": issues[0] if issues else None,
+    }
+
+
 COLLECTION_KIND_CHOICES = ("", "photo", "text")
 TIMELINE_STORY_SOURCE_CHOICES = ("search", "collections")
 
@@ -7389,6 +7590,15 @@ def timeline():
     years = list(user_years())
     year_counts = get_year_counts(db, allowed_tags=privacy_preview_allowed_tags(preview))
     return render_template("timeline.html", years=years, year_counts=year_counts)
+
+
+@app.route("/timeline/review")
+@birthday_required
+def timeline_review():
+    return render_template(
+        "timeline_review.html",
+        queue=build_memory_review_queue(get_db()),
+    )
 
 
 @app.route("/timeline/import", methods=("GET", "POST"))

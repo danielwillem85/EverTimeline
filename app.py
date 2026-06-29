@@ -39,6 +39,8 @@ ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 JPEG_STORAGE_MIME = "image/jpeg"
 JPEG_STORAGE_QUALITY = 72
 JPEG_STORAGE_MAX_EDGE = 1600
+COMPACT_JPEG_STORAGE_QUALITY = 52
+COMPACT_JPEG_STORAGE_MAX_EDGE = 1200
 EXIF_DATE_TAGS = (36867, 36868, 306)
 TAG_CHOICES = ("private", "family", "friends", "public")
 REACTION_CHOICES = ("like", "love")
@@ -106,6 +108,16 @@ DEFAULT_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
 ADMIN_USERNAME = "Daniel"
 SQLITE_BUSY_TIMEOUT_MS = 30000
 IMAGE_CONVERSION_COMMIT_INTERVAL = 5
+
+
+def format_file_size(byte_count):
+    value = float(byte_count or 0)
+    for unit in ("bytes", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            if unit == "bytes":
+                return f"{int(value)} bytes"
+            return f"{value:.1f} {unit}"
+        value /= 1024
 
 
 def env_flag(name, default=False):
@@ -1082,7 +1094,11 @@ def photo_image_hash(image_data):
     return hashlib.sha256(image_data).hexdigest()
 
 
-def storage_jpeg_from_image(image_data):
+def storage_jpeg_from_image(
+    image_data,
+    quality=JPEG_STORAGE_QUALITY,
+    max_edge=JPEG_STORAGE_MAX_EDGE,
+):
     try:
         with Image.open(io.BytesIO(image_data)) as image:
             image = ImageOps.exif_transpose(image)
@@ -1094,9 +1110,9 @@ def storage_jpeg_from_image(image_data):
             elif image.mode != "RGB":
                 image = image.convert("RGB")
 
-            if max(image.size) > JPEG_STORAGE_MAX_EDGE:
+            if max(image.size) > max_edge:
                 image.thumbnail(
-                    (JPEG_STORAGE_MAX_EDGE, JPEG_STORAGE_MAX_EDGE),
+                    (max_edge, max_edge),
                     Image.Resampling.LANCZOS,
                 )
 
@@ -1104,7 +1120,7 @@ def storage_jpeg_from_image(image_data):
             image.save(
                 buffer,
                 format="JPEG",
-                quality=JPEG_STORAGE_QUALITY,
+                quality=quality,
                 optimize=True,
                 progressive=True,
             )
@@ -1151,6 +1167,18 @@ def admin_image_storage_summary(db):
     import_total = imports["total_count"] or 0
     photo_jpeg = photos["jpeg_count"] or 0
     import_jpeg = imports["jpeg_count"] or 0
+    image_bytes = db.execute(
+        """
+        SELECT
+            COALESCE((SELECT SUM(LENGTH(image_data)) FROM photos), 0) +
+            COALESCE((SELECT SUM(LENGTH(image_data)) FROM photo_import_items), 0) AS total_bytes
+        """
+    ).fetchone()["total_bytes"]
+    page_size = db.execute("PRAGMA page_size").fetchone()[0]
+    page_count = db.execute("PRAGMA page_count").fetchone()[0]
+    freelist_count = db.execute("PRAGMA freelist_count").fetchone()[0]
+    database_size = page_size * page_count
+    reclaimable_size = page_size * freelist_count
     return {
         "photo_total": photo_total,
         "photo_jpeg": photo_jpeg,
@@ -1158,21 +1186,38 @@ def admin_image_storage_summary(db):
         "import_total": import_total,
         "import_jpeg": import_jpeg,
         "import_non_jpeg": import_total - import_jpeg,
+        "image_size": image_bytes,
+        "image_size_label": format_file_size(image_bytes),
+        "database_size": database_size,
+        "database_size_label": format_file_size(database_size),
+        "reclaimable_size": reclaimable_size,
+        "reclaimable_size_label": format_file_size(reclaimable_size),
     }
 
 
-def convert_image_rows_to_jpeg(db, table_name, id_column, hash_column=True):
+def convert_image_rows_to_jpeg(
+    db,
+    table_name,
+    id_column,
+    hash_column=True,
+    include_jpeg=False,
+    quality=JPEG_STORAGE_QUALITY,
+    max_edge=JPEG_STORAGE_MAX_EDGE,
+):
+    where_clause = "" if include_jpeg else "WHERE mime_type IS NULL OR mime_type != ?"
+    params = () if include_jpeg else (JPEG_STORAGE_MIME,)
     rows = db.execute(
         f"""
         SELECT {id_column} AS row_id
         FROM {table_name}
-        WHERE mime_type IS NULL OR mime_type != ?
+        {where_clause}
         ORDER BY {id_column} ASC
         """,
-        (JPEG_STORAGE_MIME,),
+        params,
     ).fetchall()
     converted_count = 0
     skipped_count = 0
+    saved_bytes = 0
     for row in rows:
         image_row = db.execute(
             f"""
@@ -1186,9 +1231,17 @@ def convert_image_rows_to_jpeg(db, table_name, id_column, hash_column=True):
             skipped_count += 1
             continue
 
+        original_size = len(image_row["image_data"])
         try:
-            image_data = storage_jpeg_from_image(image_row["image_data"])
+            image_data = storage_jpeg_from_image(
+                image_row["image_data"],
+                quality=quality,
+                max_edge=max_edge,
+            )
         except ValueError:
+            skipped_count += 1
+            continue
+        if len(image_data) >= original_size and include_jpeg:
             skipped_count += 1
             continue
 
@@ -1211,19 +1264,62 @@ def convert_image_rows_to_jpeg(db, table_name, id_column, hash_column=True):
                 (image_data, JPEG_STORAGE_MIME, row["row_id"]),
             )
         converted_count += 1
+        saved_bytes += max(original_size - len(image_data), 0)
         if converted_count % IMAGE_CONVERSION_COMMIT_INTERVAL == 0:
             db.commit()
-    return {"converted": converted_count, "skipped": skipped_count}
+    return {"converted": converted_count, "skipped": skipped_count, "saved_bytes": saved_bytes}
 
 
-def convert_all_database_images_to_jpeg(db):
-    photo_result = convert_image_rows_to_jpeg(db, "photos", "id", True)
-    import_result = convert_image_rows_to_jpeg(db, "photo_import_items", "id", True)
+def convert_all_database_images_to_jpeg(
+    db,
+    include_jpeg=False,
+    quality=JPEG_STORAGE_QUALITY,
+    max_edge=JPEG_STORAGE_MAX_EDGE,
+):
+    photo_result = convert_image_rows_to_jpeg(
+        db,
+        "photos",
+        "id",
+        True,
+        include_jpeg=include_jpeg,
+        quality=quality,
+        max_edge=max_edge,
+    )
+    import_result = convert_image_rows_to_jpeg(
+        db,
+        "photo_import_items",
+        "id",
+        True,
+        include_jpeg=include_jpeg,
+        quality=quality,
+        max_edge=max_edge,
+    )
     return {
         "converted": photo_result["converted"] + import_result["converted"],
         "skipped": photo_result["skipped"] + import_result["skipped"],
         "photos_converted": photo_result["converted"],
         "import_items_converted": import_result["converted"],
+        "saved_bytes": photo_result["saved_bytes"] + import_result["saved_bytes"],
+    }
+
+
+def vacuum_database(db):
+    before_size = DATABASE.stat().st_size if DATABASE.exists() else 0
+    db.commit()
+    try:
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except sqlite3.OperationalError:
+        pass
+    db.execute("VACUUM")
+    try:
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except sqlite3.OperationalError:
+        pass
+    after_size = DATABASE.stat().st_size if DATABASE.exists() else 0
+    return {
+        "before_size": before_size,
+        "after_size": after_size,
+        "saved_bytes": max(before_size - after_size, 0),
     }
 
 
@@ -6476,6 +6572,49 @@ def admin_convert_images_to_jpeg():
         flash("No image rows were converted.", "success")
     if result["skipped"]:
         flash(f"Skipped {result['skipped']} image rows that could not be converted.", "error")
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/images/compact", methods=("POST",))
+@admin_required
+def admin_compact_images():
+    db = get_db()
+    result = convert_all_database_images_to_jpeg(
+        db,
+        include_jpeg=True,
+        quality=COMPACT_JPEG_STORAGE_QUALITY,
+        max_edge=COMPACT_JPEG_STORAGE_MAX_EDGE,
+    )
+    db.commit()
+    vacuum_result = vacuum_database(db)
+    if result["converted"]:
+        flash(
+            (
+                f"Compacted {result['converted']} image rows and saved "
+                f"{format_file_size(result['saved_bytes'])} in image data. "
+                f"Database is now {format_file_size(vacuum_result['after_size'])}."
+            ),
+            "success",
+        )
+    else:
+        flash("Images were already at or below the compact storage profile.", "success")
+    if result["skipped"]:
+        flash(f"Skipped {result['skipped']} image rows that could not be compacted further.", "error")
+    return redirect(url_for("admin"))
+
+
+@app.route("/admin/database/vacuum", methods=("POST",))
+@admin_required
+def admin_vacuum_database():
+    db = get_db()
+    result = vacuum_database(db)
+    flash(
+        (
+            f"Reclaimed {format_file_size(result['saved_bytes'])}. "
+            f"Database is now {format_file_size(result['after_size'])}."
+        ),
+        "success",
+    )
     return redirect(url_for("admin"))
 
 

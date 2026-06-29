@@ -48,6 +48,10 @@
             </form>
         </div>
         <div class="carousel-stage" id="carousel-stage" hidden>
+            <div class="carousel-playback-progress" id="carousel-playback-progress" hidden>
+                <span id="carousel-playback-fill" aria-hidden="true"></span>
+                <progress id="carousel-playback-bar" max="100" value="0" aria-label="Carousel item progress"></progress>
+            </div>
             <article class="carousel-card" id="carousel-card"></article>
             <p class="empty-state carousel-empty" id="carousel-empty" hidden>No entries yet.</p>
         </div>

@@ -96,6 +96,8 @@
                         data-confirm-title="Apply bulk visibility?"
                         data-confirm-message="This will update who can see every photo and text entry in {{ month_name }} {{ year }}."
                         data-confirm-action="Apply to month"
+                        data-submit-progress
+                        data-progress-label="Updating month visibility..."
                     >
                         {{ csrf_field() }}
                         {{ tag_radio_group() }}
@@ -108,7 +110,12 @@
     </div>
     {% if not privacy_preview %}
         <div class="page-actions">
-            <a class="button secondary" href="{{ url_for('export_month_pdf', year=year, month=month) }}">Export month PDF</a>
+            <a
+                class="button secondary"
+                href="{{ url_for('export_month_pdf', year=year, month=month) }}"
+                data-download-progress
+                data-progress-label="Preparing month PDF..."
+            >Export month PDF</a>
         </div>
     {% endif %}
 </section>

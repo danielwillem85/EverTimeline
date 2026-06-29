@@ -44,6 +44,8 @@
                         data-confirm-title="Apply bulk visibility?"
                         data-confirm-message="This will update who can see every photo and text entry in {{ year }}."
                         data-confirm-action="Apply to year"
+                        data-submit-progress
+                        data-progress-label="Updating year visibility..."
                     >
                         {{ csrf_field() }}
                         {{ tag_radio_group() }}
@@ -56,12 +58,37 @@
     </div>
     {% if not privacy_preview %}
         <div class="page-actions">
-            <a class="button secondary" href="{{ url_for('export_year_pdf', year=year) }}">Export year PDF</a>
+            <a
+                class="button secondary"
+                href="{{ url_for('export_year_pdf', year=year) }}"
+                data-download-progress
+                data-progress-label="Preparing year PDF..."
+            >Export year PDF</a>
         </div>
     {% endif %}
 </section>
 
 {% include "_privacy_preview.html" %}
+
+{% set month_progress = namespace(months_with_items=0, item_count=0, max_count=0) %}
+{% for month_number, month_name in months %}
+    {% set count = month_counts.get(month_number, 0) %}
+    {% if count %}
+        {% set month_progress.months_with_items = month_progress.months_with_items + 1 %}
+        {% set month_progress.item_count = month_progress.item_count + count %}
+        {% if count > month_progress.max_count %}
+            {% set month_progress.max_count = count %}
+        {% endif %}
+    {% endif %}
+{% endfor %}
+<section class="progress-card timeline-completeness-card" aria-label="Year completeness">
+    <div class="progress-card-row">
+        <strong>Year completeness</strong>
+        <span>{{ month_progress.months_with_items }} of 12 months with memories</span>
+    </div>
+    <progress max="12" value="{{ month_progress.months_with_items }}"></progress>
+    <p>{{ month_progress.item_count }} item{% if month_progress.item_count != 1 %}s{% endif %} in {{ year }}</p>
+</section>
 
 {% set carousel_items_url = preview_url('timeline_items', year=year) %}
 <section class="timeline-frame year-carousel-actions" aria-label="Year carousel">
@@ -71,10 +98,14 @@
 
 <section class="month-grid" aria-label="Months in {{ year }}">
     {% for month_number, month_name in months %}
+        {% set month_count = month_counts.get(month_number, 0) %}
         <a class="month-button counted-button" href="{{ preview_url('month_view', year=year, month=month_number) }}">
             <span>{{ month_name }}</span>
-            {% if month_counts.get(month_number, 0) %}
-                <span class="count-badge">{{ month_counts[month_number] }}</span>
+            {% if month_count %}
+                <span class="count-badge">{{ month_count }}</span>
+                <span class="button-progress" aria-hidden="true">
+                    <span style="width: {{ (month_count * 100 / month_progress.max_count)|round(0, 'floor') }}%"></span>
+                </span>
             {% endif %}
         </a>
     {% endfor %}

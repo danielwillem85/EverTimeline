@@ -301,6 +301,19 @@ body.nav-open {
     margin: 0;
 }
 
+.setup-progress-panel {
+    display: grid;
+    gap: 10px;
+}
+
+.setup-progress-panel .progress-card-row h1 {
+    font-size: 1.4rem;
+}
+
+.setup-progress-panel progress {
+    width: 100%;
+}
+
 .backup-panel {
     display: grid;
     gap: 16px;
@@ -965,6 +978,25 @@ textarea {
     font-weight: 900;
 }
 
+.button-progress {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    display: block;
+    height: 5px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--surface-strong);
+}
+
+.button-progress span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--primary);
+}
+
 .month-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
@@ -1209,6 +1241,168 @@ details.privacy-toggle-panel {
     background: var(--primary);
 }
 
+.processing-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: rgba(15, 18, 17, 0.64);
+}
+
+.processing-overlay[hidden] {
+    display: none;
+}
+
+.processing-panel {
+    display: grid;
+    gap: 12px;
+    width: min(420px, 100%);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 22px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.processing-panel strong {
+    font-size: 1.08rem;
+}
+
+.processing-copy {
+    color: var(--muted);
+    font-weight: 800;
+    line-height: 1.35;
+}
+
+.processing-progress-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--muted);
+    font-size: 0.88rem;
+    font-weight: 900;
+}
+
+.processing-panel progress {
+    width: 100%;
+    height: 14px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 999px;
+    background: var(--border);
+}
+
+.processing-panel progress::-webkit-progress-bar {
+    border-radius: 999px;
+    background: var(--border);
+}
+
+.processing-panel progress::-webkit-progress-value {
+    border-radius: 999px;
+    background: var(--primary);
+}
+
+.processing-panel progress::-moz-progress-bar {
+    border-radius: 999px;
+    background: var(--primary);
+}
+
+.progress-card {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 18px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    background: var(--surface);
+    box-shadow: 0 8px 22px rgba(24, 31, 28, 0.08);
+}
+
+.progress-card-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+}
+
+.progress-card-row h1,
+.progress-card-row strong,
+.progress-card p {
+    margin-bottom: 0;
+}
+
+.progress-card-row span,
+.progress-card p {
+    color: var(--muted);
+    font-size: 0.88rem;
+    font-weight: 900;
+}
+
+.progress-card progress,
+.setup-progress-panel progress,
+.chapter-bulk-progress progress,
+.carousel-playback-progress progress {
+    width: 100%;
+    height: 10px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 999px;
+    background: var(--border);
+}
+
+.progress-card progress::-webkit-progress-bar,
+.setup-progress-panel progress::-webkit-progress-bar,
+.chapter-bulk-progress progress::-webkit-progress-bar,
+.carousel-playback-progress progress::-webkit-progress-bar {
+    border-radius: 999px;
+    background: var(--border);
+}
+
+.progress-card progress::-webkit-progress-value,
+.setup-progress-panel progress::-webkit-progress-value,
+.chapter-bulk-progress progress::-webkit-progress-value,
+.carousel-playback-progress progress::-webkit-progress-value {
+    border-radius: 999px;
+    background: var(--primary);
+}
+
+.progress-card progress::-moz-progress-bar,
+.setup-progress-panel progress::-moz-progress-bar,
+.chapter-bulk-progress progress::-moz-progress-bar,
+.carousel-playback-progress progress::-moz-progress-bar {
+    border-radius: 999px;
+    background: var(--primary);
+}
+
+.timeline-completeness-card {
+    margin-top: -2px;
+}
+
+.submit-progress {
+    margin-top: 4px;
+}
+
+.floating-progress {
+    position: fixed;
+    right: 18px;
+    bottom: 18px;
+    z-index: 80;
+    width: min(360px, calc(100vw - 36px));
+    border: 1px solid rgba(22, 109, 103, 0.32);
+    border-radius: 8px;
+    padding: 12px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.floating-progress[hidden] {
+    display: none;
+}
+
 .import-upload-form {
     display: grid;
     grid-template-columns: minmax(220px, 1fr) auto;
@@ -1216,9 +1410,45 @@ details.privacy-toggle-panel {
     gap: 16px;
 }
 
+.upload-size-error {
+    grid-column: 1 / -1;
+    margin: 0;
+    border: 1px solid #e2a69c;
+    border-radius: 6px;
+    padding: 10px 12px;
+    color: #8b2c21;
+    font-weight: 800;
+    line-height: 1.35;
+}
+
+.upload-size-error[hidden] {
+    display: none;
+}
+
 .import-review-form {
     display: grid;
     gap: 16px;
+}
+
+.import-review-page-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    background: var(--surface);
+}
+
+.import-review-page-bar p {
+    margin-bottom: 0;
+    color: var(--muted);
+    font-weight: 900;
+}
+
+.import-review-page-actions {
+    flex: 0 0 auto;
 }
 
 .import-review-list {
@@ -1599,6 +1829,33 @@ details.privacy-toggle-panel {
     bottom: 12px;
 }
 
+.chapter-bulk-page-progress {
+    display: grid;
+    min-width: 110px;
+    gap: 5px;
+}
+
+.chapter-bulk-page-progress progress {
+    width: 100%;
+    height: 5px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.28);
+}
+
+.chapter-bulk-page-progress progress::-webkit-progress-bar {
+    background: rgba(255, 255, 255, 0.28);
+}
+
+.chapter-bulk-page-progress progress::-webkit-progress-value {
+    background: #fff;
+}
+
+.chapter-bulk-page-progress progress::-moz-progress-bar {
+    background: #fff;
+}
+
 .chapter-bulk-select-page {
     padding-top: 52px;
 }
@@ -1628,6 +1885,41 @@ details.privacy-toggle-panel {
 
 .chapter-bulk-toolbar .button {
     flex: 0 0 auto;
+}
+
+.chapter-bulk-progress {
+    display: grid;
+    flex: 0 1 260px;
+    min-width: 180px;
+    gap: 4px;
+}
+
+.chapter-bulk-progress-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+    color: #fff;
+    font-size: 0.82rem;
+    font-weight: 900;
+}
+
+.chapter-bulk-progress-row span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.chapter-bulk-progress progress {
+    height: 7px;
+}
+
+.chapter-bulk-progress progress::-webkit-progress-value {
+    background: #fff;
+}
+
+.chapter-bulk-progress progress::-moz-progress-bar {
+    background: #fff;
 }
 
 .chapter-bulk-thumb {
@@ -2320,6 +2612,38 @@ details.privacy-toggle-panel {
     overflow: hidden;
     padding: 24px;
     background: #101412;
+}
+
+.carousel-playback-progress {
+    position: absolute;
+    top: 10px;
+    left: 24px;
+    right: 24px;
+    z-index: 3;
+    height: 6px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.28);
+}
+
+.carousel-playback-progress[hidden] {
+    display: none;
+}
+
+.carousel-playback-progress span {
+    display: block;
+    width: 0;
+    height: 100%;
+    border-radius: inherit;
+    background: #fff;
+}
+
+.carousel-playback-progress progress {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
 }
 
 .carousel-card {
@@ -4226,6 +4550,11 @@ details.privacy-toggle-panel {
         width: 100%;
     }
 
+    .chapter-bulk-progress {
+        flex-basis: auto;
+        width: 100%;
+    }
+
     .chapter-bulk-save-form {
         right: 10px;
         bottom: 10px;
@@ -4243,6 +4572,17 @@ details.privacy-toggle-panel {
 
     .page-actions {
         justify-content: flex-start;
+    }
+
+    .progress-card-row {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .floating-progress {
+        right: 10px;
+        bottom: 10px;
+        width: calc(100vw - 20px);
     }
 
     .month-grid {

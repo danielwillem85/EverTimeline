@@ -667,6 +667,11 @@ def test_timeline_import_assistant_reviews_detected_dates_before_saving(client, 
     assert review_response.status_code == 200
     assert b"Review import" in review_response.data
     assert b"2020-05-04" in review_response.data
+    assert f"{review_path}/items/{item['id']}/thumbnail".encode() in review_response.data
+    thumbnail_response = client.get(f"{review_path}/items/{item['id']}/thumbnail")
+    assert thumbnail_response.status_code == 200
+    assert thumbnail_response.mimetype == "image/jpeg"
+    assert thumbnail_response.data.startswith(b"\xff\xd8")
 
     save_response = client.post(
         review_path,
@@ -694,6 +699,62 @@ def test_timeline_import_assistant_reviews_detected_dates_before_saving(client, 
     )["name"] == "friends"
     assert helpers.row("SELECT COUNT(*) AS count FROM photo_import_batches")["count"] == 0
     assert helpers.row("SELECT COUNT(*) AS count FROM photo_import_items")["count"] == 0
+
+
+def test_timeline_import_review_is_paginated_and_saves_page_edits(client, helpers):
+    helpers.create_user(client, "owner")
+    photos = [
+        (
+            io.BytesIO(helpers.png_bytes()),
+            f"memory-20200504-{index:02d}.png",
+            "image/png",
+        )
+        for index in range(51)
+    ]
+
+    upload_response = client.post(
+        "/timeline/import",
+        data={
+            **helpers.csrf_form_data(client, "/timeline/import"),
+            "photo": photos,
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert upload_response.status_code == 302
+    review_path = upload_response.headers["Location"]
+    page_one = client.get(review_path)
+    assert page_one.status_code == 200
+    assert b"Showing 1-50" in page_one.data
+    assert b"of 51 photos" in page_one.data
+    assert b"memory-20200504-00.png" in page_one.data
+    assert b"memory-20200504-50.png" not in page_one.data
+
+    first_item = helpers.row("SELECT * FROM photo_import_items ORDER BY id ASC LIMIT 1")
+    next_response = client.post(
+        f"{review_path}?page=2",
+        data={
+            **helpers.csrf_form_data(client, review_path),
+            "page": "1",
+            "action": "page",
+            f"photo_date_{first_item['id']}": "2020-06-07",
+            f"tags_{first_item['id']}": "friends",
+        },
+    )
+
+    assert next_response.status_code == 302
+    assert next_response.headers["Location"].endswith("?page=2")
+    saved_item = helpers.row("SELECT review_date, review_tag, review_skip FROM photo_import_items WHERE id = ?", (first_item["id"],))
+    assert dict(saved_item) == {"review_date": "2020-06-07", "review_tag": "friends", "review_skip": 0}
+
+    page_two = client.get(next_response.headers["Location"])
+    assert page_two.status_code == 200
+    assert b"Showing 51-51" in page_two.data
+    assert b"of 51 photos" in page_two.data
+    assert b"memory-20200504-50.png" in page_two.data
+    last_item = helpers.row("SELECT * FROM photo_import_items ORDER BY id DESC LIMIT 1")
+    assert f'name="photo_date_{last_item["id"]}"'.encode() in page_two.data
+    assert f'name="photo_date_{first_item["id"]}"'.encode() not in page_two.data
 
 
 def test_timeline_import_assistant_reviews_duplicate_photos(client, helpers):
@@ -729,6 +790,7 @@ def test_timeline_import_assistant_reviews_duplicate_photos(client, helpers):
     assert b"Possible duplicate" in review_response.data
     assert b"Already in timeline" in review_response.data
     assert b"Existing memory" in review_response.data
+    assert f"/photo/{existing_photo_id}/thumbnail".encode() in review_response.data
     assert b"Skip duplicate" in review_response.data
     assert b"checked" in review_response.data
 

@@ -17,15 +17,59 @@
     </div>
 </section>
 
-<form method="post" class="import-review-form">
+<section class="progress-card" aria-label="Import progress">
+    <div class="progress-card-row">
+        <strong>Import progress</strong>
+        <span>
+            Step 2 of 3: review detected dates
+            {% if page_info and page_info["total_pages"] > 1 %}
+                - page {{ page_info["current_page"] }} of {{ page_info["total_pages"] }}
+            {% endif %}
+        </span>
+    </div>
+    <progress max="3" value="2"></progress>
+</section>
+
+<form method="post" class="import-review-form" data-submit-progress data-progress-label="Importing reviewed photos...">
     {{ csrf_field() }}
+    <input type="hidden" name="page" value="{{ page_info['current_page'] }}">
+    {% if page_info["total_pages"] > 1 %}
+        <section class="import-review-page-bar" aria-label="Import review pages">
+            <p>
+                Showing {{ page_info["start_item"] }}-{{ page_info["end_item"] }}
+                of {{ page_info["total_items"] }} photos
+            </p>
+            <div class="form-actions import-review-page-actions">
+                <button
+                    class="button secondary"
+                    type="submit"
+                    name="action"
+                    value="page"
+                    formaction="{{ url_for('timeline_import_review', token=token, page=page_info['previous_page']) }}"
+                    data-target-page="{{ page_info['previous_page'] }}"
+                    data-progress-label="Loading previous review page..."
+                    {% if not page_info["has_previous"] %}disabled{% endif %}
+                >Previous page</button>
+                <button
+                    class="button secondary"
+                    type="submit"
+                    name="action"
+                    value="page"
+                    formaction="{{ url_for('timeline_import_review', token=token, page=page_info['next_page']) }}"
+                    data-target-page="{{ page_info['next_page'] }}"
+                    data-progress-label="Loading next review page..."
+                    {% if not page_info["has_next"] %}disabled{% endif %}
+                >Next page</button>
+            </div>
+        </section>
+    {% endif %}
     <div class="import-review-list">
         {% for item in items %}
             <article class="import-review-card{% if item['duplicate'] %} has-duplicate{% endif %}">
                 <div class="import-review-preview-grid">
                     <figure class="import-review-preview">
                         <img
-                            src="{{ url_for('timeline_import_item_image', token=token, item_id=item['id']) }}"
+                            src="{{ url_for('timeline_import_item_thumbnail', token=token, item_id=item['id']) }}"
                             alt="{{ item['original_filename'] }}"
                             loading="lazy"
                         >
@@ -106,8 +150,37 @@
         {% endfor %}
     </div>
     <div class="form-actions import-review-actions">
-        <button class="button primary" type="submit">Import photos</button>
+        {% if page_info["total_pages"] > 1 and page_info["has_previous"] %}
+            <button
+                class="button secondary"
+                type="submit"
+                name="action"
+                value="page"
+                formaction="{{ url_for('timeline_import_review', token=token, page=page_info['previous_page']) }}"
+                data-target-page="{{ page_info['previous_page'] }}"
+                data-progress-label="Loading previous review page..."
+            >Previous page</button>
+        {% endif %}
+        {% if page_info["total_pages"] > 1 and page_info["has_next"] %}
+            <button
+                class="button secondary"
+                type="submit"
+                name="action"
+                value="page"
+                formaction="{{ url_for('timeline_import_review', token=token, page=page_info['next_page']) }}"
+                data-target-page="{{ page_info['next_page'] }}"
+                data-progress-label="Loading next review page..."
+            >Next page</button>
+        {% endif %}
+        <button class="button primary" type="submit" name="action" value="import" data-progress-label="Importing reviewed photos...">Import photos</button>
         <a class="button secondary" href="{{ url_for('timeline_import') }}">Upload another batch</a>
+    </div>
+    <div class="upload-progress submit-progress floating-progress" data-submit-progress-panel hidden>
+        <div class="upload-progress-row">
+            <span data-submit-progress-label>Importing reviewed photos...</span>
+            <span>Step 3 of 3</span>
+        </div>
+        <progress max="100" value="0" data-submit-progress-bar></progress>
     </div>
 </form>
 {% endblock %}

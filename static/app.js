@@ -182,6 +182,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             event.preventDefault();
+            event.stopImmediatePropagation();
             const confirmed = await requestConfirmation({
                 title: form.dataset.confirmTitle || "Confirm action",
                 message: form.dataset.confirmMessage || "This action needs confirmation.",
@@ -193,7 +194,11 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             form.dataset.confirmed = "true";
-            HTMLFormElement.prototype.submit.call(form);
+            if (typeof form.requestSubmit === "function") {
+                form.requestSubmit();
+            } else {
+                HTMLFormElement.prototype.submit.call(form);
+            }
         });
     });
 
@@ -202,12 +207,42 @@ document.addEventListener("DOMContentLoaded", () => {
         const progressBar = form.querySelector("[data-upload-progress-bar]");
         const progressPercent = form.querySelector("[data-upload-progress-percent]");
         const progressLabel = form.querySelector("[data-upload-progress-label]");
+        const processingOverlay = form.querySelector("[data-upload-processing]");
+        const processingProgress = form.querySelector("[data-upload-processing-progress]");
+        const processingPercent = form.querySelector("[data-upload-processing-percent]");
+        const processingStatus = form.querySelector("[data-upload-processing-status]");
+        const uploadSizeError = form.querySelector("[data-upload-size-error]");
         const submitButton = form.querySelector("button[type='submit']");
         const fileInput = form.querySelector("input[type='file']");
+        const maxUploadBytes = Number.parseInt(form.dataset.maxUploadBytes || "0", 10);
+        let processingTimer = null;
+        let processingValue = 0;
 
         if (!progressPanel || !progressBar || !progressPercent || !window.FormData || !window.XMLHttpRequest) {
             return;
         }
+
+        const formatUploadBytes = (byteCount) => {
+            const units = ["bytes", "KB", "MB", "GB"];
+            let value = Number(byteCount || 0);
+            let unitIndex = 0;
+            while (value >= 1024 && unitIndex < units.length - 1) {
+                value /= 1024;
+                unitIndex += 1;
+            }
+            if (unitIndex === 0) {
+                return `${Math.round(value)} ${units[unitIndex]}`;
+            }
+            return `${Number(value.toFixed(1))} ${units[unitIndex]}`;
+        };
+
+        const setUploadSizeError = (message = "") => {
+            if (!uploadSizeError) {
+                return;
+            }
+            uploadSizeError.textContent = message;
+            uploadSizeError.hidden = !message;
+        };
 
         const setUploadProgress = (percent, label = "Uploading...") => {
             const normalizedPercent = Math.max(0, Math.min(100, Math.round(percent)));
@@ -219,6 +254,72 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         };
 
+        const clearProcessingTimer = () => {
+            if (processingTimer) {
+                window.clearInterval(processingTimer);
+                processingTimer = null;
+            }
+        };
+
+        const setProcessingProgress = (percent, status = "Preparing images...") => {
+            processingValue = Math.max(0, Math.min(100, Math.round(percent)));
+            if (processingProgress) {
+                processingProgress.value = processingValue;
+            }
+            if (processingPercent) {
+                processingPercent.textContent = `${processingValue}%`;
+            }
+            if (processingStatus) {
+                processingStatus.textContent = status;
+            }
+        };
+
+        const resetUploadProcessing = () => {
+            clearProcessingTimer();
+            processingValue = 0;
+            setProcessingProgress(0);
+            if (processingOverlay) {
+                processingOverlay.hidden = true;
+            }
+        };
+
+        const showUploadProcessing = () => {
+            setUploadProgress(100, "Processing...");
+            if (processingOverlay) {
+                processingOverlay.hidden = false;
+            }
+            if (!processingProgress) {
+                return;
+            }
+            if (processingValue < 8) {
+                setProcessingProgress(8);
+            }
+            if (!processingTimer) {
+                processingTimer = window.setInterval(() => {
+                    const nextValue = Math.min(96, processingValue + Math.max(1, Math.round((96 - processingValue) * 0.12)));
+                    setProcessingProgress(nextValue);
+                }, 420);
+            }
+        };
+
+        const completeUploadProcessing = () => {
+            clearProcessingTimer();
+            if (processingOverlay) {
+                processingOverlay.hidden = false;
+            }
+            setProcessingProgress(100, "Review ready.");
+        };
+
+        if (fileInput) {
+            fileInput.addEventListener("change", () => {
+                setUploadSizeError();
+                progressPanel.hidden = true;
+                resetUploadProcessing();
+                progressBar.value = 0;
+                progressPercent.textContent = "0%";
+            });
+        }
+
         form.addEventListener("submit", (event) => {
             if (form.dataset.nativeSubmit === "true") {
                 delete form.dataset.nativeSubmit;
@@ -226,12 +327,34 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             event.preventDefault();
+            setUploadSizeError();
+
+            const selectedFiles = fileInput && fileInput.files ? fileInput.files.length : 0;
+            const selectedBytes = fileInput && fileInput.files
+                ? Array.from(fileInput.files).reduce((total, file) => total + file.size, 0)
+                : 0;
+
+            if (maxUploadBytes > 0 && selectedBytes > maxUploadBytes) {
+                progressPanel.hidden = true;
+                resetUploadProcessing();
+                if (submitButton) {
+                    submitButton.disabled = false;
+                }
+                setUploadSizeError(
+                    `Selected files total ${formatUploadBytes(selectedBytes)}. The upload limit is ${formatUploadBytes(maxUploadBytes)}. Choose fewer or smaller photos.`
+                );
+                if (uploadSizeError) {
+                    uploadSizeError.focus({preventScroll: true});
+                }
+                return;
+            }
+
             if (submitButton) {
                 submitButton.disabled = true;
             }
 
-            const selectedFiles = fileInput && fileInput.files ? fileInput.files.length : 0;
-            const uploadLabel = selectedFiles > 1 ? `Uploading ${selectedFiles} photos...` : "Uploading photo...";
+            const uploadLabel = form.dataset.uploadLabel
+                || (selectedFiles > 1 ? `Uploading ${selectedFiles} photos...` : "Uploading photo...");
             setUploadProgress(0, uploadLabel);
 
             const request = new XMLHttpRequest();
@@ -246,23 +369,36 @@ document.addEventListener("DOMContentLoaded", () => {
                     return;
                 }
                 setUploadProgress((progressEvent.loaded / progressEvent.total) * 100, uploadLabel);
+                if (progressEvent.loaded >= progressEvent.total) {
+                    showUploadProcessing();
+                }
+            });
+
+            request.upload.addEventListener("load", () => {
+                showUploadProcessing();
             });
 
             request.addEventListener("load", () => {
-                setUploadProgress(100, "Processing...");
-                const responseUrl = request.responseURL || window.location.href;
-                if (responseUrl) {
-                    window.history.replaceState({}, "", responseUrl);
-                }
-                document.open();
-                document.write(request.responseText);
-                document.close();
+                completeUploadProcessing();
+
+                window.requestAnimationFrame(() => {
+                    window.setTimeout(() => {
+                        const responseUrl = request.responseURL || window.location.href;
+                        if (responseUrl) {
+                            window.history.replaceState({}, "", responseUrl);
+                        }
+                        document.open();
+                        document.write(request.responseText);
+                        document.close();
+                    }, processingOverlay ? 120 : 0);
+                });
             });
 
             request.addEventListener("error", () => {
                 if (submitButton) {
                     submitButton.disabled = false;
                 }
+                resetUploadProcessing();
                 setUploadProgress(progressBar.value || 0, "Upload failed.");
             });
 
@@ -270,10 +406,141 @@ document.addEventListener("DOMContentLoaded", () => {
                 if (submitButton) {
                     submitButton.disabled = false;
                 }
+                resetUploadProcessing();
                 setUploadProgress(progressBar.value || 0, "Upload canceled.");
             });
 
             request.send(new FormData(form));
+        });
+    });
+
+    const startProgressAnimation = (progressBar, label, message = "Working...") => {
+        if (!progressBar) {
+            return () => {};
+        }
+
+        progressBar.max = 100;
+        progressBar.value = 8;
+        if (label) {
+            label.textContent = message;
+        }
+
+        let progressValue = 8;
+        const timer = window.setInterval(() => {
+            progressValue = Math.min(94, progressValue + Math.max(1, Math.round((94 - progressValue) * 0.14)));
+            progressBar.value = progressValue;
+        }, 360);
+
+        return ({complete = false, completeMessage = "Done."} = {}) => {
+            window.clearInterval(timer);
+            if (complete) {
+                progressBar.value = 100;
+                if (label) {
+                    label.textContent = completeMessage;
+                }
+            }
+        };
+    };
+
+    const progressPanelMarkup = (labelText) => {
+        const panel = document.createElement("div");
+        panel.className = "upload-progress submit-progress";
+        panel.dataset.dynamicProgressPanel = "true";
+        panel.hidden = true;
+
+        const row = document.createElement("div");
+        row.className = "upload-progress-row";
+
+        const label = document.createElement("span");
+        label.dataset.submitProgressLabel = "true";
+        label.textContent = labelText;
+
+        const value = document.createElement("span");
+        value.textContent = "";
+
+        const progress = document.createElement("progress");
+        progress.max = 100;
+        progress.value = 0;
+        progress.dataset.submitProgressBar = "true";
+
+        row.append(label, value);
+        panel.append(row, progress);
+        return panel;
+    };
+
+    document.querySelectorAll("form[data-submit-progress]").forEach((form) => {
+        let panel = form.querySelector("[data-submit-progress-panel]");
+        if (!panel) {
+            panel = progressPanelMarkup(form.dataset.progressLabel || "Working...");
+            form.appendChild(panel);
+        }
+        const progressBar = panel.querySelector("[data-submit-progress-bar], progress");
+        const label = panel.querySelector("[data-submit-progress-label], [data-submit-progress-label='true']");
+
+        form.addEventListener("submit", (event) => {
+            const submitter = event.submitter && event.submitter.matches("button[type='submit'], input[type='submit']")
+                ? event.submitter
+                : null;
+            const message = submitter?.dataset.progressLabel || form.dataset.progressLabel || "Working...";
+            form.querySelectorAll("[data-submit-progress-submitter]").forEach((input) => input.remove());
+            if (submitter) {
+                if (submitter.name) {
+                    const submitterInput = document.createElement("input");
+                    submitterInput.type = "hidden";
+                    submitterInput.name = submitter.name;
+                    submitterInput.value = submitter.value;
+                    submitterInput.dataset.submitProgressSubmitter = "true";
+                    form.appendChild(submitterInput);
+                }
+                if (submitter.dataset.targetPage) {
+                    const pageInput = document.createElement("input");
+                    pageInput.type = "hidden";
+                    pageInput.name = "target_page";
+                    pageInput.value = submitter.dataset.targetPage;
+                    pageInput.dataset.submitProgressSubmitter = "true";
+                    form.appendChild(pageInput);
+                }
+                if (submitter.formAction) {
+                    form.action = submitter.formAction;
+                }
+                if (submitter.formMethod) {
+                    form.method = submitter.formMethod;
+                }
+            }
+            panel.hidden = false;
+            form.querySelectorAll("button[type='submit'], input[type='submit']").forEach((button) => {
+                button.disabled = true;
+            });
+            startProgressAnimation(progressBar, label, message);
+        });
+    });
+
+    let downloadProgressHideTimer = null;
+    const showDownloadProgress = (message) => {
+        let panel = document.querySelector("[data-floating-progress]");
+        if (!panel) {
+            panel = progressPanelMarkup(message);
+            panel.classList.add("floating-progress");
+            panel.dataset.floatingProgress = "true";
+            document.body.appendChild(panel);
+        }
+
+        panel.hidden = false;
+        const progressBar = panel.querySelector("[data-submit-progress-bar], progress");
+        const label = panel.querySelector("[data-submit-progress-label], [data-submit-progress-label='true']");
+        const stop = startProgressAnimation(progressBar, label, message);
+        window.clearTimeout(downloadProgressHideTimer);
+        downloadProgressHideTimer = window.setTimeout(() => {
+            stop({complete: true, completeMessage: "Download should begin."});
+            downloadProgressHideTimer = window.setTimeout(() => {
+                panel.hidden = true;
+            }, 1800);
+        }, 4500);
+    };
+
+    document.querySelectorAll("[data-download-progress]").forEach((link) => {
+        link.addEventListener("click", () => {
+            showDownloadProgress(link.dataset.progressLabel || "Preparing download...");
         });
     });
 
@@ -664,10 +931,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (chapterBulkPage) {
         const bulkGrid = chapterBulkPage.querySelector("[data-chapter-bulk-grid]");
         const bulkStatus = chapterBulkPage.querySelector("[data-chapter-bulk-status]");
+        const bulkPageCountWrap = chapterBulkPage.querySelector("[data-chapter-bulk-page-count-wrap]");
         const bulkPageCount = chapterBulkPage.querySelector("[data-chapter-bulk-page-count]");
+        const bulkPageProgress = chapterBulkPage.querySelector("[data-chapter-bulk-page-progress]");
         const bulkPrevButton = chapterBulkPage.querySelector("[data-chapter-bulk-prev]");
         const bulkNextButton = chapterBulkPage.querySelector("[data-chapter-bulk-next]");
         const bulkSelectedCount = chapterBulkPage.querySelector("[data-chapter-bulk-selected-count]");
+        const bulkTotalCount = chapterBulkPage.querySelector("[data-chapter-bulk-total-count]");
+        const bulkSelectedProgress = chapterBulkPage.querySelector("[data-chapter-bulk-selected-progress]");
         const bulkSelectedInput = chapterBulkPage.querySelector("[data-chapter-bulk-selected-input]");
         const bulkSaveButton = chapterBulkPage.querySelector("[data-chapter-bulk-save]");
         const bulkUrl = chapterBulkPage.dataset.photoUrl || "/api/splash-photos";
@@ -678,6 +949,7 @@ document.addEventListener("DOMContentLoaded", () => {
         let bulkPageIndex = 0;
         let bulkPageSize = 0;
         let bulkTotalPages = 0;
+        let bulkTotalPhotos = 0;
         let bulkResizeTimer = null;
 
         const setBulkStatus = (message) => {
@@ -702,6 +974,13 @@ document.addEventListener("DOMContentLoaded", () => {
             if (bulkSelectedCount) {
                 bulkSelectedCount.textContent = `${count} selected`;
             }
+            if (bulkTotalCount) {
+                bulkTotalCount.textContent = bulkTotalPhotos === 1 ? "1 photo total" : `${bulkTotalPhotos} photos total`;
+            }
+            if (bulkSelectedProgress) {
+                bulkSelectedProgress.max = bulkTotalPhotos || 1;
+                bulkSelectedProgress.value = bulkTotalPhotos ? count : 0;
+            }
             if (bulkSelectedInput) {
                 bulkSelectedInput.value = JSON.stringify(selectedPhotoIds);
             }
@@ -719,8 +998,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 bulkNextButton.hidden = !hasPages;
             }
             if (bulkPageCount) {
-                bulkPageCount.hidden = bulkTotalPages <= 0;
                 bulkPageCount.textContent = bulkTotalPages > 0 ? `${bulkPageIndex + 1} of ${bulkTotalPages}` : "";
+            }
+            if (bulkPageCountWrap) {
+                bulkPageCountWrap.hidden = bulkTotalPages <= 0;
+            }
+            if (bulkPageProgress) {
+                bulkPageProgress.max = bulkTotalPages || 1;
+                bulkPageProgress.value = bulkTotalPages > 0 ? bulkPageIndex + 1 : 0;
             }
         };
 
@@ -790,6 +1075,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 const payload = await response.json();
                 bulkPageIndex = payload.page || 0;
                 bulkTotalPages = payload.total_pages || 0;
+                bulkTotalPhotos = payload.total || 0;
                 renderBulkPhotos(payload.photos || []);
                 setBulkStatus(payload.total ? "" : "No photos yet.");
                 updateBulkControls();
@@ -797,6 +1083,7 @@ document.addEventListener("DOMContentLoaded", () => {
             } catch (error) {
                 renderBulkPhotos([]);
                 bulkTotalPages = 0;
+                bulkTotalPhotos = 0;
                 setBulkStatus("Photos could not be loaded.");
                 updateBulkControls();
                 updateBulkSelection();
@@ -866,6 +1153,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const carouselPhotoModalTitle = document.getElementById("carousel-photo-modal-title");
         const carouselPhotoModalDate = document.getElementById("carousel-photo-modal-date");
         const carouselPhotoModalCaption = document.getElementById("carousel-photo-modal-caption");
+        const carouselPlaybackProgress = document.getElementById("carousel-playback-progress");
+        const carouselPlaybackBar = document.getElementById("carousel-playback-bar");
+        const carouselPlaybackFill = document.getElementById("carousel-playback-fill");
         const skipCarouselTagFilter = allItemsModal.dataset.skipTagFilter === "true";
         const viewAllTitle = viewAllButton.dataset.carouselTitle || "View all";
         const viewRandomTitle = viewRandomButton ? viewRandomButton.dataset.carouselTitle || "View random" : "View random";
@@ -888,9 +1178,44 @@ document.addEventListener("DOMContentLoaded", () => {
             return shuffled;
         };
 
+        const stopCarouselProgress = () => {
+            if (carouselPlaybackBar) {
+                carouselPlaybackBar.value = 0;
+            }
+            if (carouselPlaybackFill) {
+                carouselPlaybackFill.style.transition = "none";
+                carouselPlaybackFill.style.width = "0%";
+            }
+            if (carouselPlaybackProgress) {
+                carouselPlaybackProgress.hidden = true;
+            }
+        };
+
+        const startCarouselProgress = (durationMs) => {
+            stopCarouselProgress();
+            if (!carouselPlaybackBar || !carouselPlaybackProgress || !carouselPlaybackFill || durationMs <= 0) {
+                return;
+            }
+
+            carouselPlaybackProgress.hidden = false;
+            carouselPlaybackBar.max = 100;
+            carouselPlaybackBar.value = 0;
+            carouselPlaybackFill.style.transition = "none";
+            carouselPlaybackFill.style.width = "0%";
+            window.requestAnimationFrame(() => {
+                if (carouselPaused || allItemsModal.hidden) {
+                    return;
+                }
+                carouselPlaybackBar.value = 100;
+                carouselPlaybackFill.style.transition = `width ${durationMs}ms linear`;
+                carouselPlaybackFill.style.width = "100%";
+            });
+        };
+
         const clearCarouselTimers = () => {
             carouselTimers.forEach((timer) => clearTimeout(timer));
             carouselTimers = [];
+            stopCarouselProgress();
         };
 
         const setCarouselTimer = (callback, delay) => {
@@ -1261,6 +1586,7 @@ document.addEventListener("DOMContentLoaded", () => {
         };
 
         const scheduleCarouselAdvance = (visibleDelay = carouselDisplayMs) => {
+            startCarouselProgress(visibleDelay);
             setCarouselTimer(() => {
                 if (carouselPaused || allItemsModal.hidden) {
                     return;

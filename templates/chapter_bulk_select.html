@@ -14,14 +14,23 @@
     <div class="chapter-bulk-toolbar">
         <a class="button secondary small" href="{{ url_for('chapters') }}">Chapters</a>
         <strong>Visual bulk select</strong>
-        <span data-chapter-bulk-selected-count>0 selected</span>
+        <div class="chapter-bulk-progress">
+            <div class="chapter-bulk-progress-row">
+                <span data-chapter-bulk-selected-count>0 selected</span>
+                <span data-chapter-bulk-total-count>0 photos total</span>
+            </div>
+            <progress max="1" value="0" data-chapter-bulk-selected-progress aria-label="Selected photos progress"></progress>
+        </div>
     </div>
 
     <div class="splash-grid" data-chapter-bulk-grid aria-live="polite"></div>
     <p class="splash-status" data-chapter-bulk-status>Loading photos...</p>
     <button class="splash-page-button splash-page-prev" type="button" data-chapter-bulk-prev aria-label="Previous thumbnails">&lt;</button>
     <button class="splash-page-button splash-page-next" type="button" data-chapter-bulk-next aria-label="Next thumbnails">&gt;</button>
-    <div class="splash-page-count" data-chapter-bulk-page-count></div>
+    <div class="splash-page-count chapter-bulk-page-progress" data-chapter-bulk-page-count-wrap>
+        <span data-chapter-bulk-page-count></span>
+        <progress max="1" value="0" data-chapter-bulk-page-progress aria-label="Photo page progress"></progress>
+    </div>
 
     <form class="chapter-bulk-save-form" method="post" action="{{ url_for('chapter_bulk_review') }}">
         {{ csrf_field() }}

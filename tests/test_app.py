@@ -1139,6 +1139,124 @@ def test_saved_timeline_collections_filter_save_and_delete(app, client, helpers)
     assert helpers.row("SELECT COUNT(*) AS count FROM saved_timeline_views")["count"] == 0
 
 
+def test_timeline_stories_can_save_and_delete_from_search_filters(app, client, helpers):
+    helpers.create_user(client, "owner")
+    helpers.upload_photo(
+        client,
+        filename="story-photo.png",
+        title="Weekend walk",
+        caption="Summer walk by the river",
+        tag="private",
+    )
+    helpers.create_text(
+        client,
+        "Family picnic notes",
+        entry_date="2020-05-06",
+        tag="private",
+    )
+    other = app.test_client()
+    helpers.create_user(other, "other")
+    helpers.upload_photo(
+        other,
+        filename="other-story-photo.png",
+        title="Other photo walk",
+        tag="private",
+    )
+
+    save_response = client.post(
+        "/timeline/stories",
+        data={
+            **helpers.csrf_form_data(client, "/timeline/stories"),
+            "source_mode": "search",
+            "q": "walk",
+            "kind": "all",
+            "title": "Weekend memories",
+            "subtitle": "An easy one",
+        },
+    )
+    assert save_response.status_code == 302
+    story_id = save_response.headers["Location"].rsplit("/", 1)[-1]
+
+    stories = helpers.row(
+        "SELECT * FROM timeline_stories WHERE title = ?",
+        ("Weekend memories",),
+    )
+    assert stories
+    assert stories["source_mode"] == "search"
+    assert json.loads(stories["filter_payload"])["query"] == "walk"
+
+    story_page = client.get(f"/timeline/stories/{story_id}")
+    assert story_page.status_code == 200
+    assert b"Weekend memories" in story_page.data
+    assert b"Weekend walk" in story_page.data
+    assert b"Other photo walk" not in story_page.data
+
+    saved_stories_page = client.get("/timeline/stories")
+    assert saved_stories_page.status_code == 200
+    assert b"Weekend memories" in saved_stories_page.data
+
+    delete_response = client.post(
+        f"/timeline/stories/{story_id}/delete",
+        data=helpers.csrf_form_data(client, "/timeline/stories"),
+    )
+    assert delete_response.status_code == 302
+    assert helpers.row("SELECT COUNT(*) AS count FROM timeline_stories")["count"] == 0
+
+
+def test_timeline_stories_can_save_and_delete_from_collections_filters(app, client, helpers):
+    helpers.create_user(client, "owner")
+    helpers.create_text(
+        client,
+        "Family trail notes",
+        entry_date="2020-05-03",
+        tag="friends",
+        people="Alice Walker",
+        location_name="Trailhead",
+    )
+    helpers.upload_photo(
+        client,
+        filename="trail-photo.png",
+        title="Trail photo",
+        photo_date="2020-05-04",
+        tag="friends",
+        people="Alice Walker",
+        location_name="Trailhead",
+    )
+
+    save_response = client.post(
+        "/timeline/stories",
+        data={
+            **helpers.csrf_form_data(client, "/timeline/stories"),
+            "source_mode": "collections",
+            "item_kind": "photo",
+            "people": "Alice Walker",
+            "location": "Trailhead",
+            "privacy_tag": "friends",
+            "title": "Trail stories",
+            "subtitle": "Friendship routes",
+            "date_start": "2020-05-01",
+            "date_end": "2020-05-31",
+        },
+    )
+    assert save_response.status_code == 302
+    story_id = save_response.headers["Location"].rsplit("/", 1)[-1]
+
+    story = helpers.row("SELECT * FROM timeline_stories WHERE id = ?", (story_id,))
+    assert story["source_mode"] == "collections"
+
+    story_page = client.get(f"/timeline/stories/{story_id}")
+    assert story_page.status_code == 200
+    assert b"Trail stories" in story_page.data
+    assert b"Trail photo" in story_page.data
+    assert b"Family trail notes" not in story_page.data
+
+    delete_response = client.post(
+        f"/timeline/stories/{story_id}/delete",
+        data=helpers.csrf_form_data(client, "/timeline/stories"),
+    )
+    assert delete_response.status_code == 302
+
+
 def test_timeline_map_shows_owned_locations_and_updates_photo_place(app, client, helpers):
     helpers.create_user(client, "owner")
     photo_id = helpers.upload_photo(

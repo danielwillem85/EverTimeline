@@ -459,6 +459,18 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS timeline_stories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                subtitle TEXT NOT NULL DEFAULT '',
+                source_mode TEXT NOT NULL DEFAULT 'search' CHECK (source_mode IN ('search', 'collections')),
+                filter_payload TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS photo_import_batches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
@@ -635,6 +647,12 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS saved_timeline_views_user_updated
             ON saved_timeline_views (user_id, updated_at, created_at)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS timeline_stories_user_updated
+            ON timeline_stories (user_id, updated_at, created_at)
             """
         )
         db.execute(
@@ -4561,7 +4579,7 @@ def timeline_search_filters(args=None):
     if year_from is not None and year_to is not None and year_from > year_to:
         year_from, year_to = year_to, year_from
     return {
-        "query": (args.get("q") or "").strip(),
+        "query": (args.get("q") or args.get("query") or "").strip(),
         "kind": normalized_search_filter(args.get("kind"), TIMELINE_SEARCH_KIND_CHOICES),
         "visibility": normalized_search_filter(args.get("visibility"), ("all", *TAG_CHOICES)),
         "year_from": year_from,
@@ -4721,7 +4739,14 @@ def timeline_search_parent_filters(filters):
     return parent_filters
 
 
-def search_timeline_content(db, filters):
+def search_timeline_content(
+    db,
+    filters,
+    *,
+    include_messages=True,
+    include_chapters=True,
+    item_limit=80,
+):
     if isinstance(filters, str):
         filters = timeline_search_filters({"q": filters})
     normalized_query = filters["query"]
@@ -4744,9 +4769,9 @@ def search_timeline_content(db, filters):
         FROM photos
         WHERE user_id = ?
         ORDER BY COALESCE(photo_date, created_at) DESC, id DESC
-        LIMIT 200
+        LIMIT ?
         """,
-        (g.user["id"],),
+        (g.user["id"], item_limit),
     ).fetchall()
     photo_ids = [row["id"] for row in photo_rows]
     photo_tags = load_tags_for_items(db, "photo", photo_ids)
@@ -4802,9 +4827,9 @@ def search_timeline_content(db, filters):
         FROM text_entries
         WHERE user_id = ?
         ORDER BY COALESCE(entry_date, created_at) DESC, id DESC
-        LIMIT 200
+        LIMIT ?
         """,
-        (g.user["id"],),
+        (g.user["id"], item_limit),
     ).fetchall()
     text_ids = [row["id"] for row in text_rows]
     text_tags = load_tags_for_items(db, "text", text_ids)
@@ -4851,7 +4876,9 @@ def search_timeline_content(db, filters):
             },
         )
 
-    include_message_results = filters["kind"] == "message" or (filters["kind"] == "all" and normalized_query)
+    include_message_results = include_messages and (
+        filters["kind"] == "message" or (filters["kind"] == "all" and normalized_query)
+    )
     if include_message_results and filters["messages"] != "without":
         photo_message_rows = db.execute(
             """
@@ -4967,51 +4994,110 @@ def search_timeline_content(db, filters):
                 },
             )
 
-    chapter_rows = db.execute(
-        """
-        SELECT
-            c.id,
-            c.title,
-            c.description,
-            c.visibility,
-            c.created_at,
-            COUNT(ci.id) AS item_count
-        FROM chapters c
-        LEFT JOIN chapter_items ci ON ci.chapter_id = c.id
-        WHERE c.user_id = ?
-        GROUP BY c.id
-        ORDER BY c.created_at DESC, c.id DESC
-        LIMIT 40
-        """,
-        (g.user["id"],),
-    ).fetchall()
-    for row in chapter_rows:
-        if filters["kind"] not in ("all", "chapter"):
-            continue
-        if timeline_search_chapter_filters_apply(filters):
-            continue
-        if filters["visibility"] != "all" and row["visibility"] != filters["visibility"]:
-            continue
-        if not timeline_search_query_matches((row["title"], row["description"]), normalized_query):
-            continue
-        item_word = "item" if row["item_count"] == 1 else "items"
-        add_result(
-            ("chapter", row["id"]),
-            {
-                "kind": "Chapter",
-                "kind_key": "chapter",
-                "title": row["title"],
-                "context": f"{row['item_count']} {item_word}",
-                "preview": short_preview(row["description"] or "Chapter title matched.", 180),
-                "meta": [f"Visible: {PRIVACY_AUDIENCE_LABELS[row['visibility']]}"],
-                "url": url_for("chapter_detail", chapter_id=row["id"]),
-            },
-        )
+    if include_chapters:
+        chapter_rows = db.execute(
+            """
+            SELECT
+                c.id,
+                c.title,
+                c.description,
+                c.visibility,
+                c.created_at,
+                COUNT(ci.id) AS item_count
+            FROM chapters c
+            LEFT JOIN chapter_items ci ON ci.chapter_id = c.id
+            WHERE c.user_id = ?
+            GROUP BY c.id
+            ORDER BY c.created_at DESC, c.id DESC
+            LIMIT 40
+            """,
+            (g.user["id"],),
+        ).fetchall()
+        for row in chapter_rows:
+            if filters["kind"] not in ("all", "chapter"):
+                continue
+            if timeline_search_chapter_filters_apply(filters):
+                continue
+            if filters["visibility"] != "all" and row["visibility"] != filters["visibility"]:
+                continue
+            if not timeline_search_query_matches((row["title"], row["description"]), normalized_query):
+                continue
+            item_word = "item" if row["item_count"] == 1 else "items"
+            add_result(
+                ("chapter", row["id"]),
+                {
+                    "kind": "Chapter",
+                    "kind_key": "chapter",
+                    "title": row["title"],
+                    "context": f"{row['item_count']} {item_word}",
+                    "preview": short_preview(row["description"] or "Chapter title matched.", 180),
+                    "meta": [f"Visible: {PRIVACY_AUDIENCE_LABELS[row['visibility']]}"],
+                    "url": url_for("chapter_detail", chapter_id=row["id"]),
+                },
+            )
 
-    return results[:80]
+    return results[:item_limit]
 
 
 COLLECTION_KIND_CHOICES = ("", "photo", "text")
+TIMELINE_STORY_SOURCE_CHOICES = ("search", "collections")
+
+
+def timeline_story_source_mode(source):
+    mode = (source.get("source_mode") or source.get("mode") or "search").strip().lower()
+    if mode not in TIMELINE_STORY_SOURCE_CHOICES:
+        return "search"
+    return mode
+
+
+def normalize_story_filter_payload(source):
+    if source is None:
+        return {}
+    if isinstance(source, str):
+        try:
+            return json.loads(source)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+    if isinstance(source, dict):
+        return source
+    if hasattr(source, "to_dict"):
+        return source.to_dict(flat=True)
+    try:
+        return dict(source)
+    except (TypeError, ValueError):
+        return {}
+
+
+def timeline_story_filters(source):
+    source = normalize_story_filter_payload(source)
+    mode = timeline_story_source_mode(source)
+    return mode, parse_story_filters(source, mode)
+
+
+def parse_story_filters(payload, mode):
+    payload = normalize_story_filter_payload(payload)
+    if mode == "collections":
+        return collection_filters_from_source(payload)
+    filters = timeline_search_filters(payload)
+    if filters["kind"] == "message":
+        filters["kind"] = "all"
+    return filters
+
+
+def timeline_story_has_filters(mode, filters):
+    if mode == "collections":
+        return collection_filters_have_values(filters)
+    return timeline_search_has_active_filters(filters)
+
+
+def timeline_story_filter_values(mode, filters):
+    if mode == "collections":
+        return collection_query_values(filters)
+    values = {}
+    for key, value in filters.items():
+        if value not in (None, "", "all"):
+            values[key] = value
+    return values
 
 
 def normalize_collection_date(value):
@@ -5107,6 +5193,60 @@ def load_saved_collection_views(db):
         (g.user["id"],),
     ).fetchall()
     return [collection_view_payload(row) for row in rows]
+
+
+def build_timeline_stories_query(db, mode, filters):
+    if mode == "collections":
+        results = search_collection_items(db, filters)
+        return [dict(item, kind_key=item["kind"]) for item in results]
+    normalized_filters = dict(filters)
+    items = search_timeline_content(
+        db,
+        normalized_filters,
+        include_messages=False,
+        include_chapters=False,
+        item_limit=240,
+    )
+    return [item for item in items if item.get("kind_key") in ("photo", "text")]
+
+
+def load_timeline_stories(db):
+    rows = db.execute(
+        """
+        SELECT *
+        FROM timeline_stories
+        WHERE user_id = ?
+        ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "title": row["title"],
+            "subtitle": row["subtitle"],
+            "source_mode": row["source_mode"],
+            "filter_payload": normalize_story_filter_payload(row["filter_payload"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "url": url_for("timeline_story", story_id=row["id"]),
+        }
+        for row in rows
+    ]
+
+
+def get_timeline_story(db, story_id):
+    row = db.execute(
+        """
+        SELECT *
+        FROM timeline_stories
+        WHERE id = ? AND user_id = ?
+        """,
+        (story_id, g.user["id"]),
+    ).fetchone()
+    if row is None:
+        abort(404)
+    return row
 
 
 def collection_item_date_expr(table_alias, date_column):
@@ -5244,6 +5384,7 @@ def search_collection_items(db, filters):
             results.append(
                 {
                     "kind": "photo",
+                    "kind_key": "photo",
                     "id": row["id"],
                     "year": row["year"],
                     "month": row["month"],
@@ -5297,6 +5438,7 @@ def search_collection_items(db, filters):
             results.append(
                 {
                     "kind": "text",
+                    "kind_key": "text",
                     "id": row["id"],
                     "year": row["year"],
                     "month": row["month"],
@@ -7473,6 +7615,108 @@ def delete_timeline_collection(view_id):
     return redirect(url_for("timeline_collections"))
 
 
+@app.route("/timeline/stories", methods=("GET", "POST"))
+@birthday_required
+def timeline_stories():
+    db = get_db()
+
+    if request.method == "POST":
+        title = " ".join((request.form.get("title") or "").strip().split())[:120]
+        if not title:
+            flash("Give your story a title.", "error")
+            return redirect(request.url)
+
+        try:
+            source_mode, story_filters = timeline_story_filters(request.form)
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(request.url)
+        if not timeline_story_has_filters(source_mode, story_filters):
+            flash("Pick at least one filter before saving a story.", "error")
+            return redirect(
+                url_for(
+                    "timeline_stories",
+                    source_mode=source_mode,
+                    **timeline_story_filter_values(source_mode, story_filters),
+                )
+            )
+
+        subtitle = (request.form.get("subtitle") or "").strip()[:240]
+        db.execute(
+            """
+            INSERT INTO timeline_stories (
+                user_id, title, subtitle, source_mode, filter_payload
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                g.user["id"],
+                title,
+                subtitle,
+                source_mode,
+                json.dumps(story_filters),
+            ),
+        )
+        story_id = db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+        db.commit()
+        flash("Saved memory story.", "success")
+        return redirect(url_for("timeline_story", story_id=story_id))
+
+    try:
+        source_mode, filters = timeline_story_filters(request.args)
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("timeline_stories"))
+    has_filters = timeline_story_has_filters(source_mode, filters)
+    items = build_timeline_stories_query(db, source_mode, filters) if has_filters else []
+    return render_template(
+        "timeline_stories.html",
+        stories=load_timeline_stories(db),
+        source_mode=source_mode,
+        filters=filters,
+        filter_values=timeline_story_filter_values(source_mode, filters),
+        has_filters=has_filters,
+        items=items,
+    )
+
+
+@app.route("/timeline/stories/<int:story_id>")
+@birthday_required
+def timeline_story(story_id):
+    db = get_db()
+    story = get_timeline_story(db, story_id)
+    source_mode = story["source_mode"]
+    story_filters = parse_story_filters(story["filter_payload"], source_mode)
+    has_filters = timeline_story_has_filters(source_mode, story_filters)
+    items = build_timeline_stories_query(db, source_mode, story_filters) if has_filters else []
+    source_label = "Timeline search" if source_mode == "search" else "Saved collection filters"
+    return render_template(
+        "timeline_story.html",
+        story=story,
+        source_label=source_label,
+        filters=story_filters,
+        items=items,
+        has_filters=has_filters,
+    )
+
+
+@app.route("/timeline/stories/<int:story_id>/delete", methods=("POST",))
+@birthday_required
+def delete_timeline_story(story_id):
+    db = get_db()
+    get_timeline_story(db, story_id)
+    db.execute(
+        """
+        DELETE FROM timeline_stories
+        WHERE id = ? AND user_id = ?
+        """,
+        (story_id, g.user["id"]),
+    )
+    db.commit()
+    flash("Deleted memory story.", "success")
+    return redirect(url_for("timeline_stories"))
+
+
 @app.route("/timeline/people")
 @birthday_required
 def timeline_people():
@@ -7493,9 +7737,6 @@ def timeline_person(person_id):
         person=person,
         items=items,
     )
- 
-@app.route("/timeline/people")
- 
 
 @app.route("/timeline/map")
 @birthday_required

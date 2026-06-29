@@ -2076,6 +2076,64 @@ details.privacy-toggle-panel {
 .carousel-window-media .carousel-image {
     max-width: 100%;
     max-height: 100%;
+    cursor: zoom-in;
+}
+
+.carousel-window-media .carousel-image:focus-visible {
+    outline: 3px solid var(--accent);
+    outline-offset: 3px;
+}
+
+.carousel-image-viewer[hidden] {
+    display: none;
+}
+
+.carousel-image-viewer {
+    position: fixed;
+    inset: 0;
+    z-index: 140;
+    display: grid;
+    place-items: center;
+    padding: 18px;
+}
+
+.carousel-image-viewer-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(7, 10, 9, 0.84);
+}
+
+.carousel-image-viewer-panel {
+    position: relative;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    width: min(1220px, 100%);
+    height: min(920px, calc(100dvh - 36px));
+    overflow: hidden;
+    border-radius: 8px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.carousel-image-viewer-header h3 {
+    margin-bottom: 2px;
+}
+
+.carousel-image-viewer-body {
+    display: grid;
+    place-items: center;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    padding: 12px;
+    background: #101412;
+}
+
+.carousel-image-viewer-body img {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
 }
 
 .carousel-window-media .carousel-text {
@@ -3772,6 +3830,18 @@ details.privacy-toggle-panel {
 
     .carousel-stage {
         padding: 14px;
+    }
+
+    .carousel-image-viewer {
+        padding: 10px;
+    }
+
+    .carousel-image-viewer-panel {
+        height: calc(100dvh - 20px);
+    }
+
+    .carousel-image-viewer-body {
+        padding: 8px;
     }
 
     .carousel-window {

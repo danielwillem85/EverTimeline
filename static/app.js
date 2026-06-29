@@ -358,6 +358,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const carouselSpeedDownButton = document.getElementById("carousel-speed-down");
         const carouselSpeedUpButton = document.getElementById("carousel-speed-up");
         const carouselSpeedValue = document.getElementById("carousel-speed-value");
+        const carouselImageViewer = document.getElementById("carousel-image-viewer");
+        const carouselImageViewerImage = document.getElementById("carousel-image-viewer-image");
+        const carouselImageViewerTitle = document.getElementById("carousel-image-viewer-title");
+        const carouselImageViewerMeta = document.getElementById("carousel-image-viewer-meta");
         const skipCarouselTagFilter = allItemsModal.dataset.skipTagFilter === "true";
         const viewAllTitle = viewAllButton.dataset.carouselTitle || "View all";
         const viewRandomTitle = viewRandomButton ? viewRandomButton.dataset.carouselTitle || "View random" : "View random";
@@ -370,6 +374,7 @@ document.addEventListener("DOMContentLoaded", () => {
         let pendingRandomize = false;
         let carouselDisplayMs = 1500;
         let carouselTimers = [];
+        let carouselWasPlayingBeforeImageViewer = false;
 
         const shuffleItems = (items) => {
             const shuffled = [...items];
@@ -414,6 +419,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const closeAllItemsModal = () => {
             clearCarouselTimers();
+            closeCarouselImageViewer({restorePlayback: false});
             allItemsModal.hidden = true;
             carouselCard.classList.remove("is-visible", "is-fading", "is-shifting");
             carouselPaused = false;
@@ -435,6 +441,40 @@ document.addEventListener("DOMContentLoaded", () => {
             const url = new URL(allItemsModal.dataset.itemsUrl || "/api/timeline-items", window.location.href);
             url.searchParams.set("include_messages", "0");
             return url.toString();
+        };
+
+        const closeCarouselImageViewer = ({restorePlayback = true} = {}) => {
+            if (!carouselImageViewer || carouselImageViewer.hidden) {
+                return;
+            }
+
+            carouselImageViewer.hidden = true;
+            if (carouselImageViewerImage) {
+                carouselImageViewerImage.removeAttribute("src");
+                carouselImageViewerImage.alt = "";
+            }
+
+            if (restorePlayback && carouselWasPlayingBeforeImageViewer && !allItemsModal.hidden) {
+                resumeCarousel();
+            }
+            carouselWasPlayingBeforeImageViewer = false;
+        };
+
+        const openCarouselImageViewer = (item) => {
+            if (!carouselImageViewer || !carouselImageViewerImage || !item.image_url) {
+                return;
+            }
+
+            carouselWasPlayingBeforeImageViewer = !carouselPaused;
+            if (!carouselPaused) {
+                pauseCarousel();
+            }
+
+            carouselImageViewerTitle.textContent = item.title || "Picture";
+            carouselImageViewerMeta.textContent = item.date_label || "";
+            carouselImageViewerImage.src = item.image_url;
+            carouselImageViewerImage.alt = item.title || "Timeline photo";
+            carouselImageViewer.hidden = false;
         };
 
         const renderCarouselMessages = (list, messages, status = "ready") => {
@@ -672,6 +712,16 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
                 image.src = item.image_url;
                 image.alt = item.title || "Timeline photo";
+                image.tabIndex = 0;
+                image.setAttribute("role", "button");
+                image.title = "Show full-size picture";
+                image.addEventListener("click", () => openCarouselImageViewer(item));
+                image.addEventListener("keydown", (event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        openCarouselImageViewer(item);
+                    }
+                });
                 media.appendChild(image);
             } else {
                 const text = document.createElement("div");
@@ -897,12 +947,22 @@ document.addEventListener("DOMContentLoaded", () => {
         if (carouselStepRightButton) {
             carouselStepRightButton.addEventListener("click", () => stepPausedCarousel(1));
         }
+        if (carouselImageViewer) {
+            carouselImageViewer.querySelectorAll("[data-close-carousel-image-viewer]").forEach((button) => {
+                button.addEventListener("click", () => closeCarouselImageViewer());
+            });
+        }
 
         allItemsModal.querySelectorAll("[data-close-all-items]").forEach((button) => {
             button.addEventListener("click", closeAllItemsModal);
         });
 
         document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape" && carouselImageViewer && !carouselImageViewer.hidden) {
+                event.preventDefault();
+                closeCarouselImageViewer();
+                return;
+            }
             if (event.key === "Escape" && !allItemsModal.hidden) {
                 closeAllItemsModal();
             }

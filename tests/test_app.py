@@ -1495,6 +1495,85 @@ def test_timeline_search_finds_owned_content_types_and_excludes_other_users(app,
     assert b"No timeline matches." in response.data
 
 
+def test_memory_review_queue_prioritizes_incomplete_memories(client, helpers):
+    helpers.create_user(client, "owner")
+    helpers.upload_photo(
+        client,
+        filename="public-uncaptioned.png",
+        photo_date="2020-05-04",
+        tag="public",
+        location_name="Harbor",
+    )
+    helpers.create_text(
+        client,
+        "A short memory without tags or place",
+        entry_date="2020-05-05",
+        tag="private",
+    )
+
+    timeline_response = client.get("/timeline")
+    assert timeline_response.status_code == 200
+    assert b"Review queue" in timeline_response.data
+
+    response = client.get("/timeline/review")
+    assert response.status_code == 200
+    assert b"Review queue" in response.data
+    assert b"Start here" in response.data
+    assert b"Photos need captions" in response.data
+    assert b"Memories need places" in response.data
+    assert b"Memories need people" in response.data
+    assert b"Memories not in chapters" in response.data
+    assert b"Public photos need polish" in response.data
+    assert b"public-uncaptioned.png" in response.data
+    assert b"A short memory without tags or place" in response.data
+    assert b"/timeline/search?kind=photo&amp;caption=without" in response.data
+    assert b"/timeline/search?location=without" in response.data
+    assert b"/chapters/draft" in response.data
+    assert b"/timeline/people" in response.data
+
+
+def test_memory_review_queue_empty_and_complete_states(client, helpers):
+    helpers.create_user(client, "owner")
+
+    empty_response = client.get("/timeline/review")
+    assert empty_response.status_code == 200
+    assert b"Add memories to start building your review queue." in empty_response.data
+
+    photo_id = helpers.upload_photo(
+        client,
+        filename="complete-photo.png",
+        photo_date="2020-05-04",
+        caption="A complete caption",
+        tag="private",
+        people="Alice Example",
+        location_name="Lisbon",
+    )
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Complete story",
+            "description": "A polished memory",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Complete story",))["id"]
+    assert client.post(
+        "/chapters/items",
+        data={
+            **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+            "chapter_id": chapter_id,
+            "item_kind": "photo",
+            "item_id": photo_id,
+        },
+    ).status_code == 302
+
+    complete_response = client.get("/timeline/review")
+    assert complete_response.status_code == 200
+    assert b"Your timeline has no review issues right now." in complete_response.data
+
+
 def test_saved_timeline_collections_filter_save_and_delete(app, client, helpers):
     helpers.create_user(client, "owner")
     helpers.create_text(

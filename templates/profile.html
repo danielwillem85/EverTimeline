@@ -4,6 +4,20 @@
 
 {% block content %}
 <div class="profile-stack">
+    {% set setup = namespace(done=0) %}
+    {% if g.user['username'] %}{% set setup.done = setup.done + 1 %}{% endif %}
+    {% if g.user['first_name'] %}{% set setup.done = setup.done + 1 %}{% endif %}
+    {% if g.user['last_name'] %}{% set setup.done = setup.done + 1 %}{% endif %}
+    {% if g.user['email'] %}{% set setup.done = setup.done + 1 %}{% endif %}
+    {% if g.user['birthday'] %}{% set setup.done = setup.done + 1 %}{% endif %}
+    <section class="auth-panel profile-panel setup-progress-panel">
+        <div class="progress-card-row">
+            <h1>Setup progress</h1>
+            <span>{{ setup.done }} of 5 complete</span>
+        </div>
+        <progress max="5" value="{{ setup.done }}"></progress>
+    </section>
+
     <section class="auth-panel profile-panel">
         <h1>Profile</h1>
         <form method="post" class="form-stack">
@@ -32,13 +46,20 @@
         <h2>Account backup</h2>
         <p class="muted">Download your timeline photos, text entries, messages, chapters, visibility tags, and metadata as a zip.</p>
         <div class="backup-actions">
-            <a class="button secondary" href="{{ url_for('export_account_backup') }}">Download backup</a>
+            <a
+                class="button secondary"
+                href="{{ url_for('export_account_backup') }}"
+                data-download-progress
+                data-progress-label="Preparing account backup..."
+            >Download backup</a>
         </div>
         <form
             method="post"
             action="{{ url_for('import_account_backup_route') }}"
             enctype="multipart/form-data"
             class="form-stack"
+            data-upload-progress
+            data-upload-label="Uploading backup..."
             data-confirm
             data-confirm-title="Import account backup?"
             data-confirm-message="This adds the backup contents to your current account and restores the backup birthday. Existing timeline items are kept."
@@ -50,6 +71,13 @@
                 <input name="backup" type="file" accept=".zip,application/zip" required>
             </label>
             <button class="button primary" type="submit">Import backup</button>
+            <div class="upload-progress" data-upload-progress-panel hidden>
+                <div class="upload-progress-row">
+                    <span data-upload-progress-label>Uploading backup...</span>
+                    <span data-upload-progress-percent>0%</span>
+                </div>
+                <progress max="100" value="0" data-upload-progress-bar></progress>
+            </div>
         </form>
     </section>
 </div>

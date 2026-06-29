@@ -30,7 +30,13 @@
 
 <section class="connection-section">
     <h2>Chapter details</h2>
-    <form class="chapter-bulk-review-form" method="post" action="{{ url_for('chapter_bulk_create') }}">
+    <form
+        class="chapter-bulk-review-form"
+        method="post"
+        action="{{ url_for('chapter_bulk_create') }}"
+        data-submit-progress
+        data-progress-label="Saving chapter..."
+    >
         {{ csrf_field() }}
         <input type="hidden" name="selected_photo_ids" value='{{ selected_photo_ids|tojson }}'>
         <label>
@@ -43,6 +49,13 @@
         </label>
         {{ tag_radio_group(form["visibility"]) }}
         <button class="button primary" type="submit">Save chapter</button>
+        <div class="upload-progress submit-progress" data-submit-progress-panel hidden>
+            <div class="upload-progress-row">
+                <span data-submit-progress-label>Saving chapter...</span>
+                <span>{{ photos|length }} selected</span>
+            </div>
+            <progress max="100" value="0" data-submit-progress-bar></progress>
+        </div>
     </form>
 </section>
 

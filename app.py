@@ -42,6 +42,9 @@ ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 JPEG_STORAGE_MIME = "image/jpeg"
 JPEG_STORAGE_QUALITY = 52
 JPEG_STORAGE_MAX_EDGE = 1200
+IMPORT_REVIEW_THUMBNAIL_QUALITY = 46
+IMPORT_REVIEW_THUMBNAIL_MAX_EDGE = 260
+IMPORT_REVIEW_PAGE_SIZE = 50
 COMPACT_JPEG_STORAGE_QUALITY = JPEG_STORAGE_QUALITY
 COMPACT_JPEG_STORAGE_MAX_EDGE = JPEG_STORAGE_MAX_EDGE
 EXIF_DATE_TAGS = (36867, 36868, 306)
@@ -107,7 +110,7 @@ MONTH_NAMES = [
 BACKUP_FORMAT = "evertimeline.account_backup"
 BACKUP_FORMAT_VERSION = 1
 BACKUP_MANIFEST_NAME = "evertimeline-backup.json"
-DEFAULT_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
+DEFAULT_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
 ADMIN_USERNAME = "Daniel"
 SQLITE_BUSY_TIMEOUT_MS = 30000
 IMAGE_CONVERSION_COMMIT_INTERVAL = 5
@@ -495,6 +498,9 @@ def init_db():
                 detected_source TEXT NOT NULL DEFAULT '',
                 duplicate_photo_id INTEGER,
                 duplicate_import_item_id INTEGER,
+                review_date TEXT,
+                review_tag TEXT,
+                review_skip INTEGER,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (batch_id) REFERENCES photo_import_batches (id) ON DELETE CASCADE,
                 FOREIGN KEY (duplicate_photo_id) REFERENCES photos (id) ON DELETE SET NULL,
@@ -804,6 +810,9 @@ def ensure_photo_import_columns(db):
         {
             "duplicate_photo_id": "ALTER TABLE photo_import_items ADD COLUMN duplicate_photo_id INTEGER",
             "duplicate_import_item_id": "ALTER TABLE photo_import_items ADD COLUMN duplicate_import_item_id INTEGER",
+            "review_date": "ALTER TABLE photo_import_items ADD COLUMN review_date TEXT",
+            "review_tag": "ALTER TABLE photo_import_items ADD COLUMN review_tag TEXT",
+            "review_skip": "ALTER TABLE photo_import_items ADD COLUMN review_skip INTEGER",
         },
     )
 
@@ -1153,6 +1162,8 @@ def storage_jpeg_from_image(
     image_data,
     quality=JPEG_STORAGE_QUALITY,
     max_edge=JPEG_STORAGE_MAX_EDGE,
+    optimize=True,
+    progressive=True,
 ):
     try:
         with Image.open(io.BytesIO(image_data)) as image:
@@ -1177,8 +1188,8 @@ def storage_jpeg_from_image(
                 format="JPEG",
                 quality=quality,
                 subsampling="4:2:0",
-                optimize=True,
-                progressive=True,
+                optimize=optimize,
+                progressive=progressive,
             )
             return buffer.getvalue()
     except Exception as exc:
@@ -2049,18 +2060,63 @@ def get_import_batch(db, token):
     return batch
 
 
-def load_import_items(db, batch_id):
+def count_import_items(db, batch_id):
     return db.execute(
         """
+        SELECT COUNT(*) AS count
+        FROM photo_import_items
+        WHERE batch_id = ?
+        """,
+        (batch_id,),
+    ).fetchone()["count"]
+
+
+def import_review_total_pages(total_items):
+    return max(1, (total_items + IMPORT_REVIEW_PAGE_SIZE - 1) // IMPORT_REVIEW_PAGE_SIZE)
+
+
+def import_review_page_number(value, total_pages):
+    try:
+        page = int(value or 1)
+    except (TypeError, ValueError):
+        page = 1
+    return max(1, min(page, total_pages))
+
+
+def import_review_page_context(total_items, current_page):
+    total_pages = import_review_total_pages(total_items)
+    page = import_review_page_number(current_page, total_pages)
+    start_index = (page - 1) * IMPORT_REVIEW_PAGE_SIZE
+    end_index = min(start_index + IMPORT_REVIEW_PAGE_SIZE, total_items)
+    return {
+        "current_page": page,
+        "total_pages": total_pages,
+        "page_size": IMPORT_REVIEW_PAGE_SIZE,
+        "total_items": total_items,
+        "offset": start_index,
+        "start_item": start_index + 1 if total_items else 0,
+        "end_item": end_index,
+        "has_previous": page > 1,
+        "has_next": page < total_pages,
+        "previous_page": page - 1 if page > 1 else 1,
+        "next_page": page + 1 if page < total_pages else total_pages,
+    }
+
+
+def load_import_items(db, batch_id, limit=None, offset=0):
+    query = """
         SELECT id, original_filename, mime_type, image_hash, detected_date,
                detected_source, duplicate_photo_id, duplicate_import_item_id,
-               created_at
+               review_date, review_tag, review_skip, created_at
         FROM photo_import_items
         WHERE batch_id = ?
         ORDER BY id ASC
-        """,
-        (batch_id,),
-    ).fetchall()
+        """
+    params = [batch_id]
+    if limit is not None:
+        query += " LIMIT ? OFFSET ?"
+        params.extend([limit, max(0, offset)])
+    return db.execute(query, params).fetchall()
 
 
 def get_import_item(db, batch_id, item_id):
@@ -2094,7 +2150,7 @@ def import_duplicate_payload(db, token, batch_id, item):
             "label": "Already in timeline",
             "title": photo_display_title(photo),
             "date_label": format_timeline_date_label(photo["year"], photo["month"], photo["photo_date"]),
-            "image_url": url_for("photo_image", photo_id=photo["id"]),
+            "image_url": url_for("splash_photo_thumbnail", photo_id=photo["id"]),
             "open_url": url_for(
                 "month_view",
                 year=photo["year"],
@@ -2119,18 +2175,51 @@ def import_duplicate_payload(db, token, batch_id, item):
             "label": "Already in this batch",
             "title": import_item["original_filename"] or "Photo",
             "date_label": import_item["detected_date"] or "No date",
-            "image_url": url_for("timeline_import_item_image", token=token, item_id=import_item["id"]),
+            "image_url": url_for("timeline_import_item_thumbnail", token=token, item_id=import_item["id"]),
             "open_url": "",
         }
 
     return None
 
 
+def import_item_has_duplicate(item):
+    return bool(item["duplicate_photo_id"] or item["duplicate_import_item_id"])
+
+
+def import_review_date_value(item):
+    return (item["review_date"] or item["detected_date"] or "").strip()
+
+
+def import_review_tag_value(item):
+    return tags_to_text(item["review_tag"] or DEFAULT_TAG)
+
+
+def import_review_skip_value(item):
+    if item["review_skip"] is None:
+        return import_item_has_duplicate(item)
+    return bool(item["review_skip"])
+
+
+def save_import_review_page(db, batch_id, item_rows, form):
+    for item in item_rows:
+        item_id = str(item["id"])
+        review_date = (form.get(f"photo_date_{item_id}") or "").strip() or None
+        review_tag = tags_to_text(form.get(f"tags_{item_id}", DEFAULT_TAG))
+        review_skip = 1 if f"skip_{item_id}" in form else 0
+        db.execute(
+            """
+            UPDATE photo_import_items
+            SET review_date = ?, review_tag = ?, review_skip = ?
+            WHERE batch_id = ? AND id = ?
+            """,
+            (review_date, review_tag, review_skip, batch_id, item["id"]),
+        )
+
+
 def import_review_items(db, token, batch_id, item_rows, form=None):
     review_items = []
     for item in item_rows:
         item_id = str(item["id"])
-        default_tag = DEFAULT_TAG
         duplicate = import_duplicate_payload(db, token, batch_id, item)
         review_items.append(
             {
@@ -2141,19 +2230,19 @@ def import_review_items(db, token, batch_id, item_rows, form=None):
                 "detected_label": import_detection_label(item["detected_source"]),
                 "duplicate": duplicate,
                 "review_date": (
-                    form.get(f"photo_date_{item_id}", item["detected_date"] or "")
+                    form.get(f"photo_date_{item_id}", import_review_date_value(item))
                     if form is not None
-                    else item["detected_date"] or ""
+                    else import_review_date_value(item)
                 ),
                 "review_tag": (
-                    form.get(f"tags_{item_id}", default_tag)
+                    tags_to_text(form.get(f"tags_{item_id}", import_review_tag_value(item)))
                     if form is not None
-                    else default_tag
+                    else import_review_tag_value(item)
                 ),
                 "skip_checked": (
                     f"skip_{item_id}" in form
                     if form is not None
-                    else duplicate is not None
+                    else import_review_skip_value(item)
                 ),
             }
         )
@@ -7927,15 +8016,19 @@ def timeline_import():
 def timeline_import_review(token):
     db = get_db()
     batch = get_import_batch(db, token)
-    item_rows = db.execute(
-        """
-        SELECT *
-        FROM photo_import_items
-        WHERE batch_id = ?
-        ORDER BY id ASC
-        """,
-        (batch["id"],),
-    ).fetchall()
+    total_items = count_import_items(db, batch["id"])
+    total_pages = import_review_total_pages(total_items)
+    requested_page = request.form.get("page") if request.method == "POST" else request.args.get("page")
+    page_context = import_review_page_context(
+        total_items,
+        import_review_page_number(requested_page, total_pages),
+    )
+    page_rows = load_import_items(
+        db,
+        batch["id"],
+        limit=IMPORT_REVIEW_PAGE_SIZE,
+        offset=page_context["offset"],
+    )
 
     if request.method == "POST" and request.form.get("action") == "discard":
         db.execute("DELETE FROM photo_import_batches WHERE id = ?", (batch["id"],))
@@ -7943,28 +8036,44 @@ def timeline_import_review(token):
         flash("Import batch discarded.", "success")
         return redirect(url_for("timeline_import"))
 
+    if request.method == "POST" and request.form.get("action") == "page":
+        save_import_review_page(db, batch["id"], page_rows, request.form)
+        db.commit()
+        target_page = import_review_page_number(
+            request.form.get("target_page") or request.args.get("page"),
+            total_pages,
+        )
+        return redirect(url_for("timeline_import_review", token=token, page=target_page))
+
     if request.method == "POST":
+        save_import_review_page(db, batch["id"], page_rows, request.form)
+        db.commit()
+        item_rows = load_import_items(db, batch["id"])
         errors = []
         prepared = []
         skipped_count = 0
-        for item in item_rows:
-            item_id = str(item["id"])
-            if f"skip_{item_id}" in request.form:
+        first_error_page = page_context["current_page"]
+        for item_index, item in enumerate(item_rows):
+            if import_review_skip_value(item):
                 skipped_count += 1
                 continue
 
-            raw_date = (request.form.get(f"photo_date_{item_id}") or "").strip()
+            raw_date = import_review_date_value(item)
             if not raw_date:
                 errors.append(f"{item['original_filename']}: choose a date or skip this photo.")
+                if len(errors) == 1:
+                    first_error_page = (item_index // IMPORT_REVIEW_PAGE_SIZE) + 1
                 continue
 
             try:
                 parsed_date = normalize_import_photo_date(raw_date)
             except ValueError as exc:
                 errors.append(f"{item['original_filename']}: {exc}")
+                if len(errors) == 1:
+                    first_error_page = (item_index // IMPORT_REVIEW_PAGE_SIZE) + 1
                 continue
 
-            tags = parse_tags(request.form.get(f"tags_{item_id}", DEFAULT_TAG))
+            tags = parse_tags(import_review_tag_value(item))
             prepared.append(
                 {
                     "item": item,
@@ -7978,11 +8087,7 @@ def timeline_import_review(token):
                 flash(error, "error")
             if len(errors) > 4:
                 flash(f"Fix {len(errors) - 4} more import issue(s).", "error")
-            return render_template(
-                "timeline_import_review.html",
-                token=token,
-                items=import_review_items(db, token, batch["id"], item_rows, request.form),
-            )
+            return redirect(url_for("timeline_import_review", token=token, page=first_error_page))
 
         imported_count = 0
         duplicate_count = 0
@@ -7999,11 +8104,12 @@ def timeline_import_review(token):
                 continue
 
             parsed_date = prepared_item["date"]
+            full_item = get_import_item(db, batch["id"], item["id"])
             insert_photo_record(
                 db,
                 item["original_filename"],
                 item["mime_type"],
-                item["image_data"],
+                full_item["image_data"],
                 item["image_hash"],
                 parsed_date.year,
                 parsed_date.month,
@@ -8038,7 +8144,8 @@ def timeline_import_review(token):
     return render_template(
         "timeline_import_review.html",
         token=token,
-        items=import_review_items(db, token, batch["id"], item_rows),
+        items=import_review_items(db, token, batch["id"], page_rows),
+        page_info=page_context,
     )
 
 
@@ -8049,6 +8156,27 @@ def timeline_import_item_image(token, item_id):
     batch = get_import_batch(db, token)
     item = get_import_item(db, batch["id"], item_id)
     return Response(item["image_data"], mimetype=item["mime_type"])
+
+
+@app.route("/timeline/import/<token>/items/<int:item_id>/thumbnail")
+@birthday_required
+def timeline_import_item_thumbnail(token, item_id):
+    db = get_db()
+    batch = get_import_batch(db, token)
+    item = get_import_item(db, batch["id"], item_id)
+    try:
+        thumbnail_data = storage_jpeg_from_image(
+            item["image_data"],
+            quality=IMPORT_REVIEW_THUMBNAIL_QUALITY,
+            max_edge=IMPORT_REVIEW_THUMBNAIL_MAX_EDGE,
+            optimize=False,
+            progressive=False,
+        )
+    except ValueError:
+        abort(404)
+    response = Response(thumbnail_data, mimetype=JPEG_STORAGE_MIME)
+    response.headers["Cache-Control"] = "private, max-age=86400"
+    return response
 
 
 @app.route("/on-this-day")

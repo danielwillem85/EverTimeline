@@ -10,20 +10,46 @@
     </div>
 </section>
 
+<section class="progress-card" aria-label="Import progress">
+    <div class="progress-card-row">
+        <strong>Import progress</strong>
+        <span>Step 1 of 3: upload and detect dates</span>
+    </div>
+    <progress max="3" value="1"></progress>
+</section>
+
 <section class="upload-panel import-upload-panel">
-    <form method="post" enctype="multipart/form-data" class="import-upload-form" data-upload-progress>
+    <form
+        method="post"
+        enctype="multipart/form-data"
+        class="import-upload-form"
+        data-upload-progress
+        data-max-upload-bytes="{{ config['MAX_CONTENT_LENGTH'] }}"
+    >
         {{ csrf_field() }}
         <label class="file-field">
             <span>Photos</span>
             <input name="photo" type="file" accept="image/*" multiple required>
         </label>
-        <button class="button primary" type="submit">Review detected dates</button>
+        <button class="button primary" type="submit">Upload and review</button>
+        <p class="upload-size-error" data-upload-size-error hidden role="alert" tabindex="-1"></p>
         <div class="upload-progress" data-upload-progress-panel hidden>
             <div class="upload-progress-row">
                 <span data-upload-progress-label>Uploading...</span>
                 <span data-upload-progress-percent>0%</span>
             </div>
             <progress max="100" value="0" data-upload-progress-bar></progress>
+        </div>
+        <div class="processing-overlay" data-upload-processing hidden aria-live="polite" aria-busy="true">
+            <div class="processing-panel" role="status" aria-labelledby="upload-processing-title">
+                <strong id="upload-processing-title">Preparing review</strong>
+                <span class="processing-copy">Building the images rows... (this could take some time, please wait)</span>
+                <div class="processing-progress-row">
+                    <span data-upload-processing-status>Preparing images...</span>
+                    <span data-upload-processing-percent>0%</span>
+                </div>
+                <progress max="100" value="0" data-upload-processing-progress></progress>
+            </div>
         </div>
     </form>
 </section>

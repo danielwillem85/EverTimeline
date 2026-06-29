@@ -306,6 +306,55 @@ def test_photo_date_detection_uses_exif_and_filename_fallbacks(client, helpers):
     assert fallback_photo["photo_date"] == "2021-07-10"
 
 
+def test_bulk_upload_can_leave_photos_without_dates(client, helpers):
+    helpers.create_user(client, "owner")
+
+    files = []
+    for filename, color in (
+        ("loose-memory-a.png", (31, 77, 126)),
+        ("loose-memory-b.png", (126, 77, 31)),
+    ):
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (12, 12), color=color).save(image_buffer, format="PNG")
+        image_buffer.seek(0)
+        files.append((image_buffer, filename, "image/png"))
+
+    response = client.post(
+        "/year/2022/3",
+        data={
+            **helpers.csrf_form_data(client, "/year/2022/3"),
+            "photo": files,
+            "tags": "private",
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 302
+
+    rows = helpers.rows(
+        "SELECT original_filename, photo_date FROM photos ORDER BY original_filename"
+    )
+    assert [row["original_filename"] for row in rows] == [
+        "loose-memory-a.png",
+        "loose-memory-b.png",
+    ]
+    assert [row["photo_date"] for row in rows] == [None, None]
+
+    year_page = client.get("/year/2022")
+    assert year_page.status_code == 200
+    assert b"No date" in year_page.data
+    assert b"/year/2022/no-date" in year_page.data
+
+    no_date_page = client.get("/year/2022/no-date")
+    assert no_date_page.status_code == 200
+    assert b"loose-memory-a.png" in no_date_page.data
+    assert b"loose-memory-b.png" in no_date_page.data
+
+    month_page = client.get("/year/2022/3")
+    assert month_page.status_code == 200
+    assert b"loose-memory-a.png" not in month_page.data
+    assert b"loose-memory-b.png" not in month_page.data
+
+
 def test_splash_page_api_and_thumbnails_are_owned(app, client, helpers):
     helpers.create_user(client, "owner")
     photo_id = helpers.upload_photo(

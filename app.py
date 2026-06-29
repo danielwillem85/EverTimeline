@@ -3374,6 +3374,45 @@ def random_public_photos(db, limit=48):
     return attach_reactions(db, photos)
 
 
+def no_date_photo_suggestion(photo):
+    filename_date = filename_date_candidate(photo.get("original_filename"))
+    if filename_date and filename_date.year in user_years():
+        return {
+            "year": filename_date.year,
+            "month": filename_date.month,
+            "label": f"{MONTH_NAMES[filename_date.month - 1]} {filename_date.year}",
+            "source": "filename",
+            "source_label": "Filename",
+        }
+
+    photo_year = photo.get("year")
+    photo_month = photo.get("month")
+    if photo_year in user_years() and 1 <= photo_month <= 12:
+        return {
+            "year": photo_year,
+            "month": photo_month,
+            "label": f"{MONTH_NAMES[photo_month - 1]} {photo_year}",
+            "source": "upload_bucket",
+            "source_label": "Upload month",
+        }
+
+    return None
+
+
+def splash_photo_payload(photo, *, include_suggestion=False):
+    payload = {
+        "id": photo["id"],
+        "title": photo_display_title(photo),
+        "caption": photo["caption"] or "",
+        "display_date": photo["photo_date"] or "",
+        "thumbnail_url": url_for("splash_photo_thumbnail", photo_id=photo["id"]),
+        "full_url": url_for("photo_image", photo_id=photo["id"]),
+    }
+    if include_suggestion:
+        payload["suggestion"] = no_date_photo_suggestion(photo)
+    return payload
+
+
 def build_splash_photo_page(db, *, year=None, no_date_only=False):
     page_size = request.args.get("page_size", default=80, type=int)
     if page_size is None:
@@ -3395,7 +3434,7 @@ def build_splash_photo_page(db, *, year=None, no_date_only=False):
 
     rows = db.execute(
         f"""
-        SELECT id, original_filename, title, caption, photo_date, created_at
+        SELECT id, year, month, original_filename, title, caption, photo_date, created_at
         FROM photos
         WHERE {" AND ".join(conditions)}
         ORDER BY id ASC
@@ -3421,14 +3460,7 @@ def build_splash_photo_page(db, *, year=None, no_date_only=False):
         "total": total,
         "total_pages": total_pages,
         "photos": [
-            {
-                "id": photo["id"],
-                "title": photo_display_title(photo),
-                "caption": photo["caption"] or "",
-                "display_date": photo["photo_date"] or "",
-                "thumbnail_url": url_for("splash_photo_thumbnail", photo_id=photo["id"]),
-                "full_url": url_for("photo_image", photo_id=photo["id"]),
-            }
+            splash_photo_payload(photo, include_suggestion=no_date_only)
             for photo in page_photos
         ],
     }
@@ -8928,6 +8960,71 @@ def assign_no_date_photos(year):
             "target_url": url_for("month_view", year=target_year, month=target_month),
         }
     )
+
+
+@app.route("/year/<int:year>/no-date/accept-suggestions", methods=("POST",))
+@birthday_required
+def accept_no_date_photo_suggestions(year):
+    validate_year_month(year, 1)
+    payload = request.get_json(silent=True) or {}
+    photo_ids = payload.get("photo_ids") or []
+
+    if not isinstance(photo_ids, list) or not photo_ids:
+        return jsonify({"error": "Select at least one photo."}), 400
+
+    try:
+        normalized_ids = sorted({int(photo_id) for photo_id in photo_ids})
+    except (TypeError, ValueError):
+        return jsonify({"error": "Select valid photos."}), 400
+
+    placeholders = ",".join(["?"] * len(normalized_ids))
+    db = get_db()
+    rows = db.execute(
+        f"""
+        SELECT id, year, month, original_filename, title, caption, photo_date, created_at
+        FROM photos
+        WHERE user_id = ?
+          AND year = ?
+          AND photo_date IS NULL
+          AND id IN ({placeholders})
+        """,
+        (g.user["id"], year, *normalized_ids),
+    ).fetchall()
+    if not rows:
+        return jsonify({"error": "No selected undated photos were found."}), 404
+
+    moved_count = 0
+    skipped_count = 0
+    for row in rows:
+        photo = dict(row)
+        suggestion = no_date_photo_suggestion(photo)
+        if not suggestion:
+            skipped_count += 1
+            continue
+        target_year = suggestion["year"]
+        target_month = suggestion["month"]
+        db.execute(
+            """
+            UPDATE photos
+            SET year = ?, month = ?, photo_date = ?
+            WHERE user_id = ? AND id = ?
+            """,
+            (
+                target_year,
+                target_month,
+                date(target_year, target_month, 1).isoformat(),
+                g.user["id"],
+                photo["id"],
+            ),
+        )
+        moved_count += 1
+
+    if moved_count == 0:
+        db.rollback()
+        return jsonify({"error": "No selected photos had usable suggestions."}), 400
+
+    db.commit()
+    return jsonify({"moved_count": moved_count, "skipped_count": skipped_count})
 
 
 @app.route("/year/<int:year>/export.pdf")

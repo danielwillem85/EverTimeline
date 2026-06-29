@@ -767,8 +767,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const splashUrl = splashPage.dataset.splashUrl || "/api/splash-photos";
         const splashSelectable = splashPage.hasAttribute("data-splash-selectable");
         const splashAssignUrl = splashPage.dataset.splashAssignUrl || "";
+        const splashAcceptSuggestionsUrl = splashPage.dataset.splashAcceptSuggestionsUrl || "";
         const noDateAssignForm = document.querySelector("[data-no-date-assign-form]");
         const noDateAssignButton = document.querySelector("[data-no-date-assign-button]");
+        const noDateAcceptSuggestionsButton = document.querySelector("[data-no-date-accept-suggestions-button]");
         const noDateSelectedCount = document.querySelector("[data-no-date-selected-count]");
         const minTileSize = 82;
         let splashPageIndex = 0;
@@ -776,6 +778,7 @@ document.addEventListener("DOMContentLoaded", () => {
         let splashTotalPages = 0;
         let splashResizeTimer = null;
         const selectedSplashPhotoIds = new Set();
+        const splashSuggestions = new Map();
 
         const setSplashStatus = (message) => {
             if (!splashStatus) {
@@ -809,6 +812,12 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             if (noDateAssignButton) {
                 noDateAssignButton.disabled = selectedCount === 0;
+            }
+            const selectedSuggestionCount = Array.from(selectedSplashPhotoIds)
+                .filter((photoId) => splashSuggestions.has(photoId))
+                .length;
+            if (noDateAcceptSuggestionsButton) {
+                noDateAcceptSuggestionsButton.disabled = selectedSuggestionCount === 0;
             }
             splashGrid.querySelectorAll(".splash-thumb").forEach((button) => {
                 const photoId = Number(button.dataset.photoId);
@@ -858,11 +867,15 @@ document.addEventListener("DOMContentLoaded", () => {
         const renderSplashPhotos = (photos) => {
             splashGrid.innerHTML = "";
             photos.forEach((photo) => {
+                if (photo.suggestion) {
+                    splashSuggestions.set(Number(photo.id), photo.suggestion);
+                }
                 const button = document.createElement("button");
                 button.className = "splash-thumb";
                 button.type = "button";
                 button.dataset.photoId = String(photo.id);
-                button.title = photo.display_date ? `${photo.title} - ${photo.display_date}` : photo.title;
+                const suggestionLabel = photo.suggestion ? `Suggested: ${photo.suggestion.label}` : "";
+                button.title = suggestionLabel || (photo.display_date ? `${photo.title} - ${photo.display_date}` : photo.title);
                 button.setAttribute("aria-label", splashSelectable ? `Select ${photo.title || "photo"}` : `Open ${photo.title || "photo"}`);
                 if (splashSelectable) {
                     button.setAttribute("aria-pressed", selectedSplashPhotoIds.has(Number(photo.id)) ? "true" : "false");
@@ -875,6 +888,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 image.decoding = "async";
 
                 button.appendChild(image);
+                if (photo.suggestion) {
+                    const suggestion = document.createElement("span");
+                    suggestion.className = "splash-suggestion-chip";
+                    suggestion.textContent = photo.suggestion.label;
+                    suggestion.title = `Suggested from ${photo.suggestion.source_label || "date clues"}`;
+                    button.appendChild(suggestion);
+                }
                 button.addEventListener("click", () => {
                     if (splashSelectable) {
                         const photoId = Number(photo.id);
@@ -973,6 +993,41 @@ document.addEventListener("DOMContentLoaded", () => {
                     await loadSplashPage(splashPageIndex);
                 } catch (error) {
                     setSplashStatus(error.message || "Selected photos could not be saved.");
+                    updateSplashSelectionState();
+                }
+            });
+        }
+
+        if (noDateAcceptSuggestionsButton && splashSelectable) {
+            noDateAcceptSuggestionsButton.addEventListener("click", async () => {
+                const suggestedPhotoIds = Array.from(selectedSplashPhotoIds)
+                    .filter((photoId) => splashSuggestions.has(photoId));
+                if (!suggestedPhotoIds.length || !splashAcceptSuggestionsUrl) {
+                    return;
+                }
+                noDateAcceptSuggestionsButton.disabled = true;
+                if (noDateAssignButton) {
+                    noDateAssignButton.disabled = true;
+                }
+                setSplashStatus("Accepting suggestions...");
+                try {
+                    const response = await csrfFetch(splashAcceptSuggestionsUrl, {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({photo_ids: suggestedPhotoIds}),
+                    });
+                    const payload = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        throw new Error(payload.error || "Suggestions could not be accepted.");
+                    }
+                    suggestedPhotoIds.forEach((photoId) => {
+                        selectedSplashPhotoIds.delete(photoId);
+                        splashSuggestions.delete(photoId);
+                    });
+                    setSplashStatus(`Moved ${payload.moved_count || 0} photos.`);
+                    await loadSplashPage(splashPageIndex);
+                } catch (error) {
+                    setSplashStatus(error.message || "Suggestions could not be accepted.");
                     updateSplashSelectionState();
                 }
             });

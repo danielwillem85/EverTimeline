@@ -46,6 +46,7 @@
             </select>
         </label>
         <button class="button primary" type="submit" data-no-date-assign-button disabled>Save</button>
+        <button class="button secondary" type="button" data-no-date-accept-suggestions-button disabled>Accept suggestions</button>
         <span class="no-date-selected-count" data-no-date-selected-count>0 selected</span>
     </form>
 
@@ -55,6 +56,7 @@
         data-splash-selectable
         data-splash-url="{{ url_for('year_no_date_photos', year=year) }}"
         data-splash-assign-url="{{ url_for('assign_no_date_photos', year=year) }}"
+        data-splash-accept-suggestions-url="{{ url_for('accept_no_date_photo_suggestions', year=year) }}"
         data-splash-seed="{{ splash_seed }}"
         aria-label="Undated photo organizer"
     >

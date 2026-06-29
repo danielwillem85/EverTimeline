@@ -202,6 +202,124 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    const reviewRefresh = () => {
+        window.setTimeout(() => {
+            window.location.reload();
+        }, 550);
+    };
+
+    const reviewCardPayload = (card) => ({
+        title: card.dataset.title || "",
+        caption: card.dataset.caption || "",
+        body: card.dataset.body || "",
+        entry_date: card.dataset.entryDate || "",
+        tags: card.dataset.tags || "private",
+        people: card.dataset.people || "",
+        location_name: card.dataset.locationName || "",
+        latitude: card.dataset.latitude || "",
+        longitude: card.dataset.longitude || "",
+    });
+
+    const setReviewStatus = (card, message, isError = false) => {
+        const status = card.querySelector("[data-review-status]");
+        if (!status) {
+            return;
+        }
+        status.textContent = message;
+        status.classList.toggle("is-error", isError);
+    };
+
+    const reviewJsonFetch = async (url, payload, method = "PATCH") => {
+        const response = await csrfFetch(url, {
+            method,
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+            let message = "Could not save this change.";
+            try {
+                const errorPayload = await response.json();
+                message = errorPayload.error || message;
+            } catch (error) {
+                message = response.statusText || message;
+            }
+            throw new Error(message);
+        }
+        if (response.status === 204) {
+            return {};
+        }
+        return response.json();
+    };
+
+    document.querySelectorAll("[data-review-card]").forEach((card) => {
+        card.querySelectorAll("[data-review-action]").forEach((form) => {
+            form.addEventListener("submit", async (event) => {
+                event.preventDefault();
+                const action = form.dataset.reviewAction;
+                const submitButton = form.querySelector("button[type='submit']");
+                const payload = reviewCardPayload(card);
+                let url = card.dataset.apiUrl;
+                let method = "PATCH";
+
+                if (action === "caption") {
+                    payload.caption = form.elements.caption.value;
+                } else if (action === "people") {
+                    payload.people = form.elements.people.value;
+                    url = card.dataset.peopleUrl;
+                } else if (action === "location") {
+                    payload.location_name = form.elements.location_name.value;
+                    payload.latitude = form.elements.latitude.value;
+                    payload.longitude = form.elements.longitude.value;
+                    url = card.dataset.locationUrl;
+                } else if (action === "chapter") {
+                    payload.chapter_id = form.elements.chapter_id.value;
+                    url = card.dataset.chapterUrl;
+                    method = "POST";
+                }
+
+                if (submitButton) {
+                    submitButton.disabled = true;
+                }
+                setReviewStatus(card, "Saving...");
+                try {
+                    await reviewJsonFetch(url, payload, method);
+                    setReviewStatus(card, "Saved. Updating queue...");
+                    reviewRefresh();
+                } catch (error) {
+                    setReviewStatus(card, error.message, true);
+                    if (submitButton) {
+                        submitButton.disabled = false;
+                    }
+                }
+            });
+        });
+
+        const deleteButton = card.querySelector("[data-review-delete]");
+        if (deleteButton) {
+            deleteButton.addEventListener("click", async () => {
+                const confirmed = await requestConfirmation({
+                    title: deleteButton.dataset.confirmTitle || "Delete photo?",
+                    message: deleteButton.dataset.confirmMessage || "This permanently removes this photo.",
+                    confirmLabel: "Delete",
+                    danger: true,
+                });
+                if (!confirmed) {
+                    return;
+                }
+                deleteButton.disabled = true;
+                setReviewStatus(card, "Deleting...");
+                try {
+                    await reviewJsonFetch(card.dataset.apiUrl, {}, "DELETE");
+                    setReviewStatus(card, "Deleted. Updating queue...");
+                    reviewRefresh();
+                } catch (error) {
+                    setReviewStatus(card, error.message, true);
+                    deleteButton.disabled = false;
+                }
+            });
+        }
+    });
+
     document.querySelectorAll("form[data-upload-progress]").forEach((form) => {
         const progressPanel = form.querySelector("[data-upload-progress-panel]");
         const progressBar = form.querySelector("[data-upload-progress-bar]");

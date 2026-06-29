@@ -50,7 +50,25 @@
                 {% if issue["items"] %}
                     <div class="review-sample-list">
                         {% for item in issue["items"] %}
-                            <article class="timeline-search-card review-sample-card">
+                            <article
+                                class="timeline-search-card review-sample-card"
+                                data-review-card
+                                data-kind="{{ item['kind_key'] }}"
+                                data-item-id="{{ item['id'] }}"
+                                data-api-url="{{ item['api_url'] }}"
+                                data-people-url="{{ item['people_url'] }}"
+                                data-location-url="{{ item['location_url'] }}"
+                                data-chapter-url="{{ item['chapter_url'] }}"
+                                data-title="{{ item['title_value'] }}"
+                                data-caption="{{ item['caption'] }}"
+                                data-body="{{ item['body'] }}"
+                                data-entry-date="{{ item['entry_date'] }}"
+                                data-tags="{{ item['tags_text'] }}"
+                                data-people="{{ item['people_text'] }}"
+                                data-location-name="{{ item['location_name'] }}"
+                                data-latitude="{{ item['latitude'] if item['latitude'] is not none else '' }}"
+                                data-longitude="{{ item['longitude'] if item['longitude'] is not none else '' }}"
+                            >
                                 <div class="timeline-search-content">
                                     {% if item.get("image_url") %}
                                         <img class="timeline-search-thumb" src="{{ item['image_url'] }}" alt="">
@@ -69,7 +87,71 @@
                                         {% endif %}
                                     </div>
                                 </div>
-                                <a class="button primary small" href="{{ item['url'] }}">Open</a>
+                                <div class="review-card-actions">
+                                    {% if issue["key"] in ("captions", "public") and item["kind_key"] == "photo" %}
+                                        <form class="review-inline-form review-caption-form" data-review-action="caption">
+                                            <label>
+                                                <span>Caption</span>
+                                                <textarea name="caption" rows="2" maxlength="2000" placeholder="Add what makes this photo meaningful">{{ item["caption"] }}</textarea>
+                                            </label>
+                                            <button class="button primary small" type="submit">Save caption</button>
+                                        </form>
+                                    {% elif issue["key"] == "people" %}
+                                        <form class="review-inline-form" data-review-action="people">
+                                            <label>
+                                                <span>People</span>
+                                                <input name="people" value="{{ item['people_text'] }}" placeholder="Alice, Sam" maxlength="500" autocomplete="off">
+                                            </label>
+                                            <button class="button primary small" type="submit">Save people</button>
+                                        </form>
+                                    {% elif issue["key"] == "places" %}
+                                        <form class="review-inline-form review-place-form" data-review-action="location">
+                                            <label>
+                                                <span>Place</span>
+                                                <input name="location_name" value="{{ item['location_name'] }}" placeholder="City, venue, or address" autocomplete="off">
+                                            </label>
+                                            <label>
+                                                <span>Lat</span>
+                                                <input name="latitude" value="{{ item['latitude'] if item['latitude'] is not none else '' }}" inputmode="decimal">
+                                            </label>
+                                            <label>
+                                                <span>Long</span>
+                                                <input name="longitude" value="{{ item['longitude'] if item['longitude'] is not none else '' }}" inputmode="decimal">
+                                            </label>
+                                            <button class="button primary small" type="submit">Save place</button>
+                                        </form>
+                                    {% elif issue["key"] == "chapters" %}
+                                        {% if queue["chapter_options"] %}
+                                            <form class="review-inline-form" data-review-action="chapter">
+                                                <label>
+                                                    <span>Chapter</span>
+                                                    <select name="chapter_id" required>
+                                                        <option value="">Choose chapter</option>
+                                                        {% for chapter in queue["chapter_options"] %}
+                                                            <option value="{{ chapter['id'] }}">{{ chapter["title"] }}</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                </label>
+                                                <button class="button primary small" type="submit">Add</button>
+                                            </form>
+                                        {% else %}
+                                            <a class="button primary small" href="{{ url_for('chapters') }}">Create chapter</a>
+                                        {% endif %}
+                                    {% elif issue["key"] == "duplicates" %}
+                                        <div class="review-duplicate-actions">
+                                            <a class="button secondary small" href="{{ item['duplicate_keep_url'] }}">Open original</a>
+                                            <button
+                                                class="button danger small"
+                                                type="button"
+                                                data-review-delete
+                                                data-confirm-title="Delete duplicate photo?"
+                                                data-confirm-message="This permanently removes this matching copy, including messages, chapter placements, tags, and reactions."
+                                            >Delete duplicate</button>
+                                        </div>
+                                    {% endif %}
+                                    <a class="button secondary small" href="{{ item['url'] }}">Open</a>
+                                    <span class="review-action-status" data-review-status aria-live="polite"></span>
+                                </div>
                             </article>
                         {% endfor %}
                     </div>

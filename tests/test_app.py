@@ -826,6 +826,70 @@ def test_chapter_items_can_be_reordered_with_json_api(client, helpers):
     assert bad_response.status_code == 400
 
 
+def test_chapter_draft_suggests_filtered_items_and_creates_chapter(client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="draft-photo.png",
+        title="Harbor arrival",
+        caption="Walking into the harbor",
+        photo_date="2020-05-04",
+        people="Maya Lake",
+        location_name="Lisbon",
+        tag="friends",
+    )
+    text_id = helpers.create_text(
+        client,
+        "Dinner with Maya after the ferry ride",
+        entry_date="2020-05-06",
+        people="Maya Lake",
+        location_name="Lisbon",
+        tag="friends",
+    )
+    helpers.create_text(
+        client,
+        "Unrelated cabin weekend",
+        entry_date="2020-05-07",
+        people="Noah Woods",
+        tag="private",
+    )
+
+    draft = client.get("/chapters/draft?person=Maya&place=Lisbon&visibility=friends")
+    assert draft.status_code == 200
+    assert b"Maya Memories" in draft.data
+    assert b"Harbor arrival" in draft.data
+    assert b"Dinner with Maya" in draft.data
+    assert b"Unrelated cabin weekend" not in draft.data
+
+    response = client.post(
+        "/chapters/draft?person=Maya&place=Lisbon&visibility=friends",
+        data={
+            **helpers.csrf_form_data(client, "/chapters/draft?person=Maya&place=Lisbon&visibility=friends"),
+            "title": "Maya in Lisbon",
+            "description": "Edited draft description",
+            "visibility": "friends",
+            "item_refs": [f"photo:{photo_id}", f"text:{text_id}"],
+        },
+    )
+    assert response.status_code == 302
+    chapter = helpers.row("SELECT id, title, description, visibility FROM chapters WHERE title = ?", ("Maya in Lisbon",))
+    assert chapter["description"] == "Edited draft description"
+    assert chapter["visibility"] == "friends"
+    items = helpers.rows(
+        """
+        SELECT item_kind, item_id, position
+        FROM chapter_items
+        WHERE chapter_id = ?
+        ORDER BY position ASC
+        """,
+        (chapter["id"],),
+    )
+    assert [(row["item_kind"], row["item_id"], row["position"]) for row in items] == [
+        ("photo", photo_id, 1),
+        ("text", text_id, 2),
+    ]
+
+
 def test_privacy_preview_filters_owner_timeline_views(client, helpers):
     helpers.create_user(client, "owner")
     helpers.create_text(

@@ -2741,6 +2741,98 @@ details.privacy-toggle-panel {
     max-height: 140px;
 }
 
+.chapter-draft-entry {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.chapter-draft-entry p {
+    margin-bottom: 0;
+}
+
+.chapter-draft-filter-form {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(150px, 1fr)) auto;
+    align-items: end;
+    gap: 12px;
+}
+
+.chapter-draft-create-form {
+    display: grid;
+    gap: 14px;
+}
+
+.chapter-draft-list {
+    display: grid;
+    gap: 8px;
+}
+
+.chapter-draft-item {
+    display: grid;
+    grid-template-columns: auto 34px minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    background: #fff;
+    color: var(--ink);
+}
+
+.chapter-draft-item input {
+    width: 18px;
+    height: 18px;
+    margin-top: 5px;
+}
+
+.chapter-draft-position {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 999px;
+    background: var(--surface-strong);
+    color: var(--muted);
+    font-size: 0.8rem;
+    font-weight: 900;
+}
+
+.chapter-draft-main {
+    display: grid;
+    min-width: 0;
+    gap: 4px;
+}
+
+.chapter-draft-main strong,
+.chapter-draft-main span,
+.chapter-draft-main small,
+.chapter-draft-main em {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.chapter-draft-main strong {
+    color: var(--ink);
+    font-size: 0.95rem;
+}
+
+.chapter-draft-main span,
+.chapter-draft-main em {
+    color: var(--muted);
+    font-size: 0.82rem;
+    font-style: normal;
+    font-weight: 800;
+}
+
+.chapter-draft-main small {
+    color: var(--ink);
+    font-size: 0.86rem;
+    line-height: 1.35;
+}
+
 .chapter-invite-form {
     display: grid;
     grid-template-columns: minmax(220px, 360px) auto;
@@ -3663,6 +3755,7 @@ details.privacy-toggle-panel {
     .location-form,
     .privacy-bulk-form,
     .chapter-form,
+    .chapter-draft-filter-form,
     .chapter-invite-form {
         grid-template-columns: 1fr;
     }
@@ -3758,6 +3851,22 @@ details.privacy-toggle-panel {
             "cover"
             "main"
             "actions";
+    }
+
+    .chapter-draft-entry {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .chapter-draft-entry .button {
+        width: 100%;
+    }
+
+    .chapter-draft-main strong,
+    .chapter-draft-main span,
+    .chapter-draft-main small,
+    .chapter-draft-main em {
+        white-space: normal;
     }
 
     .chapter-card-cover {

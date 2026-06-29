@@ -2956,6 +2956,223 @@ def get_chapters_with_counts(db):
     return chapters
 
 
+def parse_optional_year(value):
+    try:
+        year = int((value or "").strip())
+    except (TypeError, ValueError):
+        return None
+    if year in user_years():
+        return year
+    return None
+
+
+def chapter_draft_filters(args=None):
+    args = args or request.args
+    year_from = parse_optional_year(args.get("year_from"))
+    year_to = parse_optional_year(args.get("year_to"))
+    if year_from is not None and year_to is not None and year_from > year_to:
+        year_from, year_to = year_to, year_from
+    visibility = normalized_search_filter(args.get("visibility"), ("all", *TAG_CHOICES))
+    return {
+        "q": (args.get("q") or "").strip(),
+        "person": (args.get("person") or "").strip(),
+        "place": (args.get("place") or "").strip(),
+        "year_from": year_from,
+        "year_to": year_to,
+        "visibility": visibility,
+    }
+
+
+def chapter_draft_has_filters(filters):
+    return any(
+        (
+            filters["q"],
+            filters["person"],
+            filters["place"],
+            filters["year_from"] is not None,
+            filters["year_to"] is not None,
+            filters["visibility"] != "all",
+        )
+    )
+
+
+def text_matches_query(fields, query):
+    if not query:
+        return True
+    needle = query.lower()
+    return any(needle in str(field or "").lower() for field in fields)
+
+
+def chapter_draft_item_matches(filters, item, tags, people):
+    if filters["visibility"] != "all" and tags_to_text(tags) != filters["visibility"]:
+        return False
+    if filters["year_from"] is not None and item["year"] < filters["year_from"]:
+        return False
+    if filters["year_to"] is not None and item["year"] > filters["year_to"]:
+        return False
+    if filters["person"] and not text_matches_query(people, filters["person"]):
+        return False
+    if filters["place"] and not text_matches_query((item["location_name"],), filters["place"]):
+        return False
+    return True
+
+
+def chapter_draft_item_payload(item, tags, people):
+    date_label = format_timeline_date_label(item["year"], item["month"], item["display_date"])
+    preview = item["caption"] if item["kind"] == "photo" else item["body"]
+    return {
+        "kind": item["kind"],
+        "id": item["id"],
+        "ref": f"{item['kind']}:{item['id']}",
+        "year": item["year"],
+        "month": item["month"],
+        "date_label": date_label,
+        "source_label": item_source_label(item["year"], item["month"]),
+        "title": item["title"],
+        "preview": short_preview(preview or "", 150),
+        "location_name": item["location_name"] or "",
+        "people_text": people_to_text(people),
+        "privacy_label": privacy_label_for_tags(tags),
+        "sort_key": timeline_item_sort_key(item),
+    }
+
+
+def chapter_draft_title(filters, items):
+    if filters["person"]:
+        return f"{filters['person']} Memories"
+    if filters["place"]:
+        return f"{filters['place']} Memories"
+    if filters["q"]:
+        return f"{filters['q']} Story"
+    years = sorted({item["year"] for item in items})
+    if len(years) == 1:
+        return f"{years[0]} Memories"
+    if years:
+        return f"{years[0]}-{years[-1]} Memories"
+    return "New Chapter Draft"
+
+
+def chapter_draft_description(filters, items):
+    labels = []
+    if filters["person"]:
+        labels.append(f"featuring {filters['person']}")
+    if filters["place"]:
+        labels.append(f"around {filters['place']}")
+    if filters["q"]:
+        labels.append(f"matching '{filters['q']}'")
+    years = sorted({item["year"] for item in items})
+    if years:
+        year_label = str(years[0]) if len(years) == 1 else f"{years[0]}-{years[-1]}"
+        labels.append(f"from {year_label}")
+    detail = ", ".join(labels)
+    if detail:
+        return f"Suggested from {len(items)} timeline memories {detail}."
+    return f"Suggested from {len(items)} recent timeline memories."
+
+
+def build_chapter_draft(db, filters, limit=24):
+    photo_rows = db.execute(
+        """
+        SELECT id, year, month, original_filename, title, caption, photo_date AS display_date,
+               location_name, latitude, longitude, created_at
+        FROM photos
+        WHERE user_id = ?
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    text_rows = db.execute(
+        """
+        SELECT id, year, month, body, entry_date AS display_date,
+               location_name, latitude, longitude, created_at
+        FROM text_entries
+        WHERE user_id = ?
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    photo_tags = load_tags_for_items(db, "photo", [row["id"] for row in photo_rows])
+    text_tags = load_tags_for_items(db, "text", [row["id"] for row in text_rows])
+    photo_people = load_people_for_items(db, "photo", [row["id"] for row in photo_rows])
+    text_people = load_people_for_items(db, "text", [row["id"] for row in text_rows])
+    items = []
+
+    for row in photo_rows:
+        tags = photo_tags.get(row["id"], [DEFAULT_TAG])
+        people = photo_people.get(row["id"], [])
+        item = {
+            "kind": "photo",
+            "id": row["id"],
+            "year": row["year"],
+            "month": row["month"],
+            "display_date": row["display_date"],
+            "title": photo_display_title(row),
+            "caption": row["caption"] or "",
+            "location_name": row["location_name"] or "",
+        }
+        if not chapter_draft_item_matches(filters, item, tags, people):
+            continue
+        if not text_matches_query(
+            (row["original_filename"], row["title"], row["caption"], row["display_date"], item["location_name"], *people),
+            filters["q"],
+        ):
+            continue
+        items.append(chapter_draft_item_payload(item, tags, people))
+
+    for row in text_rows:
+        tags = text_tags.get(row["id"], [DEFAULT_TAG])
+        people = text_people.get(row["id"], [])
+        item = {
+            "kind": "text",
+            "id": row["id"],
+            "year": row["year"],
+            "month": row["month"],
+            "display_date": row["display_date"],
+            "title": "Text entry",
+            "body": row["body"],
+            "location_name": row["location_name"] or "",
+        }
+        if not chapter_draft_item_matches(filters, item, tags, people):
+            continue
+        if not text_matches_query(
+            (row["body"], row["display_date"], item["location_name"], *people),
+            filters["q"],
+        ):
+            continue
+        items.append(chapter_draft_item_payload(item, tags, people))
+
+    items.sort(key=lambda item: item["sort_key"])
+    if not chapter_draft_has_filters(filters):
+        items = list(reversed(items))[:limit]
+        items.reverse()
+    else:
+        items = items[:limit]
+    for item in items:
+        item.pop("sort_key", None)
+    return {
+        "title": chapter_draft_title(filters, items),
+        "description": chapter_draft_description(filters, items),
+        "items": items,
+    }
+
+
+def parse_chapter_draft_refs(values):
+    refs = []
+    seen = set()
+    for value in values:
+        try:
+            kind, raw_id = value.split(":", 1)
+            item_id = int(raw_id)
+        except (AttributeError, ValueError):
+            continue
+        if kind not in ("photo", "text") or item_id <= 0:
+            continue
+        key = (kind, item_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        refs.append(key)
+    return refs
+
+
 def accepted_connection_between(db, user_id, other_user_id):
     return db.execute(
         """
@@ -7592,6 +7809,69 @@ def chapters():
         "chapters.html",
         chapters=get_chapters_with_counts(db),
         shared_chapters=get_shared_chapters(db),
+    )
+
+
+@app.route("/chapters/draft", methods=("GET", "POST"))
+@birthday_required
+def chapter_draft():
+    db = get_db()
+    filters = chapter_draft_filters()
+    draft = build_chapter_draft(db, filters)
+    form_title = request.form.get("title", draft["title"]).strip()
+    form_description = request.form.get("description", draft["description"]).strip()
+    form_visibility = chapter_visibility(request.form.get("visibility", DEFAULT_TAG))
+    selected_refs = request.form.getlist("item_refs") if request.method == "POST" else [item["ref"] for item in draft["items"]]
+
+    if request.method == "POST":
+        refs = parse_chapter_draft_refs(selected_refs)
+        if not form_title:
+            flash("Chapter title is required.", "error")
+        elif not refs:
+            flash("Choose at least one memory for the chapter.", "error")
+        else:
+            owned_refs = [
+                (item_kind, get_owned_timeline_item(item_kind, item_id)["id"])
+                for item_kind, item_id in refs
+            ]
+            cursor = db.execute(
+                """
+                INSERT INTO chapters (
+                    user_id, title, description, visibility, cover_item_kind, cover_item_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    g.user["id"],
+                    form_title,
+                    form_description or None,
+                    form_visibility,
+                    owned_refs[0][0],
+                    owned_refs[0][1],
+                ),
+            )
+            chapter_id = cursor.lastrowid
+            for position, (item_kind, item_id) in enumerate(owned_refs, start=1):
+                db.execute(
+                    """
+                    INSERT INTO chapter_items (chapter_id, item_kind, item_id, position)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (chapter_id, item_kind, item_id, position),
+                )
+            db.commit()
+            flash("Chapter draft created.", "success")
+            return redirect(url_for("chapter_detail", chapter_id=chapter_id))
+
+    return render_template(
+        "chapter_draft.html",
+        filters=filters,
+        draft=draft,
+        title=form_title,
+        description=form_description,
+        visibility=form_visibility,
+        selected_refs=set(selected_refs),
+        years=list(user_years()),
     )
 
 

@@ -1945,6 +1945,7 @@ details.privacy-toggle-panel {
 
 #modal-image,
 #readonly-modal-image,
+#carousel-photo-modal-image,
 .modal-image {
     width: 100%;
     height: 100%;
@@ -1952,6 +1953,18 @@ details.privacy-toggle-panel {
     max-height: calc(90vh - 76px);
     object-fit: contain;
     background: #101412;
+}
+
+.carousel-photo-modal-body {
+    display: grid;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    background: #101412;
+}
+
+.carousel-photo-modal-panel {
+    width: min(1080px, 100%);
 }
 
 .all-items-panel {
@@ -2102,6 +2115,24 @@ details.privacy-toggle-panel {
     overflow: hidden;
     border-radius: 8px;
     background: #101412;
+}
+
+.carousel-image-button {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    border: 0;
+    padding: 0;
+    background: transparent;
+    cursor: zoom-in;
+}
+
+.carousel-image-button:focus-visible {
+    outline: 3px solid rgba(255, 255, 255, 0.82);
+    outline-offset: -3px;
 }
 
 .carousel-window-media .carousel-image {

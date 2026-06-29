@@ -197,6 +197,155 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    document.querySelectorAll("form[data-upload-progress]").forEach((form) => {
+        const progressPanel = form.querySelector("[data-upload-progress-panel]");
+        const progressBar = form.querySelector("[data-upload-progress-bar]");
+        const progressPercent = form.querySelector("[data-upload-progress-percent]");
+        const progressLabel = form.querySelector("[data-upload-progress-label]");
+        const submitButton = form.querySelector("button[type='submit']");
+        const fileInput = form.querySelector("input[type='file']");
+
+        if (!progressPanel || !progressBar || !progressPercent || !window.FormData || !window.XMLHttpRequest) {
+            return;
+        }
+
+        const setUploadProgress = (percent, label = "Uploading...") => {
+            const normalizedPercent = Math.max(0, Math.min(100, Math.round(percent)));
+            progressPanel.hidden = false;
+            progressBar.value = normalizedPercent;
+            progressPercent.textContent = `${normalizedPercent}%`;
+            if (progressLabel) {
+                progressLabel.textContent = label;
+            }
+        };
+
+        form.addEventListener("submit", (event) => {
+            if (form.dataset.nativeSubmit === "true") {
+                delete form.dataset.nativeSubmit;
+                return;
+            }
+
+            event.preventDefault();
+            if (submitButton) {
+                submitButton.disabled = true;
+            }
+
+            const selectedFiles = fileInput && fileInput.files ? fileInput.files.length : 0;
+            const uploadLabel = selectedFiles > 1 ? `Uploading ${selectedFiles} photos...` : "Uploading photo...";
+            setUploadProgress(0, uploadLabel);
+
+            const request = new XMLHttpRequest();
+            request.open((form.method || "POST").toUpperCase(), form.action || window.location.href);
+            request.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+            if (csrfToken) {
+                request.setRequestHeader("X-CSRF-Token", csrfToken);
+            }
+
+            request.upload.addEventListener("progress", (progressEvent) => {
+                if (!progressEvent.lengthComputable) {
+                    return;
+                }
+                setUploadProgress((progressEvent.loaded / progressEvent.total) * 100, uploadLabel);
+            });
+
+            request.addEventListener("load", () => {
+                setUploadProgress(100, "Processing...");
+                const responseUrl = request.responseURL || window.location.href;
+                if (responseUrl) {
+                    window.history.replaceState({}, "", responseUrl);
+                }
+                document.open();
+                document.write(request.responseText);
+                document.close();
+            });
+
+            request.addEventListener("error", () => {
+                if (submitButton) {
+                    submitButton.disabled = false;
+                }
+                setUploadProgress(progressBar.value || 0, "Upload failed.");
+            });
+
+            request.addEventListener("abort", () => {
+                if (submitButton) {
+                    submitButton.disabled = false;
+                }
+                setUploadProgress(progressBar.value || 0, "Upload canceled.");
+            });
+
+            request.send(new FormData(form));
+        });
+    });
+
+    const adminJobCards = Array.from(document.querySelectorAll("[data-admin-job]"));
+    if (adminJobCards.length) {
+        const terminalStatuses = new Set(["succeeded", "failed"]);
+        const updateJobCard = (card, job) => {
+            card.classList.remove("is-queued", "is-running", "is-succeeded", "is-failed");
+            card.classList.add(`is-${job.status}`);
+
+            const status = card.querySelector("[data-job-status]");
+            if (status) {
+                status.textContent = job.status;
+            }
+
+            const progress = card.querySelector("[data-job-progress]");
+            if (progress) {
+                progress.max = job.progress_total || 1;
+                progress.value = job.progress_total
+                    ? job.progress_current || 0
+                    : (job.status === "succeeded" ? 1 : 0);
+            }
+
+            const message = card.querySelector("[data-job-message]");
+            if (message) {
+                message.textContent = job.message || job.result_summary || "Waiting to start.";
+            }
+
+            const result = card.querySelector("[data-job-result]");
+            if (result) {
+                result.textContent = job.result_summary || "";
+                result.hidden = !job.result_summary;
+            }
+
+            const error = card.querySelector("[data-job-error]");
+            if (error) {
+                error.textContent = job.error ? job.error.split("\n")[0] : "";
+                error.hidden = !job.error;
+            }
+        };
+
+        const refreshAdminJobs = async () => {
+            const activeCards = adminJobCards.filter((card) => {
+                const status = card.querySelector("[data-job-status]")?.textContent || "";
+                return !terminalStatuses.has(status.trim());
+            });
+            if (!activeCards.length) {
+                return;
+            }
+
+            await Promise.all(activeCards.map(async (card) => {
+                if (!card.dataset.jobUrl) {
+                    return;
+                }
+                try {
+                    const response = await csrfFetch(card.dataset.jobUrl, {
+                        headers: {"Accept": "application/json"},
+                    });
+                    if (!response.ok) {
+                        return;
+                    }
+                    updateJobCard(card, await response.json());
+                } catch (error) {
+                    // The next poll will retry.
+                }
+            }));
+        };
+
+        refreshAdminJobs();
+        window.setInterval(refreshAdminJobs, 1500);
+    }
+
     const navToggle = document.querySelector("[data-nav-toggle]");
     const primaryNavigation = document.querySelector("[data-primary-navigation]");
     if (navToggle && primaryNavigation) {

@@ -1,5 +1,6 @@
 import io
 import json
+import re
 import zipfile
 
 from PIL import Image
@@ -106,8 +107,62 @@ def test_password_reset_link_is_local_dev_only(app, client, helpers):
     assert helpers.row("SELECT COUNT(*) AS token_count FROM password_reset_tokens")["token_count"] == 1
 
 
+def test_password_reset_token_changes_password_and_cannot_be_reused(app, client, helpers):
+    helpers.create_user(client, "alice", password="old-password")
+    app.config["LOCAL_PASSWORD_RESET_LINKS"] = True
+
+    response = client.post(
+        "/forgot-password",
+        data={
+            **helpers.csrf_form_data(client, "/forgot-password"),
+            "identifier": "alice@example.com",
+        },
+    )
+    assert response.status_code == 200
+    match = re.search(rb"/reset-password/([^\"<\s]+)", response.data)
+    assert match
+    token = match.group(1).decode()
+
+    reset_page = client.get(f"/reset-password/{token}")
+    assert reset_page.status_code == 200
+    assert b"Reset password" in reset_page.data
+
+    mismatched_password = client.post(
+        f"/reset-password/{token}",
+        data={
+            **helpers.csrf_form_data(client, f"/reset-password/{token}"),
+            "password": "new-password",
+            "confirm_password": "different-password",
+        },
+    )
+    assert mismatched_password.status_code == 200
+    assert b"The passwords do not match." in mismatched_password.data
+
+    reset_response = client.post(
+        f"/reset-password/{token}",
+        data={
+            **helpers.csrf_form_data(client, f"/reset-password/{token}"),
+            "password": "new-password",
+            "confirm_password": "new-password",
+        },
+    )
+    assert reset_response.status_code == 302
+    assert reset_response.headers["Location"].endswith("/login")
+
+    assert helpers.login(client, "alice", password="old-password").status_code == 200
+    assert helpers.login(client, "alice", password="new-password").status_code == 302
+    reused = client.get(f"/reset-password/{token}", follow_redirects=True)
+    assert reused.status_code == 200
+    assert b"invalid or expired" in reused.data
+
+
 def test_uploads_text_entries_and_pdf_exports(client, helpers):
     helpers.create_user(client, "owner")
+
+    month_page = client.get("/year/2020/5")
+    assert month_page.status_code == 200
+    assert b"data-upload-progress" in month_page.data
+    assert b"data-upload-progress-bar" in month_page.data
 
     photo_id = helpers.upload_photo(
         client,
@@ -281,6 +336,12 @@ def test_admin_page_is_daniel_only_and_converts_existing_images(app, client, hel
     )
     assert convert_response.status_code == 200
     assert b"Converted" in convert_response.data
+    convert_job = helpers.row("SELECT * FROM jobs WHERE kind = ?", ("convert_images",))
+    assert convert_job["status"] == "succeeded"
+    assert convert_job["progress_current"] == convert_job["progress_total"] == 1
+    job_response = client.get(f"/admin/jobs/{convert_job['id']}")
+    assert job_response.status_code == 200
+    assert job_response.get_json()["result_summary"].startswith("Converted 1 image rows")
 
     converted = helpers.row("SELECT mime_type, image_data, image_hash FROM photos WHERE original_filename = ?", ("legacy.png",))
     assert converted["mime_type"] == "image/jpeg"
@@ -289,6 +350,76 @@ def test_admin_page_is_daniel_only_and_converts_existing_images(app, client, hel
     with Image.open(io.BytesIO(converted["image_data"])) as stored_image:
         assert stored_image.format == "JPEG"
         assert max(stored_image.size) == 1200
+
+
+def test_admin_maintenance_compacts_existing_jpegs_and_vacuums_database(app, client, helpers):
+    daniel_id = helpers.create_user(client, "Daniel")
+
+    large_jpeg = io.BytesIO()
+    Image.new("RGB", (2200, 1600), color=(140, 74, 49)).save(
+        large_jpeg,
+        format="JPEG",
+        quality=95,
+    )
+    original_bytes = large_jpeg.getvalue()
+    with app.app_context():
+        db = helpers.app_module.get_db()
+        db.execute(
+            """
+            INSERT INTO photos (
+                user_id, year, month, original_filename, mime_type, image_data, image_hash
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                daniel_id,
+                2020,
+                5,
+                "large-existing.jpg",
+                "image/jpeg",
+                original_bytes,
+                helpers.app_module.photo_image_hash(original_bytes),
+            ),
+        )
+        db.commit()
+
+    admin_page = client.get("/admin")
+    assert admin_page.status_code == 200
+    assert b"Stored image data" in admin_page.data
+    assert b"Reclaim database space" in admin_page.data
+    assert b"Compact image storage" in admin_page.data
+
+    compact_response = client.post(
+        "/admin/images/compact",
+        data=helpers.csrf_form_data(client, "/admin"),
+        follow_redirects=True,
+    )
+    assert compact_response.status_code == 200
+    assert b"Compacted" in compact_response.data
+    compact_job = helpers.row("SELECT * FROM jobs WHERE kind = ?", ("compact_images",))
+    assert compact_job["status"] == "succeeded"
+    assert compact_job["progress_current"] == compact_job["progress_total"]
+
+    compacted = helpers.row(
+        "SELECT image_data, image_hash FROM photos WHERE original_filename = ?",
+        ("large-existing.jpg",),
+    )
+    assert len(compacted["image_data"]) < len(original_bytes)
+    assert compacted["image_hash"] != helpers.app_module.photo_image_hash(original_bytes)
+    with Image.open(io.BytesIO(compacted["image_data"])) as stored_image:
+        assert stored_image.format == "JPEG"
+        assert max(stored_image.size) == 1200
+
+    vacuum_response = client.post(
+        "/admin/database/vacuum",
+        data=helpers.csrf_form_data(client, "/admin"),
+        follow_redirects=True,
+    )
+    assert vacuum_response.status_code == 200
+    assert b"Database is now" in vacuum_response.data
+    vacuum_job = helpers.row("SELECT * FROM jobs WHERE kind = ?", ("vacuum_database",))
+    assert vacuum_job["status"] == "succeeded"
+    assert client.get(f"/admin/jobs/{vacuum_job['id']}").get_json()["progress_percent"] == 100
 
 
 def test_manual_people_tagging_for_items_search_and_updates(app, client, helpers):
@@ -467,6 +598,11 @@ def test_on_this_day_shows_matching_dated_memories(client, helpers):
 
 def test_timeline_import_assistant_reviews_detected_dates_before_saving(client, helpers):
     helpers.create_user(client, "owner")
+
+    import_page = client.get("/timeline/import")
+    assert import_page.status_code == 200
+    assert b"data-upload-progress" in import_page.data
+    assert b"data-upload-progress-bar" in import_page.data
 
     upload_response = client.post(
         "/timeline/import",

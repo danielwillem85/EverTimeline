@@ -18,6 +18,7 @@ def app(tmp_path):
     app_module.app.config.update(
         TESTING=True,
         SECRET_KEY="test-secret",
+        RUN_JOBS_INLINE=True,
     )
     app_module.init_db()
 

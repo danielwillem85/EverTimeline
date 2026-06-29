@@ -11,6 +11,8 @@ import random
 import re
 import secrets
 import sqlite3
+import threading
+import traceback
 import zipfile
 from xml.sax.saxutils import escape
 
@@ -109,6 +111,8 @@ DEFAULT_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
 ADMIN_USERNAME = "Daniel"
 SQLITE_BUSY_TIMEOUT_MS = 30000
 IMAGE_CONVERSION_COMMIT_INTERVAL = 5
+JOB_STATUSES = ("queued", "running", "succeeded", "failed")
+JOB_KINDS = ("convert_images", "compact_images", "vacuum_database")
 
 
 def format_file_size(byte_count):
@@ -181,6 +185,7 @@ app.config.update(
     MAX_CONTENT_LENGTH=configured_max_upload_bytes(),
     CSRF_PROTECT=True,
     LOCAL_PASSWORD_RESET_LINKS=is_local_development(),
+    RUN_JOBS_INLINE=False,
 )
 
 
@@ -557,6 +562,25 @@ def init_db():
                 FOREIGN KEY (inviter_id) REFERENCES users (id) ON DELETE CASCADE,
                 FOREIGN KEY (recipient_id) REFERENCES users (id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN ('convert_images', 'compact_images', 'vacuum_database')),
+                title TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
+                progress_current INTEGER NOT NULL DEFAULT 0,
+                progress_total INTEGER NOT NULL DEFAULT 0,
+                message TEXT NOT NULL DEFAULT '',
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                result_json TEXT NOT NULL DEFAULT '{}',
+                error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                started_at TEXT,
+                finished_at TEXT,
+                updated_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            );
             """
         )
         ensure_user_profile_columns(db)
@@ -683,6 +707,18 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS photo_import_items_batch
             ON photo_import_items (batch_id, id)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS jobs_user_created
+            ON jobs (user_id, created_at, id)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS jobs_status_created
+            ON jobs (status, created_at, id)
             """
         )
         db.commit()
@@ -1223,6 +1259,7 @@ def convert_image_rows_to_jpeg(
     include_jpeg=False,
     quality=JPEG_STORAGE_QUALITY,
     max_edge=JPEG_STORAGE_MAX_EDGE,
+    progress_callback=None,
 ):
     where_clause = "" if include_jpeg else "WHERE mime_type IS NULL OR mime_type != ?"
     params = () if include_jpeg else (JPEG_STORAGE_MIME,)
@@ -1238,6 +1275,7 @@ def convert_image_rows_to_jpeg(
     converted_count = 0
     skipped_count = 0
     saved_bytes = 0
+    processed_count = 0
     for row in rows:
         image_row = db.execute(
             f"""
@@ -1249,6 +1287,9 @@ def convert_image_rows_to_jpeg(
         ).fetchone()
         if image_row is None:
             skipped_count += 1
+            processed_count += 1
+            if progress_callback:
+                progress_callback(processed_count)
             continue
 
         original_size = len(image_row["image_data"])
@@ -1260,9 +1301,15 @@ def convert_image_rows_to_jpeg(
             )
         except ValueError:
             skipped_count += 1
+            processed_count += 1
+            if progress_callback:
+                progress_callback(processed_count)
             continue
         if len(image_data) >= original_size and include_jpeg:
             skipped_count += 1
+            processed_count += 1
+            if progress_callback:
+                progress_callback(processed_count)
             continue
 
         if hash_column:
@@ -1285,9 +1332,32 @@ def convert_image_rows_to_jpeg(
             )
         converted_count += 1
         saved_bytes += max(original_size - len(image_data), 0)
+        processed_count += 1
+        if progress_callback:
+            progress_callback(processed_count)
         if converted_count % IMAGE_CONVERSION_COMMIT_INTERVAL == 0:
             db.commit()
     return {"converted": converted_count, "skipped": skipped_count, "saved_bytes": saved_bytes}
+
+
+def count_image_rows_to_jpeg(db, table_name, id_column, include_jpeg=False):
+    where_clause = "" if include_jpeg else "WHERE mime_type IS NULL OR mime_type != ?"
+    params = () if include_jpeg else (JPEG_STORAGE_MIME,)
+    return db.execute(
+        f"""
+        SELECT COUNT(*) AS count
+        FROM {table_name}
+        {where_clause}
+        """,
+        params,
+    ).fetchone()["count"]
+
+
+def count_all_database_images_to_jpeg(db, include_jpeg=False):
+    return (
+        count_image_rows_to_jpeg(db, "photos", "id", include_jpeg)
+        + count_image_rows_to_jpeg(db, "photo_import_items", "id", include_jpeg)
+    )
 
 
 def convert_all_database_images_to_jpeg(
@@ -1295,7 +1365,15 @@ def convert_all_database_images_to_jpeg(
     include_jpeg=False,
     quality=JPEG_STORAGE_QUALITY,
     max_edge=JPEG_STORAGE_MAX_EDGE,
+    progress_callback=None,
 ):
+    processed_total = 0
+
+    def table_progress(processed_count):
+        if progress_callback:
+            progress_callback(processed_total + processed_count)
+
+    photo_total = count_image_rows_to_jpeg(db, "photos", "id", include_jpeg)
     photo_result = convert_image_rows_to_jpeg(
         db,
         "photos",
@@ -1304,7 +1382,9 @@ def convert_all_database_images_to_jpeg(
         include_jpeg=include_jpeg,
         quality=quality,
         max_edge=max_edge,
+        progress_callback=table_progress,
     )
+    processed_total += photo_total
     import_result = convert_image_rows_to_jpeg(
         db,
         "photo_import_items",
@@ -1313,6 +1393,7 @@ def convert_all_database_images_to_jpeg(
         include_jpeg=include_jpeg,
         quality=quality,
         max_edge=max_edge,
+        progress_callback=table_progress,
     )
     return {
         "converted": photo_result["converted"] + import_result["converted"],
@@ -1340,6 +1421,280 @@ def vacuum_database(db):
         "before_size": before_size,
         "after_size": after_size,
         "saved_bytes": max(before_size - after_size, 0),
+    }
+
+
+def json_dumps(data):
+    return json.dumps(data or {}, sort_keys=True)
+
+
+def json_loads_object(value):
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def utc_timestamp():
+    return datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0).isoformat(sep=" ")
+
+
+def job_row_to_dict(job):
+    result = json_loads_object(job["result_json"])
+    return {
+        "id": job["id"],
+        "user_id": job["user_id"],
+        "kind": job["kind"],
+        "title": job["title"],
+        "status": job["status"],
+        "progress_current": job["progress_current"],
+        "progress_total": job["progress_total"],
+        "progress_percent": job_progress_percent(job),
+        "message": job["message"],
+        "result": result,
+        "error": job["error"],
+        "created_at": job["created_at"],
+        "started_at": job["started_at"],
+        "finished_at": job["finished_at"],
+        "updated_at": job["updated_at"],
+        "result_summary": job_result_summary(job["kind"], result),
+    }
+
+
+def job_progress_percent(job):
+    total = job["progress_total"] or 0
+    if total <= 0:
+        return 100 if job["status"] == "succeeded" else 0
+    return min(100, round((job["progress_current"] or 0) * 100 / total))
+
+
+def job_result_summary(kind, result):
+    if not result:
+        return ""
+    if kind == "convert_images":
+        return (
+            f"Converted {result.get('converted', 0)} image rows "
+            f"({result.get('photos_converted', 0)} photos, "
+            f"{result.get('import_items_converted', 0)} import items)."
+        )
+    if kind == "compact_images":
+        return (
+            f"Compacted {result.get('converted', 0)} image rows and saved "
+            f"{format_file_size(result.get('saved_bytes', 0))} in image data. "
+            f"Database is now {format_file_size(result.get('database_size', 0))}."
+        )
+    if kind == "vacuum_database":
+        return (
+            f"Reclaimed {format_file_size(result.get('saved_bytes', 0))}. "
+            f"Database is now {format_file_size(result.get('after_size', 0))}."
+        )
+    return ""
+
+
+def update_job(db, job_id, **fields):
+    allowed_fields = {
+        "status",
+        "progress_current",
+        "progress_total",
+        "message",
+        "result_json",
+        "error",
+        "started_at",
+        "finished_at",
+        "updated_at",
+    }
+    updates = {
+        key: value
+        for key, value in fields.items()
+        if key in allowed_fields
+    }
+    if "updated_at" not in updates:
+        updates["updated_at"] = utc_timestamp()
+    assignments = ", ".join(f"{key} = ?" for key in updates)
+    db.execute(
+        f"UPDATE jobs SET {assignments} WHERE id = ?",
+        (*updates.values(), job_id),
+    )
+    db.commit()
+
+
+def get_job(db, job_id):
+    return db.execute(
+        "SELECT * FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+
+
+def recent_admin_jobs(db, limit=8):
+    return [
+        job_row_to_dict(row)
+        for row in db.execute(
+            """
+            SELECT *
+            FROM jobs
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    ]
+
+
+def enqueue_job(user_id, kind, title, payload=None):
+    if kind not in JOB_KINDS:
+        raise ValueError("Unknown job kind.")
+    db = get_db()
+    cursor = db.execute(
+        """
+        INSERT INTO jobs (user_id, kind, title, payload_json)
+        VALUES (?, ?, ?, ?)
+        """,
+        (user_id, kind, title, json_dumps(payload)),
+    )
+    db.commit()
+    job_id = cursor.lastrowid
+    if app.config.get("RUN_JOBS_INLINE"):
+        run_job(job_id)
+    else:
+        thread = threading.Thread(target=run_job, args=(job_id,), daemon=True)
+        thread.start()
+    return job_id
+
+
+def run_job(job_id):
+    with closing(sqlite3.connect(DATABASE, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)) as db:
+        db.row_factory = sqlite3.Row
+        configure_db_connection(db)
+        job = get_job(db, job_id)
+        if job is None or job["status"] != "queued":
+            return
+        now = utc_timestamp()
+        update_job(
+            db,
+            job_id,
+            status="running",
+            started_at=now,
+            progress_current=0,
+            progress_total=0,
+            message="Starting...",
+            error="",
+        )
+        try:
+            result = run_job_payload(db, job_id, job["kind"], json_loads_object(job["payload_json"]))
+        except Exception as exc:
+            update_job(
+                db,
+                job_id,
+                status="failed",
+                finished_at=utc_timestamp(),
+                message="Job failed.",
+                error=f"{exc}\n{traceback.format_exc(limit=8)}",
+            )
+            return
+        update_job(
+            db,
+            job_id,
+            status="succeeded",
+            finished_at=utc_timestamp(),
+            progress_current=result.get("progress_current", result.get("progress_total", 1)),
+            progress_total=result.get("progress_total", result.get("progress_current", 1)),
+            message=result.get("message", "Done."),
+            result_json=json_dumps(result.get("result", {})),
+            error="",
+        )
+
+
+def run_job_payload(db, job_id, kind, payload):
+    if kind == "convert_images":
+        return run_convert_images_job(db, job_id, include_jpeg=False)
+    if kind == "compact_images":
+        return run_convert_images_job(
+            db,
+            job_id,
+            include_jpeg=True,
+            quality=COMPACT_JPEG_STORAGE_QUALITY,
+            max_edge=COMPACT_JPEG_STORAGE_MAX_EDGE,
+            vacuum_after=True,
+        )
+    if kind == "vacuum_database":
+        return run_vacuum_job(db, job_id)
+    raise ValueError("Unknown job kind.")
+
+
+def run_convert_images_job(
+    db,
+    job_id,
+    include_jpeg=False,
+    quality=JPEG_STORAGE_QUALITY,
+    max_edge=JPEG_STORAGE_MAX_EDGE,
+    vacuum_after=False,
+):
+    total = count_all_database_images_to_jpeg(db, include_jpeg=include_jpeg)
+    message = "Compacting image storage..." if include_jpeg else "Converting images to JPEG..."
+    update_job(db, job_id, progress_total=total, message=message)
+
+    def progress_callback(processed_count):
+        update_job(
+            db,
+            job_id,
+            progress_current=processed_count,
+            progress_total=total,
+            message=message,
+        )
+
+    result = convert_all_database_images_to_jpeg(
+        db,
+        include_jpeg=include_jpeg,
+        quality=quality,
+        max_edge=max_edge,
+        progress_callback=progress_callback,
+    )
+    db.commit()
+    if vacuum_after:
+        update_job(
+            db,
+            job_id,
+            progress_current=total,
+            progress_total=total + 1,
+            message="Reclaiming database space...",
+        )
+        vacuum_result = vacuum_database(db)
+        result["database_size"] = vacuum_result["after_size"]
+        result["vacuum_saved_bytes"] = vacuum_result["saved_bytes"]
+        total += 1
+    final_message = job_result_summary("compact_images" if include_jpeg else "convert_images", result)
+    return {
+        "progress_current": total,
+        "progress_total": total,
+        "message": final_message or "No image rows were changed.",
+        "result": result,
+    }
+
+
+def run_vacuum_job(db, job_id):
+    update_job(
+        db,
+        job_id,
+        progress_current=0,
+        progress_total=1,
+        message="Reclaiming database space...",
+    )
+    result = vacuum_database(db)
+    update_job(
+        db,
+        job_id,
+        progress_current=1,
+        progress_total=1,
+        message="Database cleanup finished.",
+    )
+    return {
+        "progress_current": 1,
+        "progress_total": 1,
+        "message": job_result_summary("vacuum_database", result),
+        "result": result,
     }
 
 
@@ -7049,71 +7404,53 @@ def admin():
     return render_template(
         "admin.html",
         image_summary=admin_image_storage_summary(db),
+        admin_jobs=recent_admin_jobs(db),
     )
 
 
 @app.route("/admin/images/convert-jpeg", methods=("POST",))
 @admin_required
 def admin_convert_images_to_jpeg():
-    db = get_db()
-    result = convert_all_database_images_to_jpeg(db)
-    db.commit()
-    if result["converted"]:
-        flash(
-            (
-                f"Converted {result['converted']} image rows to JPEG "
-                f"({result['photos_converted']} photos, {result['import_items_converted']} import items)."
-            ),
-            "success",
-        )
-    else:
-        flash("No image rows were converted.", "success")
-    if result["skipped"]:
-        flash(f"Skipped {result['skipped']} image rows that could not be converted.", "error")
+    job_id = enqueue_job(
+        g.user["id"],
+        "convert_images",
+        "Convert images to JPEG",
+    )
+    flash(f"Image conversion job #{job_id} started.", "success")
     return redirect(url_for("admin"))
 
 
 @app.route("/admin/images/compact", methods=("POST",))
 @admin_required
 def admin_compact_images():
-    db = get_db()
-    result = convert_all_database_images_to_jpeg(
-        db,
-        include_jpeg=True,
-        quality=COMPACT_JPEG_STORAGE_QUALITY,
-        max_edge=COMPACT_JPEG_STORAGE_MAX_EDGE,
+    job_id = enqueue_job(
+        g.user["id"],
+        "compact_images",
+        "Compact image storage",
     )
-    db.commit()
-    vacuum_result = vacuum_database(db)
-    if result["converted"]:
-        flash(
-            (
-                f"Compacted {result['converted']} image rows and saved "
-                f"{format_file_size(result['saved_bytes'])} in image data. "
-                f"Database is now {format_file_size(vacuum_result['after_size'])}."
-            ),
-            "success",
-        )
-    else:
-        flash("Images were already at or below the compact storage profile.", "success")
-    if result["skipped"]:
-        flash(f"Skipped {result['skipped']} image rows that could not be compacted further.", "error")
+    flash(f"Image compaction job #{job_id} started.", "success")
     return redirect(url_for("admin"))
 
 
 @app.route("/admin/database/vacuum", methods=("POST",))
 @admin_required
 def admin_vacuum_database():
-    db = get_db()
-    result = vacuum_database(db)
-    flash(
-        (
-            f"Reclaimed {format_file_size(result['saved_bytes'])}. "
-            f"Database is now {format_file_size(result['after_size'])}."
-        ),
-        "success",
+    job_id = enqueue_job(
+        g.user["id"],
+        "vacuum_database",
+        "Reclaim database space",
     )
+    flash(f"Database cleanup job #{job_id} started.", "success")
     return redirect(url_for("admin"))
+
+
+@app.route("/admin/jobs/<int:job_id>")
+@admin_required
+def admin_job_status(job_id):
+    job = get_job(get_db(), job_id)
+    if job is None:
+        abort(404)
+    return jsonify(job_row_to_dict(job))
 
 
 @app.route("/login", methods=("GET", "POST"))

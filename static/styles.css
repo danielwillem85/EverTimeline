@@ -2069,21 +2069,26 @@ details.privacy-toggle-panel {
 }
 
 .chapter-bulk-action-status.is-error,
-.chapter-bulk-new-form .form-status.is-error {
+.chapter-bulk-new-form .form-status.is-error,
+.chapter-new-form .form-status.is-error,
+.chapter-add-status.is-error {
     color: #ffd7d1;
 }
 
-.chapter-bulk-new-panel {
+.chapter-bulk-new-panel,
+.chapter-new-panel {
     width: min(520px, 100%);
 }
 
-.chapter-bulk-new-form {
+.chapter-bulk-new-form,
+.chapter-new-form {
     display: grid;
     gap: 14px;
     padding: 18px;
 }
 
-.chapter-bulk-new-form label {
+.chapter-bulk-new-form label,
+.chapter-new-form label {
     display: grid;
     gap: 6px;
     color: var(--muted);
@@ -2091,7 +2096,9 @@ details.privacy-toggle-panel {
 }
 
 .chapter-bulk-new-form input,
-.chapter-bulk-new-form textarea {
+.chapter-bulk-new-form textarea,
+.chapter-new-form input,
+.chapter-new-form textarea {
     width: 100%;
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -2102,7 +2109,8 @@ details.privacy-toggle-panel {
     font-weight: 800;
 }
 
-.chapter-bulk-new-form textarea {
+.chapter-bulk-new-form textarea,
+.chapter-new-form textarea {
     min-height: 120px;
     resize: vertical;
 }
@@ -2377,6 +2385,18 @@ details.privacy-toggle-panel {
     height: 34px;
     padding: 0 8px;
     font-size: 0.84rem;
+}
+
+.chapter-add-status {
+    min-height: 16px;
+    color: var(--primary);
+    font-size: 0.78rem;
+    font-weight: 900;
+    line-height: 1.2;
+}
+
+.chapter-add-status.is-error {
+    color: #9c2f22;
 }
 
 .chapter-create-link {

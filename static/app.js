@@ -202,6 +202,213 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    const chapterCardNewModal = document.getElementById("chapter-card-new-modal");
+    const chapterCardNewForm = document.querySelector("[data-chapter-card-new-form]");
+    const chapterCardNewContext = document.querySelector("[data-chapter-card-new-context]");
+    const chapterCardNewStatus = document.querySelector("[data-chapter-card-new-status]");
+    let pendingChapterCardForm = null;
+
+    const setChapterCardStatus = (form, message, isError = false) => {
+        const status = form?.querySelector("[data-chapter-card-status]");
+        if (!status) {
+            return;
+        }
+        status.textContent = message;
+        status.classList.toggle("is-error", isError);
+    };
+
+    const addChapterCardOption = (chapter) => {
+        if (!chapter || !chapter.id) {
+            return;
+        }
+        document.querySelectorAll("[data-chapter-card-select]").forEach((select) => {
+            if (select.querySelector(`option[value="${chapter.id}"]`)) {
+                return;
+            }
+            const option = document.createElement("option");
+            option.value = String(chapter.id);
+            option.textContent = chapter.title || "New chapter";
+            const newOption = select.querySelector("option[value='__new__']");
+            select.insertBefore(option, newOption);
+        });
+    };
+
+    const closeChapterCardNewModal = () => {
+        if (!chapterCardNewModal) {
+            return;
+        }
+        chapterCardNewModal.hidden = true;
+        if (chapterCardNewForm) {
+            chapterCardNewForm.reset();
+            delete chapterCardNewForm.dataset.submitting;
+        }
+        if (chapterCardNewStatus) {
+            chapterCardNewStatus.textContent = "";
+            chapterCardNewStatus.classList.remove("is-error");
+        }
+        pendingChapterCardForm = null;
+        syncModalOpenState();
+    };
+
+    const openChapterCardNewModal = (form) => {
+        if (!chapterCardNewModal || !chapterCardNewForm || !form) {
+            return;
+        }
+        pendingChapterCardForm = form;
+        setChapterCardStatus(form, "");
+        const select = form.querySelector("[data-chapter-card-select]");
+        if (select) {
+            select.value = "";
+        }
+        const itemKind = form.querySelector("input[name='item_kind']")?.value === "text" ? "text entry" : "photo";
+        if (chapterCardNewContext) {
+            chapterCardNewContext.textContent = `Add this ${itemKind} to a new chapter.`;
+        }
+        if (chapterCardNewStatus) {
+            chapterCardNewStatus.textContent = "";
+            chapterCardNewStatus.classList.remove("is-error");
+        }
+        chapterCardNewForm.reset();
+        chapterCardNewModal.hidden = false;
+        syncModalOpenState();
+        chapterCardNewForm.querySelector("input[name='title']")?.focus();
+    };
+
+    const setChapterCardSubmitting = (form, submitting) => {
+        if (!form) {
+            return;
+        }
+        const select = form.querySelector("[data-chapter-card-select]");
+        form.dataset.submitting = submitting ? "true" : "false";
+        if (select) {
+            select.disabled = submitting;
+        }
+    };
+
+    const assignChapterCardItem = async (form, chapterId) => {
+        if (!form || !chapterId || form.dataset.submitting === "true") {
+            return;
+        }
+
+        const select = form.querySelector("[data-chapter-card-select]");
+        setChapterCardSubmitting(form, true);
+        setChapterCardStatus(form, "Adding...");
+        try {
+            const formData = new FormData(form);
+            formData.set("chapter_id", chapterId);
+            const response = await csrfFetch(form.dataset.chapterAddUrl, {
+                method: "POST",
+                headers: {"Accept": "application/json"},
+                body: formData,
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(payload.error || "Could not add to chapter.");
+            }
+            setChapterCardStatus(
+                form,
+                payload.message || "Added item to chapter.",
+                payload.status === "exists"
+            );
+            if (select) {
+                select.value = "";
+            }
+        } catch (error) {
+            setChapterCardStatus(form, error.message || "Could not add to chapter.", true);
+            if (select) {
+                select.value = "";
+            }
+        } finally {
+            setChapterCardSubmitting(form, false);
+        }
+    };
+
+    document.querySelectorAll("[data-chapter-card-form]").forEach((form) => {
+        const select = form.querySelector("[data-chapter-card-select]");
+        if (!select) {
+            return;
+        }
+
+        select.addEventListener("change", () => {
+            if (select.value === "__new__") {
+                openChapterCardNewModal(form);
+                return;
+            }
+            if (select.value) {
+                assignChapterCardItem(form, select.value);
+                return;
+            }
+            setChapterCardStatus(form, "");
+        });
+
+        form.addEventListener("submit", (event) => {
+            event.preventDefault();
+            if (select.value === "__new__") {
+                openChapterCardNewModal(form);
+                return;
+            }
+            if (select.value) {
+                assignChapterCardItem(form, select.value);
+            }
+        });
+    });
+
+    if (chapterCardNewModal) {
+        chapterCardNewModal.querySelectorAll("[data-close-chapter-card-new]").forEach((button) => {
+            button.addEventListener("click", closeChapterCardNewModal);
+        });
+
+        document.addEventListener("keydown", (event) => {
+            if (event.key !== "Escape" || chapterCardNewModal.hidden) {
+                return;
+            }
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            closeChapterCardNewModal();
+        });
+    }
+
+    if (chapterCardNewForm) {
+        chapterCardNewForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            if (!pendingChapterCardForm || chapterCardNewForm.dataset.submitting === "true") {
+                return;
+            }
+
+            chapterCardNewForm.dataset.submitting = "true";
+            if (chapterCardNewStatus) {
+                chapterCardNewStatus.textContent = "Creating...";
+                chapterCardNewStatus.classList.remove("is-error");
+            }
+
+            try {
+                const formData = new FormData(chapterCardNewForm);
+                formData.set("item_kind", pendingChapterCardForm.querySelector("input[name='item_kind']")?.value || "");
+                formData.set("item_id", pendingChapterCardForm.querySelector("input[name='item_id']")?.value || "");
+                const response = await csrfFetch(pendingChapterCardForm.dataset.chapterCreateUrl, {
+                    method: "POST",
+                    headers: {"Accept": "application/json"},
+                    body: formData,
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    throw new Error(payload.error || "Could not create chapter.");
+                }
+                const completedForm = pendingChapterCardForm;
+                addChapterCardOption(payload.chapter);
+                closeChapterCardNewModal();
+                setChapterCardStatus(completedForm, payload.message || "Created chapter and added item.");
+            } catch (error) {
+                if (chapterCardNewStatus) {
+                    chapterCardNewStatus.textContent = error.message || "Could not create chapter.";
+                    chapterCardNewStatus.classList.add("is-error");
+                }
+            } finally {
+                delete chapterCardNewForm.dataset.submitting;
+            }
+        });
+    }
+
     document.querySelectorAll("form[data-upload-progress]").forEach((form) => {
         const progressPanel = form.querySelector("[data-upload-progress-panel]");
         const progressBar = form.querySelector("[data-upload-progress-bar]");
@@ -1390,6 +1597,268 @@ document.addEventListener("DOMContentLoaded", () => {
 
         updateBulkSelection();
         loadBulkPage(0);
+    }
+
+    const monthBulkDeletePage = document.querySelector("[data-month-bulk-delete]");
+    if (monthBulkDeletePage) {
+        const monthBulkGrid = monthBulkDeletePage.querySelector("[data-month-bulk-grid]");
+        const monthBulkStatus = monthBulkDeletePage.querySelector("[data-month-bulk-status]");
+        const monthBulkPageCountWrap = monthBulkDeletePage.querySelector("[data-month-bulk-page-count-wrap]");
+        const monthBulkPageCount = monthBulkDeletePage.querySelector("[data-month-bulk-page-count]");
+        const monthBulkPageProgress = monthBulkDeletePage.querySelector("[data-month-bulk-page-progress]");
+        const monthBulkPrevButton = monthBulkDeletePage.querySelector("[data-month-bulk-prev]");
+        const monthBulkNextButton = monthBulkDeletePage.querySelector("[data-month-bulk-next]");
+        const monthBulkSelectedCount = monthBulkDeletePage.querySelector("[data-month-bulk-selected-count]");
+        const monthBulkTotalCount = monthBulkDeletePage.querySelector("[data-month-bulk-total-count]");
+        const monthBulkSelectedProgress = monthBulkDeletePage.querySelector("[data-month-bulk-selected-progress]");
+        const monthBulkForm = monthBulkDeletePage.querySelector("[data-month-bulk-delete-form]");
+        const monthBulkDeleteButton = monthBulkDeletePage.querySelector("[data-month-bulk-delete-button]");
+        const monthBulkActionStatus = monthBulkDeletePage.querySelector("[data-month-bulk-delete-status]");
+        const monthBulkUrl = monthBulkDeletePage.dataset.photoUrl;
+        const monthBulkDeleteUrl = monthBulkDeletePage.dataset.deleteUrl;
+        const selectedMonthPhotoIds = [];
+        const selectedMonthPhotoSet = new Set();
+        const minMonthBulkTileSize = 82;
+        let monthBulkPageIndex = 0;
+        let monthBulkPageSize = 0;
+        let monthBulkTotalPages = 0;
+        let monthBulkTotalPhotos = 0;
+        let monthBulkResizeTimer = null;
+
+        const setMonthBulkStatus = (message) => {
+            if (!monthBulkStatus) {
+                return;
+            }
+            monthBulkStatus.textContent = message;
+            monthBulkStatus.hidden = !message;
+        };
+
+        const setMonthBulkActionStatus = (message, isError = false) => {
+            if (!monthBulkActionStatus) {
+                return;
+            }
+            monthBulkActionStatus.textContent = message;
+            monthBulkActionStatus.classList.toggle("is-error", isError);
+        };
+
+        const monthBulkGridSize = () => {
+            const bounds = monthBulkGrid.getBoundingClientRect();
+            const columns = Math.max(1, Math.floor(bounds.width / minMonthBulkTileSize));
+            const rows = Math.max(1, Math.floor(bounds.height / minMonthBulkTileSize));
+            monthBulkGrid.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
+            monthBulkGrid.style.gridTemplateRows = `repeat(${rows}, minmax(0, 1fr))`;
+            return columns * rows;
+        };
+
+        const updateMonthBulkSelection = () => {
+            const count = selectedMonthPhotoIds.length;
+            if (monthBulkSelectedCount) {
+                monthBulkSelectedCount.textContent = `${count} selected`;
+            }
+            if (monthBulkTotalCount) {
+                monthBulkTotalCount.textContent = monthBulkTotalPhotos === 1 ? "1 photo total" : `${monthBulkTotalPhotos} photos total`;
+            }
+            if (monthBulkSelectedProgress) {
+                monthBulkSelectedProgress.max = monthBulkTotalPhotos || 1;
+                monthBulkSelectedProgress.value = monthBulkTotalPhotos ? count : 0;
+            }
+            if (monthBulkDeleteButton) {
+                monthBulkDeleteButton.disabled = count === 0 || monthBulkForm?.dataset.submitting === "true";
+            }
+        };
+
+        const updateMonthBulkControls = () => {
+            const hasPages = monthBulkTotalPages > 1;
+            if (monthBulkPrevButton) {
+                monthBulkPrevButton.hidden = !hasPages;
+            }
+            if (monthBulkNextButton) {
+                monthBulkNextButton.hidden = !hasPages;
+            }
+            if (monthBulkPageCount) {
+                monthBulkPageCount.textContent = monthBulkTotalPages > 0 ? `${monthBulkPageIndex + 1} of ${monthBulkTotalPages}` : "";
+            }
+            if (monthBulkPageCountWrap) {
+                monthBulkPageCountWrap.hidden = monthBulkTotalPages <= 0;
+            }
+            if (monthBulkPageProgress) {
+                monthBulkPageProgress.max = monthBulkTotalPages || 1;
+                monthBulkPageProgress.value = monthBulkTotalPages > 0 ? monthBulkPageIndex + 1 : 0;
+            }
+        };
+
+        const setMonthBulkThumbSelected = (button, selected) => {
+            button.classList.toggle("is-selected", selected);
+            button.setAttribute("aria-pressed", selected ? "true" : "false");
+        };
+
+        const toggleMonthBulkPhoto = (photoId, button) => {
+            const normalizedId = String(photoId);
+            if (selectedMonthPhotoSet.has(normalizedId)) {
+                selectedMonthPhotoSet.delete(normalizedId);
+                const selectedIndex = selectedMonthPhotoIds.indexOf(normalizedId);
+                if (selectedIndex >= 0) {
+                    selectedMonthPhotoIds.splice(selectedIndex, 1);
+                }
+                setMonthBulkThumbSelected(button, false);
+            } else {
+                selectedMonthPhotoSet.add(normalizedId);
+                selectedMonthPhotoIds.push(normalizedId);
+                setMonthBulkThumbSelected(button, true);
+            }
+            setMonthBulkActionStatus("");
+            updateMonthBulkSelection();
+        };
+
+        const renderMonthBulkPhotos = (photos) => {
+            monthBulkGrid.innerHTML = "";
+            photos.forEach((photo) => {
+                const photoId = String(photo.id);
+                const button = document.createElement("button");
+                button.className = "splash-thumb chapter-bulk-thumb";
+                button.type = "button";
+                button.dataset.photoId = photoId;
+                button.title = photo.display_date ? `${photo.title} - ${photo.display_date}` : photo.title;
+                button.setAttribute("aria-label", `Select ${photo.title || "photo"} for deletion`);
+
+                const image = document.createElement("img");
+                image.src = photo.thumbnail_url;
+                image.alt = photo.title || "Month photo";
+                image.loading = "lazy";
+                image.decoding = "async";
+
+                const check = document.createElement("span");
+                check.className = "chapter-bulk-check";
+                check.textContent = "OK";
+                check.setAttribute("aria-hidden", "true");
+
+                button.append(image, check);
+                setMonthBulkThumbSelected(button, selectedMonthPhotoSet.has(photoId));
+                button.addEventListener("click", () => toggleMonthBulkPhoto(photoId, button));
+                monthBulkGrid.appendChild(button);
+            });
+        };
+
+        const loadMonthBulkPage = async (page) => {
+            monthBulkPageSize = monthBulkGridSize();
+            setMonthBulkStatus("Loading photos...");
+            const url = new URL(monthBulkUrl, window.location.href);
+            url.searchParams.set("page", String(page));
+            url.searchParams.set("page_size", String(monthBulkPageSize));
+
+            try {
+                const response = await csrfFetch(url.toString());
+                if (!response.ok) {
+                    throw new Error("Photos could not be loaded.");
+                }
+                const payload = await response.json();
+                monthBulkPageIndex = payload.page || 0;
+                monthBulkTotalPages = payload.total_pages || 0;
+                monthBulkTotalPhotos = payload.total || 0;
+                renderMonthBulkPhotos(payload.photos || []);
+                setMonthBulkStatus(payload.total ? "" : "No photos in this month.");
+                updateMonthBulkControls();
+                updateMonthBulkSelection();
+            } catch (error) {
+                renderMonthBulkPhotos([]);
+                monthBulkTotalPages = 0;
+                monthBulkTotalPhotos = 0;
+                setMonthBulkStatus("Photos could not be loaded.");
+                updateMonthBulkControls();
+                updateMonthBulkSelection();
+            }
+        };
+
+        const moveMonthBulkPage = (delta) => {
+            if (monthBulkTotalPages <= 0) {
+                return;
+            }
+            loadMonthBulkPage(monthBulkPageIndex + delta);
+        };
+
+        const removeDeletedMonthSelections = (deletedIds) => {
+            const deletedSet = new Set((deletedIds || []).map((photoId) => String(photoId)));
+            for (let index = selectedMonthPhotoIds.length - 1; index >= 0; index -= 1) {
+                if (deletedSet.has(selectedMonthPhotoIds[index])) {
+                    selectedMonthPhotoSet.delete(selectedMonthPhotoIds[index]);
+                    selectedMonthPhotoIds.splice(index, 1);
+                }
+            }
+        };
+
+        if (monthBulkPrevButton) {
+            monthBulkPrevButton.addEventListener("click", () => moveMonthBulkPage(-1));
+        }
+        if (monthBulkNextButton) {
+            monthBulkNextButton.addEventListener("click", () => moveMonthBulkPage(1));
+        }
+
+        if (monthBulkForm) {
+            monthBulkForm.addEventListener("submit", async (event) => {
+                event.preventDefault();
+                if (selectedMonthPhotoIds.length === 0 || monthBulkForm.dataset.submitting === "true") {
+                    return;
+                }
+
+                const count = selectedMonthPhotoIds.length;
+                const confirmed = await requestConfirmation({
+                    title: "Delete selected photos?",
+                    message: `This permanently removes ${count} selected photo${count === 1 ? "" : "s"}, messages, chapter placements, tags, likes, loves, and related notifications.`,
+                    confirmLabel: "Delete selected",
+                    danger: true,
+                });
+                if (!confirmed) {
+                    return;
+                }
+
+                monthBulkForm.dataset.submitting = "true";
+                updateMonthBulkSelection();
+                setMonthBulkActionStatus("Deleting...");
+                try {
+                    const response = await csrfFetch(monthBulkDeleteUrl, {
+                        method: "POST",
+                        headers: {
+                            "Accept": "application/json",
+                            "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify({photo_ids: selectedMonthPhotoIds}),
+                    });
+                    const payload = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        throw new Error(payload.error || "Could not delete selected photos.");
+                    }
+                    removeDeletedMonthSelections(payload.deleted_photo_ids || []);
+                    setMonthBulkActionStatus(payload.message || "Deleted selected photos.");
+                    await loadMonthBulkPage(monthBulkPageIndex);
+                } catch (error) {
+                    setMonthBulkActionStatus(error.message || "Could not delete selected photos.", true);
+                } finally {
+                    delete monthBulkForm.dataset.submitting;
+                    updateMonthBulkSelection();
+                }
+            });
+        }
+
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "ArrowLeft") {
+                moveMonthBulkPage(-1);
+            } else if (event.key === "ArrowRight") {
+                moveMonthBulkPage(1);
+            }
+        });
+
+        window.addEventListener("resize", () => {
+            window.clearTimeout(monthBulkResizeTimer);
+            monthBulkResizeTimer = window.setTimeout(() => {
+                const nextPageSize = monthBulkGridSize();
+                if (nextPageSize !== monthBulkPageSize) {
+                    loadMonthBulkPage(monthBulkPageIndex);
+                }
+            }, 120);
+        });
+
+        updateMonthBulkSelection();
+        loadMonthBulkPage(0);
     }
 
     const viewAllButton = document.getElementById("view-all-button");
@@ -2635,6 +3104,13 @@ document.addEventListener("DOMContentLoaded", () => {
         showEmptyStateIfNeeded(photoGrid);
     };
 
+    const removePhotoThumbnailById = (photoId, preferredThumbnail = null) => {
+        const thumbnail = preferredThumbnail && preferredThumbnail.isConnected
+            ? preferredThumbnail
+            : document.querySelector(`.photo-thumb[data-photo-id="${photoId}"]`);
+        removeActiveThumbnail(thumbnail);
+    };
+
     const selectedTagValue = (inputs) => {
         const checked = inputs.find((input) => input.checked);
         return checked ? checked.value : "private";
@@ -3234,6 +3710,8 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
 
+        const photoIdToDelete = activePhotoId;
+        const thumbnailToDelete = activePhotoThumbnail;
         const confirmed = await requestConfirmation({
             title: "Delete picture?",
             message: "This permanently removes the picture, messages, chapter placements, tags, likes, loves, and related notifications.",
@@ -3245,12 +3723,12 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         deletePhotoButton.disabled = true;
-        const response = await csrfFetch(`/api/photo/${activePhotoId}`, {
+        const response = await csrfFetch(`/api/photo/${photoIdToDelete}`, {
             method: "DELETE",
         });
 
         if (response.ok) {
-            removeActiveThumbnail(activePhotoThumbnail);
+            removePhotoThumbnailById(photoIdToDelete, thumbnailToDelete);
             closePhotoModal();
         }
 

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Bulk delete {{ month_name }} {{ year }} - EverTimeline{% endblock %}
+{% block shell_class %}splash-shell{% endblock %}
+
+{% block content %}
+<section
+    class="splash-page chapter-bulk-select-page month-bulk-delete-page"
+    data-month-bulk-delete
+    data-photo-url="{{ url_for('month_bulk_delete_photos', year=year, month=month) }}"
+    data-delete-url="{{ url_for('api_month_bulk_delete_photos', year=year, month=month) }}"
+    data-return-url="{{ url_for('month_view', year=year, month=month) }}"
+    aria-label="Bulk photo deletion"
+>
+    <div class="chapter-bulk-toolbar">
+        <a class="button secondary small" href="{{ url_for('month_view', year=year, month=month) }}">{{ month_name }}</a>
+        <strong>Bulk delete</strong>
+        <form class="chapter-bulk-save-form month-bulk-delete-form" data-month-bulk-delete-form>
+            <button class="button danger small month-bulk-delete-button" type="submit" data-month-bulk-delete-button disabled>
+                Delete selected
+            </button>
+            <span class="chapter-bulk-action-status" data-month-bulk-delete-status aria-live="polite"></span>
+        </form>
+        <div class="chapter-bulk-progress">
+            <div class="chapter-bulk-progress-row">
+                <span data-month-bulk-selected-count>0 selected</span>
+                <span data-month-bulk-total-count>0 photos total</span>
+            </div>
+            <progress max="1" value="0" data-month-bulk-selected-progress aria-label="Selected photos progress"></progress>
+        </div>
+    </div>
+
+    <div class="splash-grid" data-month-bulk-grid aria-live="polite"></div>
+    <p class="splash-status" data-month-bulk-status>Loading photos...</p>
+    <button class="splash-page-button splash-page-prev" type="button" data-month-bulk-prev aria-label="Previous thumbnails">&lt;</button>
+    <button class="splash-page-button splash-page-next" type="button" data-month-bulk-next aria-label="Next thumbnails">&gt;</button>
+    <div class="splash-page-count chapter-bulk-page-progress" data-month-bulk-page-count-wrap>
+        <span data-month-bulk-page-count></span>
+        <progress max="1" value="0" data-month-bulk-page-progress aria-label="Photo page progress"></progress>
+    </div>
+</section>
+{% endblock %}

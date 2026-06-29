@@ -1048,6 +1048,93 @@ def delete_items_before_birthday(db, user_id, birthday_date):
     }
 
 
+def delete_owned_photos(db, photo_ids, user_id, year=None, month=None):
+    if not photo_ids:
+        return []
+
+    placeholders = ",".join(["?"] * len(photo_ids))
+    params = [user_id, *photo_ids]
+    period_clause = ""
+    if year is not None:
+        period_clause += " AND year = ?"
+        params.append(year)
+    if month is not None:
+        period_clause += " AND month = ?"
+        params.append(month)
+
+    rows = db.execute(
+        f"""
+        SELECT id
+        FROM photos
+        WHERE user_id = ?
+          AND id IN ({placeholders})
+          {period_clause}
+        """,
+        params,
+    ).fetchall()
+    owned_ids = [row["id"] for row in rows]
+    if not owned_ids:
+        return []
+
+    delete_rows_by_ids(
+        db,
+        """
+        DELETE FROM message_notification_reads
+        WHERE message_kind = 'photo'
+          AND message_id IN (
+            SELECT id FROM messages WHERE photo_id IN ({placeholders})
+          )
+        """,
+        owned_ids,
+    )
+    delete_rows_by_ids(
+        db,
+        """
+        DELETE FROM reaction_notification_reads
+        WHERE reaction_id IN (
+            SELECT id FROM item_reactions
+            WHERE item_kind = 'photo' AND item_id IN ({placeholders})
+        )
+        """,
+        owned_ids,
+    )
+    delete_rows_by_ids(
+        db,
+        """
+        DELETE FROM chapter_items
+        WHERE item_kind = 'photo'
+          AND item_id IN ({placeholders})
+          AND chapter_id IN (SELECT id FROM chapters WHERE user_id = ?)
+        """,
+        owned_ids,
+        suffix_params=(user_id,),
+    )
+    delete_rows_by_ids(
+        db,
+        "DELETE FROM item_reactions WHERE item_kind = 'photo' AND item_id IN ({placeholders})",
+        owned_ids,
+    )
+    delete_rows_by_ids(db, "DELETE FROM photo_people WHERE photo_id IN ({placeholders})", owned_ids)
+    delete_rows_by_ids(db, "DELETE FROM photo_tags WHERE photo_id IN ({placeholders})", owned_ids)
+    delete_rows_by_ids(db, "DELETE FROM messages WHERE photo_id IN ({placeholders})", owned_ids)
+    delete_rows_by_ids(
+        db,
+        """
+        UPDATE photo_import_items
+        SET duplicate_photo_id = NULL
+        WHERE duplicate_photo_id IN ({placeholders})
+        """,
+        owned_ids,
+    )
+    delete_rows_by_ids(
+        db,
+        "DELETE FROM photos WHERE user_id = ? AND id IN ({placeholders})",
+        owned_ids,
+        prefix_params=(user_id,),
+    )
+    return owned_ids
+
+
 def normalize_email(value):
     return (value or "").strip().lower()
 
@@ -3337,6 +3424,31 @@ def build_splash_photo_page(db):
     }
 
 
+def build_month_splash_photo_page(db, year, month):
+    page, page_size = splash_page_args()
+    rows = db.execute(
+        """
+        SELECT id, original_filename, title, caption, photo_date, created_at
+        FROM photos
+        WHERE user_id = ? AND year = ? AND month = ?
+        ORDER BY COALESCE(photo_date, created_at) ASC, id ASC
+        """,
+        (g.user["id"], year, month),
+    ).fetchall()
+    photos = [
+        {
+            "id": row["id"],
+            "title": photo_display_title(row),
+            "caption": row["caption"] or "",
+            "display_date": row["photo_date"] or "",
+            "thumbnail_url": url_for("splash_photo_thumbnail", photo_id=row["id"]),
+            "full_url": url_for("photo_image", photo_id=row["id"]),
+        }
+        for row in rows
+    ]
+    return paginated_splash_payload(photos, page, page_size)
+
+
 def splash_page_args():
     page_size = request.args.get("page_size", default=80, type=int)
     if page_size is None:
@@ -3867,10 +3979,13 @@ def parse_chapter_draft_refs(values):
 
 
 def parse_chapter_bulk_photo_ids(value, limit=1000):
-    try:
-        raw_values = json.loads(value or "[]")
-    except (TypeError, ValueError, json.JSONDecodeError):
-        raw_values = str(value or "").split(",")
+    if isinstance(value, list):
+        raw_values = value
+    else:
+        try:
+            raw_values = json.loads(value or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raw_values = str(value or "").split(",")
     if not isinstance(raw_values, list):
         return []
 
@@ -8726,6 +8841,51 @@ def month_view(year, month):
     )
 
 
+@app.route("/year/<int:year>/<int:month>/bulk-delete")
+@birthday_required
+def month_bulk_delete(year, month):
+    validate_year_month(year, month)
+    return render_template(
+        "month_bulk_delete.html",
+        year=year,
+        month=month,
+        month_name=MONTH_NAMES[month - 1],
+    )
+
+
+@app.route("/api/year/<int:year>/<int:month>/photos")
+@birthday_required
+def month_bulk_delete_photos(year, month):
+    validate_year_month(year, month)
+    return jsonify(build_month_splash_photo_page(get_db(), year, month))
+
+
+@app.route("/api/year/<int:year>/<int:month>/photos/delete", methods=("POST",))
+@birthday_required
+def api_month_bulk_delete_photos(year, month):
+    validate_year_month(year, month)
+    payload = request.get_json(silent=True) or request.form
+    photo_ids = parse_chapter_bulk_photo_ids(payload.get("photo_ids") or payload.get("selected_photo_ids"))
+    if not photo_ids:
+        return jsonify({"error": "Choose at least one photo to delete."}), 400
+
+    db = get_db()
+    deleted_ids = delete_owned_photos(db, photo_ids, g.user["id"], year=year, month=month)
+    if not deleted_ids:
+        return jsonify({"error": "No matching photos were found."}), 404
+
+    db.commit()
+    deleted_count = len(deleted_ids)
+    return jsonify(
+        {
+            "status": "deleted",
+            "deleted_photo_ids": deleted_ids,
+            "deleted_count": deleted_count,
+            "message": f"Deleted {deleted_count} photo{'s' if deleted_count != 1 else ''}.",
+        }
+    )
+
+
 @app.route("/year/<int:year>/<int:month>/export.pdf")
 @birthday_required
 def export_month_pdf(year, month):
@@ -9440,6 +9600,41 @@ def api_add_chapter_item():
     return jsonify(result), 201 if created else 200
 
 
+@app.route("/api/chapters/create-with-item", methods=("POST",))
+@birthday_required
+def api_create_chapter_with_item():
+    db = get_db()
+    title = request.form.get("title", "").strip()
+    description = request.form.get("description", "").strip()
+    item_kind = request.form.get("item_kind", "")
+    item_id = request.form.get("item_id", type=int)
+    visibility = chapter_visibility(request.form.get("visibility"))
+
+    if item_id is None or item_kind not in ("photo", "text"):
+        return jsonify({"error": "Choose an item for the chapter."}), 400
+    if not title:
+        return jsonify({"error": "Chapter name is required."}), 400
+
+    get_owned_timeline_item(item_kind, item_id)
+    cursor = db.execute(
+        """
+        INSERT INTO chapters (user_id, title, description, visibility)
+        VALUES (?, ?, ?, ?)
+        """,
+        (g.user["id"], title, description or None, visibility),
+    )
+    chapter_id = cursor.lastrowid
+    result, _created = create_chapter_item_assignment(db, chapter_id, item_kind, item_id)
+    result.update(
+        {
+            "status": "created",
+            "message": f"Created {title} and added this item.",
+            "chapter": {"id": chapter_id, "title": title},
+        }
+    )
+    return jsonify(result), 201
+
+
 @app.route("/chapters/<int:chapter_id>/items/<int:chapter_item_id>/remove", methods=("POST",))
 @birthday_required
 def remove_chapter_item(chapter_id, chapter_item_id):
@@ -10115,23 +10310,7 @@ def delete_photo(photo_id):
             }
         )
 
-    db.execute(
-        """
-        DELETE FROM chapter_items
-        WHERE item_kind = 'photo'
-          AND item_id = ?
-          AND chapter_id IN (SELECT id FROM chapters WHERE user_id = ?)
-        """,
-        (photo_id, g.user["id"]),
-    )
-    db.execute(
-        "DELETE FROM item_reactions WHERE item_kind = 'photo' AND item_id = ?",
-        (photo_id,),
-    )
-    db.execute(
-        "DELETE FROM photos WHERE id = ? AND user_id = ?",
-        (photo_id, g.user["id"]),
-    )
+    delete_owned_photos(db, [photo_id], g.user["id"])
     db.commit()
     return ("", 204)
 

@@ -1700,33 +1700,70 @@ def run_vacuum_job(db, job_id):
 
 def filename_date_candidate(filename):
     normalized = Path(filename or "").stem
-    patterns = (
-        r"(?<!\d)((?:19|20)\d{2})[-_. ]?([01]\d)[-_. ]?([0-3]\d)(?!\d)",
-        r"(?<!\d)([01]\d)[-_. ]?([0-3]\d)[-_. ]?((?:19|20)\d{2})(?!\d)",
+    normalized = re.sub(r"[_+.]+", " ", normalized)
+    month_names = {
+        name.lower(): index
+        for index, name in enumerate(calendar.month_name)
+        if name
+    }
+    month_names.update(
+        {
+            name.lower(): index
+            for index, name in enumerate(calendar.month_abbr)
+            if name
+        }
     )
-    for pattern in patterns:
+
+    numeric_patterns = (
+        r"(?<!\d)((?:19|20)\d{2})[-/ .]?([01]\d)[-/ .]?([0-3]\d)(?!\d)",
+        r"(?<!\d)([0-3]?\d)[-/ .]([01]?\d)[-/ .]((?:19|20)\d{2})(?!\d)",
+        r"(?<!\d)([01]?\d)[-/ .]([0-3]?\d)[-/ .]((?:19|20)\d{2})(?!\d)",
+    )
+    for pattern in numeric_patterns:
         match = re.search(pattern, normalized)
         if not match:
             continue
         if len(match.group(1)) == 4:
             year, month, day = match.groups()
+        elif int(match.group(1)) > 12:
+            day, month, year = match.groups()
         else:
             month, day, year = match.groups()
         try:
             return date(int(year), int(month), int(day))
         except ValueError:
             continue
+
+    month_first_pattern = (
+        r"\b("
+        + "|".join(re.escape(name) for name in sorted(month_names, key=len, reverse=True))
+        + r")\s+([0-3]?\d)(?:st|nd|rd|th)?(?:,)?\s+((?:19|20)\d{2})\b"
+    )
+    day_first_pattern = (
+        r"\b([0-3]?\d)(?:st|nd|rd|th)?\s+("
+        + "|".join(re.escape(name) for name in sorted(month_names, key=len, reverse=True))
+        + r")(?:,)?\s+((?:19|20)\d{2})\b"
+    )
+    for pattern in (month_first_pattern, day_first_pattern):
+        match = re.search(pattern, normalized, flags=re.IGNORECASE)
+        if not match:
+            continue
+        if match.group(1).lower() in month_names:
+            month_name, day, year = match.groups()
+        else:
+            day, month_name, year = match.groups()
+        try:
+            return date(int(year), month_names[month_name.lower()], int(day))
+        except ValueError:
+            continue
+
     return None
 
 
 def detect_import_photo_date(image_data, filename):
-    detected_date = detect_photo_taken_date(image_data)
+    detected_date, detected_source = best_photo_date_candidate(image_data, filename)
     if detected_date:
-        return detected_date.isoformat(), "metadata"
-
-    detected_date = filename_date_candidate(filename)
-    if detected_date:
-        return detected_date.isoformat(), "filename"
+        return detected_date.isoformat(), detected_source
 
     return None, ""
 
@@ -1851,7 +1888,7 @@ def parse_exif_date_value(value):
     if isinstance(value, bytes):
         value = value.decode("utf-8", errors="ignore")
     normalized_value = str(value or "").strip()
-    match = re.match(r"^(\d{4}):(\d{2}):(\d{2})", normalized_value)
+    match = re.match(r"^(\d{4})[:/-](\d{2})[:/-](\d{2})", normalized_value)
     if not match:
         return None
 
@@ -1882,16 +1919,28 @@ def detect_photo_taken_date(image_data):
     return None
 
 
-def photo_date_from_upload(image_data, year, month, manual_date=None):
+def best_photo_date_candidate(image_data, filename=None):
+    detected_date = detect_photo_taken_date(image_data)
+    if detected_date:
+        return detected_date, "metadata"
+
+    detected_date = filename_date_candidate(filename)
+    if detected_date:
+        return detected_date, "filename"
+
+    return None, ""
+
+
+def photo_date_from_upload(image_data, year, month, manual_date=None, filename=None):
     if manual_date:
         return manual_date, False, False
 
-    detected_date = detect_photo_taken_date(image_data)
+    detected_date, detected_source = best_photo_date_candidate(image_data, filename)
     if detected_date is None:
         return None, False, False
     if detected_date.year == year and detected_date.month == month:
         return detected_date.isoformat(), True, False
-    return None, False, True
+    return None, False, bool(detected_source)
 
 
 def uploaded_photo_files():
@@ -8255,6 +8304,7 @@ def month_view(year, month):
                 year,
                 month,
                 manual_photo_date,
+                image.filename,
             )
             insert_uploaded_photo(
                 db,

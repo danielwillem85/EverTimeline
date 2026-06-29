@@ -253,6 +253,59 @@ def test_uploads_text_entries_and_pdf_exports(client, helpers):
     assert month_pdf.data.startswith(b"%PDF")
 
 
+def test_photo_date_detection_uses_exif_and_filename_fallbacks(client, helpers):
+    helpers.create_user(client, "owner")
+
+    detected_filenames = {
+        "IMG_20210709_153012.jpg": "2021-07-09",
+        "vacation 9 July 2021.png": "2021-07-09",
+        "scan-31.07.2021.webp": "2021-07-31",
+        "memory_07-30-2021.jpeg": "2021-07-30",
+    }
+    for filename, expected in detected_filenames.items():
+        assert helpers.app_module.filename_date_candidate(filename).isoformat() == expected
+
+    exif_buffer = io.BytesIO()
+    exif_image = Image.new("RGB", (12, 12), color=(88, 104, 132))
+    exif = exif_image.getexif()
+    exif[36867] = "2021-07-08 13:45:12"
+    exif_image.save(exif_buffer, format="JPEG", exif=exif)
+
+    exif_response = client.post(
+        "/year/2021/7",
+        data={
+            **helpers.csrf_form_data(client, "/year/2021/7"),
+            "photo": (io.BytesIO(exif_buffer.getvalue()), "camera-no-date-name.jpg", "image/jpeg"),
+            "tags": "private",
+        },
+        content_type="multipart/form-data",
+    )
+    assert exif_response.status_code == 302
+    exif_photo = helpers.row(
+        "SELECT photo_date FROM photos WHERE original_filename = ?",
+        ("camera-no-date-name.jpg",),
+    )
+    assert exif_photo["photo_date"] == "2021-07-08"
+
+    fallback_png = io.BytesIO()
+    Image.new("RGB", (12, 12), color=(144, 61, 55)).save(fallback_png, format="PNG")
+    fallback_response = client.post(
+        "/year/2021/7",
+        data={
+            **helpers.csrf_form_data(client, "/year/2021/7"),
+            "photo": (io.BytesIO(fallback_png.getvalue()), "PXL_20210710_153012.png", "image/png"),
+            "tags": "private",
+        },
+        content_type="multipart/form-data",
+    )
+    assert fallback_response.status_code == 302
+    fallback_photo = helpers.row(
+        "SELECT photo_date FROM photos WHERE original_filename = ?",
+        ("PXL_20210710_153012.png",),
+    )
+    assert fallback_photo["photo_date"] == "2021-07-10"
+
+
 def test_splash_page_api_and_thumbnails_are_owned(app, client, helpers):
     helpers.create_user(client, "owner")
     photo_id = helpers.upload_photo(

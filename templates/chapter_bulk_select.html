@@ -14,6 +14,27 @@
     <div class="chapter-bulk-toolbar">
         <a class="button secondary small" href="{{ url_for('chapters') }}">Chapters</a>
         <strong>Visual bulk select</strong>
+        <form
+            class="chapter-bulk-save-form"
+            method="post"
+            action="{{ url_for('chapter_bulk_review') }}"
+            data-chapter-bulk-assignment
+            data-bulk-add-url="{{ url_for('api_chapter_bulk_add') }}"
+            data-bulk-create-url="{{ url_for('api_chapter_bulk_create') }}"
+        >
+            <input type="hidden" name="selected_photo_ids" data-chapter-bulk-selected-input>
+            <label>
+                <span class="sr-only">Choose chapter for selected photos</span>
+                <select class="chapter-bulk-chapter-select" name="chapter_id" data-chapter-bulk-chapter-select disabled>
+                    <option value="">Choose chapter</option>
+                    {% for chapter in chapters %}
+                        <option value="{{ chapter['id'] }}">{{ chapter["title"] }}</option>
+                    {% endfor %}
+                    <option value="__new__">New chapter</option>
+                </select>
+            </label>
+            <span class="chapter-bulk-action-status" data-chapter-bulk-action-status aria-live="polite"></span>
+        </form>
         <div class="chapter-bulk-progress">
             <div class="chapter-bulk-progress-row">
                 <span data-chapter-bulk-selected-count>0 selected</span>
@@ -31,13 +52,33 @@
         <span data-chapter-bulk-page-count></span>
         <progress max="1" value="0" data-chapter-bulk-page-progress aria-label="Photo page progress"></progress>
     </div>
-
-    <form class="chapter-bulk-save-form" method="post" action="{{ url_for('chapter_bulk_review') }}">
-        {{ csrf_field() }}
-        <input type="hidden" name="selected_photo_ids" data-chapter-bulk-selected-input>
-        <button class="button primary chapter-bulk-save-button" type="submit" data-chapter-bulk-save disabled>
-            Save to chapter
-        </button>
-    </form>
 </section>
+
+<div class="modal" id="chapter-bulk-new-modal" hidden>
+    <div class="modal-backdrop" data-close-chapter-bulk-new></div>
+    <section class="modal-panel chapter-bulk-new-panel" role="dialog" aria-modal="true" aria-labelledby="chapter-bulk-new-title">
+        <header class="modal-header">
+            <div>
+                <h2 id="chapter-bulk-new-title">New chapter</h2>
+                <p class="muted" data-chapter-bulk-new-count>0 selected</p>
+            </div>
+            <button class="icon-button" type="button" data-close-chapter-bulk-new aria-label="Close popup">x</button>
+        </header>
+        <form class="chapter-bulk-new-form" data-chapter-bulk-new-form>
+            <label>
+                <span>Name</span>
+                <input name="title" maxlength="140" required autocomplete="off">
+            </label>
+            <label>
+                <span>Description</span>
+                <textarea name="description" rows="5"></textarea>
+            </label>
+            <p class="form-status" data-chapter-bulk-new-status aria-live="polite"></p>
+            <div class="form-actions">
+                <button class="button secondary" type="button" data-close-chapter-bulk-new>Cancel</button>
+                <button class="button primary" type="submit">Save</button>
+            </div>
+        </form>
+    </section>
+</div>
 {% endblock %}

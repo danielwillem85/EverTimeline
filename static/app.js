@@ -358,6 +358,11 @@ document.addEventListener("DOMContentLoaded", () => {
         const carouselSpeedDownButton = document.getElementById("carousel-speed-down");
         const carouselSpeedUpButton = document.getElementById("carousel-speed-up");
         const carouselSpeedValue = document.getElementById("carousel-speed-value");
+        const carouselPhotoModal = document.getElementById("carousel-photo-modal");
+        const carouselPhotoModalImage = document.getElementById("carousel-photo-modal-image");
+        const carouselPhotoModalTitle = document.getElementById("carousel-photo-modal-title");
+        const carouselPhotoModalDate = document.getElementById("carousel-photo-modal-date");
+        const carouselPhotoModalCaption = document.getElementById("carousel-photo-modal-caption");
         const skipCarouselTagFilter = allItemsModal.dataset.skipTagFilter === "true";
         const viewAllTitle = viewAllButton.dataset.carouselTitle || "View all";
         const viewRandomTitle = viewRandomButton ? viewRandomButton.dataset.carouselTitle || "View random" : "View random";
@@ -412,8 +417,45 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         };
 
+        const closeCarouselPhotoModal = ({keepBodyOpen = false} = {}) => {
+            if (!carouselPhotoModal) {
+                return;
+            }
+
+            carouselPhotoModal.hidden = true;
+            if (carouselPhotoModalImage) {
+                carouselPhotoModalImage.removeAttribute("src");
+            }
+            if (!keepBodyOpen && allItemsModal.hidden) {
+                document.body.classList.remove("modal-open");
+            }
+        };
+
+        const openCarouselPhotoModal = (item) => {
+            if (!carouselPhotoModal || !carouselPhotoModalImage) {
+                return;
+            }
+
+            pauseCarousel();
+            carouselPhotoModalImage.src = item.image_url;
+            carouselPhotoModalImage.alt = item.title || "Timeline photo";
+            if (carouselPhotoModalTitle) {
+                carouselPhotoModalTitle.textContent = item.title || "Picture";
+            }
+            if (carouselPhotoModalDate) {
+                carouselPhotoModalDate.textContent = item.date_label || "";
+            }
+            if (carouselPhotoModalCaption) {
+                carouselPhotoModalCaption.textContent = item.caption || "";
+                carouselPhotoModalCaption.hidden = !item.caption;
+            }
+            carouselPhotoModal.hidden = false;
+            document.body.classList.add("modal-open");
+        };
+
         const closeAllItemsModal = () => {
             clearCarouselTimers();
+            closeCarouselPhotoModal({keepBodyOpen: true});
             allItemsModal.hidden = true;
             carouselCard.classList.remove("is-visible", "is-fading", "is-shifting");
             carouselPaused = false;
@@ -593,11 +635,18 @@ document.addEventListener("DOMContentLoaded", () => {
             media.className = "carousel-window-media";
 
             if (item.kind === "photo") {
+                const button = document.createElement("button");
+                button.className = "carousel-image-button";
+                button.type = "button";
+                button.setAttribute("aria-label", `Open ${item.title || "photo"} full size`);
+
                 const image = document.createElement("img");
                 image.className = "carousel-image";
                 image.src = item.image_url;
                 image.alt = item.title || "Timeline photo";
-                media.appendChild(image);
+                button.appendChild(image);
+                button.addEventListener("click", () => openCarouselPhotoModal(item));
+                media.appendChild(button);
             } else {
                 const text = document.createElement("div");
                 text.className = "carousel-text";
@@ -827,7 +876,17 @@ document.addEventListener("DOMContentLoaded", () => {
             button.addEventListener("click", closeAllItemsModal);
         });
 
+        if (carouselPhotoModal) {
+            carouselPhotoModal.querySelectorAll("[data-close-carousel-photo-modal]").forEach((button) => {
+                button.addEventListener("click", () => closeCarouselPhotoModal({keepBodyOpen: true}));
+            });
+        }
+
         document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape" && carouselPhotoModal && !carouselPhotoModal.hidden) {
+                closeCarouselPhotoModal({keepBodyOpen: true});
+                return;
+            }
             if (event.key === "Escape" && !allItemsModal.hidden) {
                 closeAllItemsModal();
             }

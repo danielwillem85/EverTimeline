@@ -97,6 +97,12 @@
 </section>
 
 <section class="month-grid" aria-label="Months in {{ year }}">
+    <a class="month-button counted-button" href="{{ preview_url('year_no_date_view', year=year) }}">
+        <span>No date</span>
+        {% if no_date_count %}
+            <span class="count-badge">{{ no_date_count }}</span>
+        {% endif %}
+    </a>
     {% for month_number, month_name in months %}
         {% set month_count = month_counts.get(month_number, 0) %}
         <a class="month-button counted-button" href="{{ preview_url('month_view', year=year, month=month_number) }}">

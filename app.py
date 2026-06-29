@@ -3196,7 +3196,7 @@ def get_month_counts(db, year, user_id=None, allowed_tags=None):
             """
             SELECT id, month
             FROM photos
-            WHERE user_id = ? AND year = ?
+            WHERE user_id = ? AND year = ? AND photo_date IS NOT NULL
             """,
             (owner_id, year),
         ).fetchall()
@@ -3219,19 +3219,59 @@ def get_month_counts(db, year, user_id=None, allowed_tags=None):
                 counts[row["month"]] = counts.get(row["month"], 0) + 1
         return counts
 
-    for table in ("photos", "text_entries"):
-        rows = db.execute(
-            f"""
-            SELECT month, COUNT(*) AS item_count
-            FROM {table}
-            WHERE user_id = ? AND year = ?
-            GROUP BY month
+    photo_rows = db.execute(
+        """
+        SELECT month, COUNT(*) AS item_count
+        FROM photos
+        WHERE user_id = ? AND year = ? AND photo_date IS NOT NULL
+        GROUP BY month
+        """,
+        (owner_id, year),
+    ).fetchall()
+    for row in photo_rows:
+        counts[row["month"]] = counts.get(row["month"], 0) + row["item_count"]
+
+    text_rows = db.execute(
+        """
+        SELECT month, COUNT(*) AS item_count
+        FROM text_entries
+        WHERE user_id = ? AND year = ?
+        GROUP BY month
+        """,
+        (owner_id, year),
+    ).fetchall()
+    for row in text_rows:
+        counts[row["month"]] = counts.get(row["month"], 0) + row["item_count"]
+    return counts
+
+
+def get_no_date_photo_count(db, year, user_id=None, allowed_tags=None):
+    owner_id = user_id if user_id is not None else g.user["id"]
+    if allowed_tags is not None:
+        photo_rows = db.execute(
+            """
+            SELECT id
+            FROM photos
+            WHERE user_id = ? AND year = ? AND photo_date IS NULL
             """,
             (owner_id, year),
         ).fetchall()
-        for row in rows:
-            counts[row["month"]] = counts.get(row["month"], 0) + row["item_count"]
-    return counts
+        photo_tags = load_tags_for_items(db, "photo", [row["id"] for row in photo_rows], owner_id)
+        return sum(
+            1
+            for row in photo_rows
+            if tags_visible_to_connection(photo_tags.get(row["id"], []), allowed_tags)
+        )
+
+    row = db.execute(
+        """
+        SELECT COUNT(*) AS item_count
+        FROM photos
+        WHERE user_id = ? AND year = ? AND photo_date IS NULL
+        """,
+        (owner_id, year),
+    ).fetchone()
+    return row["item_count"] if row else 0
 
 
 def user_full_name(user):
@@ -6378,7 +6418,7 @@ def build_month_items(db, owner_id, year, month, image_url_builder, allowed_tags
         SELECT id, original_filename, title, caption, photo_date,
                location_name, latitude, longitude, created_at
         FROM photos
-        WHERE user_id = ? AND year = ? AND month = ?
+        WHERE user_id = ? AND year = ? AND month = ? AND photo_date IS NOT NULL
         ORDER BY COALESCE(photo_date, created_at) DESC, id DESC
         """,
         (owner_id, year, month),
@@ -6446,6 +6486,49 @@ def build_month_items(db, owner_id, year, month, image_url_builder, allowed_tags
             }
         )
     items.sort(key=timeline_item_sort_key)
+    return attach_reactions(db, items)
+
+
+def build_no_date_photo_items(db, owner_id, year, image_url_builder, allowed_tags=None):
+    photo_rows = db.execute(
+        """
+        SELECT id, year, month, original_filename, title, caption, photo_date,
+               location_name, latitude, longitude, created_at
+        FROM photos
+        WHERE user_id = ? AND year = ? AND photo_date IS NULL
+        ORDER BY created_at DESC, id DESC
+        """,
+        (owner_id, year),
+    ).fetchall()
+    photo_tags = load_tags_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
+    photo_people = load_people_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
+    items = []
+    for photo in photo_rows:
+        tags = photo_tags.get(photo["id"], [])
+        people = photo_people.get(photo["id"], [])
+        if not tags_visible_to_connection(tags, allowed_tags):
+            continue
+        items.append(
+            {
+                "kind": "photo",
+                "id": photo["id"],
+                "year": photo["year"],
+                "month": photo["month"],
+                "original_filename": photo["original_filename"],
+                "title": photo["title"] or "",
+                "display_title": photo_display_title(photo),
+                "caption": photo["caption"] or "",
+                "display_date": None,
+                **timeline_location_payload(photo),
+                "created_at": photo["created_at"],
+                "image_url": image_url_builder(photo["id"]),
+                "tags": tags,
+                "tags_text": tags_to_text(tags),
+                **people_payload(people),
+                **privacy_payload_for_tags(tags),
+                "guided_prompts": guided_prompts_for_item("photo", photo, people),
+            }
+        )
     return attach_reactions(db, items)
 
 
@@ -8534,6 +8617,32 @@ def year_view(year):
         year=year,
         months=months,
         month_counts=month_counts,
+        no_date_count=get_no_date_photo_count(
+            db,
+            year,
+            allowed_tags=privacy_preview_allowed_tags(preview),
+        ),
+    )
+
+
+@app.route("/year/<int:year>/no-date")
+@birthday_required
+def year_no_date_view(year):
+    validate_year_month(year, 1)
+    db = get_db()
+    preview = current_privacy_preview()
+    items = build_no_date_photo_items(
+        db,
+        g.user["id"],
+        year,
+        lambda photo_id: url_for("photo_image", photo_id=photo_id),
+        privacy_preview_allowed_tags(preview),
+    )
+    return render_template(
+        "no_date.html",
+        year=year,
+        items=items,
+        messages_url_builder=lambda photo_id: url_for("photo_messages", photo_id=photo_id),
     )
 
 
@@ -9522,6 +9631,38 @@ def connection_year_view(connection_id, year):
         year=year,
         months=months,
         month_counts=month_counts,
+        no_date_count=get_no_date_photo_count(db, year, connected_user["id"], allowed_tags),
+    )
+
+
+@app.route("/connections/<int:connection_id>/year/<int:year>/no-date")
+@login_required
+def connection_year_no_date_view(connection_id, year):
+    db = get_db()
+    connected_user = get_connected_user(connection_id)
+    allowed_tags = visible_tags_for_connection(connected_user)
+    validate_year_month_for_user(connected_user, year, 1)
+    items = build_no_date_photo_items(
+        db,
+        connected_user["id"],
+        year,
+        lambda photo_id: url_for(
+            "connection_photo_image",
+            connection_id=connected_user["id"],
+            photo_id=photo_id,
+        ),
+        allowed_tags,
+    )
+    return render_template(
+        "no_date.html",
+        connection=public_user_payload(connected_user),
+        year=year,
+        items=items,
+        messages_url_builder=lambda photo_id: url_for(
+            "connection_photo_messages",
+            connection_id=connected_user["id"],
+            photo_id=photo_id,
+        ),
     )
 
 

@@ -19,6 +19,12 @@
 </section>
 
 <section class="month-grid" aria-label="Months in {{ year }}">
+    <a class="month-button counted-button" href="{{ url_for('connection_year_no_date_view', connection_id=connection['id'], year=year) }}">
+        <span>No date</span>
+        {% if no_date_count %}
+            <span class="count-badge">{{ no_date_count }}</span>
+        {% endif %}
+    </a>
     {% for month_number, month_name in months %}
         <a class="month-button counted-button" href="{{ url_for('connection_month_view', connection_id=connection['id'], year=year, month=month_number) }}">
             <span>{{ month_name }}</span>

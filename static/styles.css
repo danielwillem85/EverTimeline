@@ -1487,6 +1487,83 @@ details.privacy-toggle-panel {
     bottom: 12px;
 }
 
+.chapter-bulk-select-page {
+    padding-top: 52px;
+}
+
+.chapter-bulk-toolbar {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    right: 8px;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    border-radius: 8px;
+    padding: 6px 8px;
+    background: rgba(16, 20, 18, 0.78);
+    color: #fff;
+}
+
+.chapter-bulk-toolbar strong,
+.chapter-bulk-toolbar span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.chapter-bulk-toolbar .button {
+    flex: 0 0 auto;
+}
+
+.chapter-bulk-thumb {
+    position: relative;
+    border: 3px solid transparent;
+    cursor: pointer;
+}
+
+.chapter-bulk-thumb.is-selected {
+    border-color: #fff;
+    box-shadow: inset 0 0 0 3px var(--primary);
+}
+
+.chapter-bulk-thumb.is-selected img {
+    filter: brightness(0.72) saturate(1.05);
+}
+
+.chapter-bulk-check {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    display: none;
+    border-radius: 999px;
+    padding: 5px 7px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 900;
+    line-height: 1;
+    box-shadow: 0 6px 16px rgba(16, 20, 18, 0.28);
+}
+
+.chapter-bulk-thumb.is-selected .chapter-bulk-check {
+    display: inline-flex;
+}
+
+.chapter-bulk-save-form {
+    position: absolute;
+    right: 18px;
+    bottom: 18px;
+    z-index: 4;
+}
+
+.chapter-bulk-save-button {
+    min-width: 180px;
+    box-shadow: 0 12px 32px rgba(16, 20, 18, 0.34);
+}
+
 .reaction-bar {
     display: inline-flex;
     align-items: center;
@@ -2865,6 +2942,62 @@ details.privacy-toggle-panel {
     max-height: 140px;
 }
 
+.chapter-bulk-review-form {
+    display: grid;
+    grid-template-columns: minmax(180px, 260px) minmax(240px, 1fr);
+    align-items: end;
+    gap: 14px;
+}
+
+.chapter-bulk-review-form textarea,
+.chapter-bulk-review-form .tag-radio-group,
+.chapter-bulk-review-form .button {
+    grid-column: 1 / -1;
+}
+
+.chapter-bulk-review-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px;
+}
+
+.chapter-bulk-review-photo {
+    display: grid;
+    gap: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px;
+    background: #fff;
+}
+
+.chapter-bulk-review-photo img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 6px;
+    background: var(--surface-strong);
+    object-fit: cover;
+}
+
+.chapter-bulk-review-photo div {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+}
+
+.chapter-bulk-review-photo strong,
+.chapter-bulk-review-photo span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.chapter-bulk-review-photo span {
+    color: var(--muted);
+    font-size: 0.84rem;
+    font-weight: 800;
+}
+
 .chapter-invite-form {
     display: grid;
     grid-template-columns: minmax(220px, 360px) auto;
@@ -3758,6 +3891,10 @@ details.privacy-toggle-panel {
         min-height: 360px;
     }
 
+    .chapter-bulk-select-page {
+        padding-top: 82px;
+    }
+
     .splash-grid {
         gap: 2px;
         padding: 2px;
@@ -3775,6 +3912,25 @@ details.privacy-toggle-panel {
 
     .splash-page-next {
         right: 6px;
+    }
+
+    .chapter-bulk-toolbar {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .chapter-bulk-toolbar .button {
+        width: 100%;
+    }
+
+    .chapter-bulk-save-form {
+        right: 10px;
+        bottom: 10px;
+        left: 10px;
+    }
+
+    .chapter-bulk-save-button {
+        width: 100%;
     }
 
     .page-heading {
@@ -3816,6 +3972,7 @@ details.privacy-toggle-panel {
     .location-form,
     .privacy-bulk-form,
     .chapter-form,
+    .chapter-bulk-review-form,
     .chapter-invite-form {
         grid-template-columns: 1fr;
     }

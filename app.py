@@ -3009,6 +3009,62 @@ def get_chapters_with_counts(db):
     return chapters
 
 
+def parse_chapter_bulk_photo_ids(value, limit=1000):
+    try:
+        raw_values = json.loads(value or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raw_values = str(value or "").split(",")
+    if not isinstance(raw_values, list):
+        return []
+
+    photo_ids = []
+    seen = set()
+    for raw_value in raw_values:
+        try:
+            photo_id = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if photo_id <= 0 or photo_id in seen:
+            continue
+        seen.add(photo_id)
+        photo_ids.append(photo_id)
+        if len(photo_ids) >= limit:
+            break
+    return photo_ids
+
+
+def selected_chapter_bulk_photos(db, photo_ids):
+    if not photo_ids:
+        return []
+
+    placeholders = ",".join(["?"] * len(photo_ids))
+    rows = db.execute(
+        f"""
+        SELECT id, original_filename, title, caption, photo_date, year, month
+        FROM photos
+        WHERE user_id = ?
+          AND id IN ({placeholders})
+        """,
+        (g.user["id"], *photo_ids),
+    ).fetchall()
+    by_id = {row["id"]: row for row in rows}
+    photos = []
+    for photo_id in photo_ids:
+        row = by_id.get(photo_id)
+        if row is None:
+            continue
+        photos.append(
+            {
+                "id": row["id"],
+                "title": photo_display_title(row),
+                "caption": row["caption"] or "",
+                "display_date": row["photo_date"] or format_timeline_date_label(row["year"], row["month"], None),
+                "thumbnail_url": url_for("splash_photo_thumbnail", photo_id=row["id"]),
+            }
+        )
+    return photos
+
+
 def accepted_connection_between(db, user_id, other_user_id):
     return db.execute(
         """
@@ -7675,6 +7731,90 @@ def chapters():
         chapters=get_chapters_with_counts(db),
         shared_chapters=get_shared_chapters(db),
     )
+
+
+@app.route("/chapters/bulk-select")
+@birthday_required
+def chapter_bulk_select():
+    return render_template("chapter_bulk_select.html", seed=secrets.token_hex(8))
+
+
+@app.route("/chapters/bulk-review", methods=("GET", "POST"))
+@birthday_required
+def chapter_bulk_review():
+    if request.method == "GET":
+        return redirect(url_for("chapter_bulk_select"))
+
+    db = get_db()
+    photo_ids = parse_chapter_bulk_photo_ids(request.form.get("selected_photo_ids"))
+    photos = selected_chapter_bulk_photos(db, photo_ids)
+    if not photos:
+        flash("Choose at least one photo for the chapter.", "error")
+        return redirect(url_for("chapter_bulk_select"))
+    if len(photos) != len(photo_ids):
+        flash("Some selected photos could not be found.", "error")
+        return redirect(url_for("chapter_bulk_select"))
+
+    return render_template(
+        "chapter_bulk_review.html",
+        photos=photos,
+        selected_photo_ids=photo_ids,
+        form={
+            "title": "",
+            "description": "",
+            "visibility": DEFAULT_TAG,
+        },
+    )
+
+
+@app.route("/chapters/bulk-create", methods=("POST",))
+@birthday_required
+def chapter_bulk_create():
+    db = get_db()
+    photo_ids = parse_chapter_bulk_photo_ids(request.form.get("selected_photo_ids"))
+    photos = selected_chapter_bulk_photos(db, photo_ids)
+    title = request.form.get("title", "").strip()
+    description = request.form.get("description", "").strip()
+    visibility = chapter_visibility(request.form.get("visibility"))
+
+    if not photos:
+        flash("Choose at least one photo for the chapter.", "error")
+        return redirect(url_for("chapter_bulk_select"))
+    if len(photos) != len(photo_ids):
+        flash("Some selected photos could not be found.", "error")
+        return redirect(url_for("chapter_bulk_select"))
+    if not title:
+        flash("Chapter title is required.", "error")
+        return render_template(
+            "chapter_bulk_review.html",
+            photos=photos,
+            selected_photo_ids=photo_ids,
+            form={
+                "title": title,
+                "description": description,
+                "visibility": visibility,
+            },
+        )
+
+    cursor = db.execute(
+        """
+        INSERT INTO chapters (user_id, title, description, visibility)
+        VALUES (?, ?, ?, ?)
+        """,
+        (g.user["id"], title, description or None, visibility),
+    )
+    chapter_id = cursor.lastrowid
+    for position, photo_id in enumerate(photo_ids, start=1):
+        db.execute(
+            """
+            INSERT INTO chapter_items (chapter_id, item_kind, item_id, position)
+            VALUES (?, 'photo', ?, ?)
+            """,
+            (chapter_id, photo_id, position),
+        )
+    db.commit()
+    flash("Chapter created from selected photos.", "success")
+    return redirect(url_for("chapter_detail", chapter_id=chapter_id))
 
 
 @app.route("/chapters/<int:chapter_id>")

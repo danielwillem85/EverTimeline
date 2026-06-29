@@ -511,6 +511,185 @@ document.addEventListener("DOMContentLoaded", () => {
         loadSplashPage(0);
     }
 
+    const chapterBulkPage = document.querySelector("[data-chapter-bulk-select]");
+    if (chapterBulkPage) {
+        const bulkGrid = chapterBulkPage.querySelector("[data-chapter-bulk-grid]");
+        const bulkStatus = chapterBulkPage.querySelector("[data-chapter-bulk-status]");
+        const bulkPageCount = chapterBulkPage.querySelector("[data-chapter-bulk-page-count]");
+        const bulkPrevButton = chapterBulkPage.querySelector("[data-chapter-bulk-prev]");
+        const bulkNextButton = chapterBulkPage.querySelector("[data-chapter-bulk-next]");
+        const bulkSelectedCount = chapterBulkPage.querySelector("[data-chapter-bulk-selected-count]");
+        const bulkSelectedInput = chapterBulkPage.querySelector("[data-chapter-bulk-selected-input]");
+        const bulkSaveButton = chapterBulkPage.querySelector("[data-chapter-bulk-save]");
+        const bulkUrl = chapterBulkPage.dataset.photoUrl || "/api/splash-photos";
+        const bulkSeed = chapterBulkPage.dataset.photoSeed || String(Date.now());
+        const selectedPhotoIds = [];
+        const selectedPhotoSet = new Set();
+        const minBulkTileSize = 82;
+        let bulkPageIndex = 0;
+        let bulkPageSize = 0;
+        let bulkTotalPages = 0;
+        let bulkResizeTimer = null;
+
+        const setBulkStatus = (message) => {
+            if (!bulkStatus) {
+                return;
+            }
+            bulkStatus.textContent = message;
+            bulkStatus.hidden = !message;
+        };
+
+        const bulkGridSize = () => {
+            const bounds = bulkGrid.getBoundingClientRect();
+            const columns = Math.max(1, Math.floor(bounds.width / minBulkTileSize));
+            const rows = Math.max(1, Math.floor(bounds.height / minBulkTileSize));
+            bulkGrid.style.gridTemplateColumns = `repeat(${columns}, minmax(0, 1fr))`;
+            bulkGrid.style.gridTemplateRows = `repeat(${rows}, minmax(0, 1fr))`;
+            return columns * rows;
+        };
+
+        const updateBulkSelection = () => {
+            const count = selectedPhotoIds.length;
+            if (bulkSelectedCount) {
+                bulkSelectedCount.textContent = `${count} selected`;
+            }
+            if (bulkSelectedInput) {
+                bulkSelectedInput.value = JSON.stringify(selectedPhotoIds);
+            }
+            if (bulkSaveButton) {
+                bulkSaveButton.disabled = count === 0;
+            }
+        };
+
+        const updateBulkControls = () => {
+            const hasPages = bulkTotalPages > 1;
+            if (bulkPrevButton) {
+                bulkPrevButton.hidden = !hasPages;
+            }
+            if (bulkNextButton) {
+                bulkNextButton.hidden = !hasPages;
+            }
+            if (bulkPageCount) {
+                bulkPageCount.hidden = bulkTotalPages <= 0;
+                bulkPageCount.textContent = bulkTotalPages > 0 ? `${bulkPageIndex + 1} of ${bulkTotalPages}` : "";
+            }
+        };
+
+        const setBulkThumbSelected = (button, selected) => {
+            button.classList.toggle("is-selected", selected);
+            button.setAttribute("aria-pressed", selected ? "true" : "false");
+        };
+
+        const toggleBulkPhoto = (photoId, button) => {
+            const normalizedId = String(photoId);
+            if (selectedPhotoSet.has(normalizedId)) {
+                selectedPhotoSet.delete(normalizedId);
+                const selectedIndex = selectedPhotoIds.indexOf(normalizedId);
+                if (selectedIndex >= 0) {
+                    selectedPhotoIds.splice(selectedIndex, 1);
+                }
+                setBulkThumbSelected(button, false);
+            } else {
+                selectedPhotoSet.add(normalizedId);
+                selectedPhotoIds.push(normalizedId);
+                setBulkThumbSelected(button, true);
+            }
+            updateBulkSelection();
+        };
+
+        const renderBulkPhotos = (photos) => {
+            bulkGrid.innerHTML = "";
+            photos.forEach((photo) => {
+                const photoId = String(photo.id);
+                const button = document.createElement("button");
+                button.className = "splash-thumb chapter-bulk-thumb";
+                button.type = "button";
+                button.title = photo.display_date ? `${photo.title} - ${photo.display_date}` : photo.title;
+                button.setAttribute("aria-label", `Select ${photo.title || "photo"}`);
+
+                const image = document.createElement("img");
+                image.src = photo.thumbnail_url;
+                image.alt = photo.title || "Chapter photo";
+                image.loading = "lazy";
+                image.decoding = "async";
+
+                const check = document.createElement("span");
+                check.className = "chapter-bulk-check";
+                check.textContent = "OK";
+                check.setAttribute("aria-hidden", "true");
+
+                button.append(image, check);
+                setBulkThumbSelected(button, selectedPhotoSet.has(photoId));
+                button.addEventListener("click", () => toggleBulkPhoto(photoId, button));
+                bulkGrid.appendChild(button);
+            });
+        };
+
+        const loadBulkPage = async (page) => {
+            bulkPageSize = bulkGridSize();
+            setBulkStatus("Loading photos...");
+            const url = new URL(bulkUrl, window.location.href);
+            url.searchParams.set("seed", bulkSeed);
+            url.searchParams.set("page", String(page));
+            url.searchParams.set("page_size", String(bulkPageSize));
+
+            try {
+                const response = await csrfFetch(url.toString());
+                if (!response.ok) {
+                    throw new Error("Photos could not be loaded.");
+                }
+                const payload = await response.json();
+                bulkPageIndex = payload.page || 0;
+                bulkTotalPages = payload.total_pages || 0;
+                renderBulkPhotos(payload.photos || []);
+                setBulkStatus(payload.total ? "" : "No photos yet.");
+                updateBulkControls();
+                updateBulkSelection();
+            } catch (error) {
+                renderBulkPhotos([]);
+                bulkTotalPages = 0;
+                setBulkStatus("Photos could not be loaded.");
+                updateBulkControls();
+                updateBulkSelection();
+            }
+        };
+
+        const moveBulkPage = (delta) => {
+            if (bulkTotalPages <= 0) {
+                return;
+            }
+            loadBulkPage(bulkPageIndex + delta);
+        };
+
+        if (bulkPrevButton) {
+            bulkPrevButton.addEventListener("click", () => moveBulkPage(-1));
+        }
+        if (bulkNextButton) {
+            bulkNextButton.addEventListener("click", () => moveBulkPage(1));
+        }
+
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "ArrowLeft") {
+                moveBulkPage(-1);
+            } else if (event.key === "ArrowRight") {
+                moveBulkPage(1);
+            }
+        });
+
+        window.addEventListener("resize", () => {
+            window.clearTimeout(bulkResizeTimer);
+            bulkResizeTimer = window.setTimeout(() => {
+                const nextPageSize = bulkGridSize();
+                if (nextPageSize !== bulkPageSize) {
+                    loadBulkPage(bulkPageIndex);
+                }
+            }, 120);
+        });
+
+        updateBulkSelection();
+        loadBulkPage(0);
+    }
+
     const viewAllButton = document.getElementById("view-all-button");
     const viewRandomButton = document.getElementById("view-random-button");
     const allItemsModal = document.getElementById("all-items-modal");

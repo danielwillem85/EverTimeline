@@ -5,12 +5,17 @@
 
 {% block content %}
 <section
-    class="splash-page"
+    class="splash-page has-splash-size-controls"
     data-splash
     data-splash-url="{{ url_for('splash_photos') }}"
     data-splash-seed="{{ seed }}"
     aria-label="Random photo wall"
 >
+    <div class="splash-size-controls" aria-label="Thumbnail size">
+        <button type="button" data-splash-size="0.5" aria-pressed="false">50%</button>
+        <button type="button" data-splash-size="1" aria-pressed="true">100%</button>
+        <button type="button" data-splash-size="1.5" aria-pressed="false">150%</button>
+    </div>
     <div class="splash-grid" data-splash-grid aria-live="polite"></div>
     <p class="splash-status" data-splash-status>Loading photos...</p>
     <button class="splash-page-button splash-page-prev" type="button" data-splash-prev aria-label="Previous thumbnails">&lt;</button>
@@ -26,7 +31,35 @@
                 <h2 id="splash-photo-modal-title">Picture</h2>
                 <p id="splash-photo-modal-date" class="muted"></p>
             </div>
-            <button class="icon-button" type="button" data-close-splash-photo-modal aria-label="Close popup">x</button>
+            <div class="splash-photo-modal-actions">
+                {% if chapters %}
+                    <form
+                        method="post"
+                        action="{{ url_for('add_chapter_item') }}"
+                        class="splash-chapter-add-form"
+                        data-splash-chapter-form
+                        data-splash-chapter-api="{{ url_for('api_add_chapter_item') }}"
+                    >
+                        {{ csrf_field() }}
+                        <input type="hidden" name="item_kind" value="photo">
+                        <input type="hidden" name="item_id" value="" data-splash-chapter-photo-id>
+                        <input type="hidden" name="next" value="{{ url_for('splash') }}">
+                        <label>
+                            <span class="sr-only">Choose chapter</span>
+                            <select name="chapter_id" required data-splash-chapter-select>
+                                <option value="">Add to chapter</option>
+                                {% for chapter in chapters %}
+                                    <option value="{{ chapter['id'] }}">{{ chapter["title"] }}</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                        <span class="splash-chapter-status" data-splash-chapter-status aria-live="polite"></span>
+                    </form>
+                {% else %}
+                    <a class="button secondary small" href="{{ url_for('chapters') }}">Create chapter</a>
+                {% endif %}
+                <button class="icon-button" type="button" data-close-splash-photo-modal aria-label="Close popup">x</button>
+            </div>
         </header>
         <div class="splash-photo-modal-body">
             <img id="splash-photo-modal-image" class="modal-image" alt="Selected splash picture">

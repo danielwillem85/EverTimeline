@@ -759,10 +759,15 @@ document.addEventListener("DOMContentLoaded", () => {
         const splashCount = splashPage.querySelector("[data-splash-count]");
         const splashPrevButton = splashPage.querySelector("[data-splash-prev]");
         const splashNextButton = splashPage.querySelector("[data-splash-next]");
+        const splashSizeButtons = splashPage.querySelectorAll("[data-splash-size]");
         const splashPhotoModal = document.getElementById("splash-photo-modal");
         const splashPhotoImage = document.getElementById("splash-photo-modal-image");
         const splashPhotoTitle = document.getElementById("splash-photo-modal-title");
         const splashPhotoDate = document.getElementById("splash-photo-modal-date");
+        const splashChapterPhotoInput = document.querySelector("[data-splash-chapter-photo-id]");
+        const splashChapterForm = document.querySelector("[data-splash-chapter-form]");
+        const splashChapterSelect = document.querySelector("[data-splash-chapter-select]");
+        const splashChapterStatus = document.querySelector("[data-splash-chapter-status]");
         const splashSeed = splashPage.dataset.splashSeed || String(Date.now());
         const splashUrl = splashPage.dataset.splashUrl || "/api/splash-photos";
         const splashSelectable = splashPage.hasAttribute("data-splash-selectable");
@@ -770,7 +775,10 @@ document.addEventListener("DOMContentLoaded", () => {
         const noDateAssignForm = document.querySelector("[data-no-date-assign-form]");
         const noDateAssignButton = document.querySelector("[data-no-date-assign-button]");
         const noDateSelectedCount = document.querySelector("[data-no-date-selected-count]");
-        const minTileSize = 82;
+        const defaultTileSize = 82;
+        const configuredTileSize = Number.parseInt(splashPage.dataset.splashTileSize || "", 10);
+        const baseTileSize = Number.isFinite(configuredTileSize) && configuredTileSize > 0 ? configuredTileSize : defaultTileSize;
+        let minTileSize = baseTileSize;
         let splashPageIndex = 0;
         let splashPageSize = 0;
         let splashTotalPages = 0;
@@ -836,6 +844,20 @@ document.addEventListener("DOMContentLoaded", () => {
                 splashPhotoImage.removeAttribute("src");
                 splashPhotoImage.alt = "";
             }
+            if (splashChapterPhotoInput) {
+                splashChapterPhotoInput.value = "";
+            }
+            if (splashChapterSelect) {
+                splashChapterSelect.value = "";
+                splashChapterSelect.removeAttribute("aria-disabled");
+            }
+            if (splashChapterStatus) {
+                splashChapterStatus.textContent = "";
+                splashChapterStatus.classList.remove("is-error");
+            }
+            if (splashChapterForm) {
+                delete splashChapterForm.dataset.submitting;
+            }
             syncModalOpenState();
         };
 
@@ -851,6 +873,20 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             splashPhotoImage.src = photo.full_url;
             splashPhotoImage.alt = photo.title || "Splash picture";
+            if (splashChapterPhotoInput) {
+                splashChapterPhotoInput.value = String(photo.id || "");
+            }
+            if (splashChapterSelect) {
+                splashChapterSelect.value = "";
+                splashChapterSelect.removeAttribute("aria-disabled");
+            }
+            if (splashChapterStatus) {
+                splashChapterStatus.textContent = "";
+                splashChapterStatus.classList.remove("is-error");
+            }
+            if (splashChapterForm) {
+                delete splashChapterForm.dataset.submitting;
+            }
             splashPhotoModal.hidden = false;
             syncModalOpenState();
         };
@@ -943,6 +979,67 @@ document.addEventListener("DOMContentLoaded", () => {
             splashNextButton.addEventListener("click", () => moveSplashPage(1));
         }
 
+        const updateSplashSizeButtons = (selectedScale) => {
+            splashSizeButtons.forEach((button) => {
+                button.setAttribute("aria-pressed", button.dataset.splashSize === selectedScale ? "true" : "false");
+            });
+        };
+
+        splashSizeButtons.forEach((button) => {
+            button.addEventListener("click", () => {
+                const nextScale = Number.parseFloat(button.dataset.splashSize || "1");
+                if (!Number.isFinite(nextScale) || nextScale <= 0) {
+                    return;
+                }
+                minTileSize = Math.max(24, Math.round(baseTileSize * nextScale));
+                updateSplashSizeButtons(button.dataset.splashSize || "1");
+                loadSplashPage(0);
+            });
+        });
+        updateSplashSizeButtons("1");
+
+        if (splashChapterForm && splashChapterSelect && splashChapterPhotoInput) {
+            splashChapterSelect.addEventListener("change", async () => {
+                if (
+                    !splashChapterSelect.value ||
+                    !splashChapterPhotoInput.value ||
+                    splashChapterForm.dataset.submitting === "true"
+                ) {
+                    return;
+                }
+                splashChapterForm.dataset.submitting = "true";
+                splashChapterSelect.setAttribute("aria-disabled", "true");
+                if (splashChapterStatus) {
+                    splashChapterStatus.textContent = "Adding...";
+                    splashChapterStatus.classList.remove("is-error");
+                }
+                try {
+                    const response = await csrfFetch(splashChapterForm.dataset.splashChapterApi || splashChapterForm.action, {
+                        method: "POST",
+                        headers: {"Accept": "application/json"},
+                        body: new FormData(splashChapterForm),
+                    });
+                    const payload = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        throw new Error(payload.error || "Could not add to chapter.");
+                    }
+                    if (splashChapterStatus) {
+                        splashChapterStatus.textContent = payload.message || "Added item to chapter.";
+                    }
+                    splashChapterSelect.value = "";
+                } catch (error) {
+                    if (splashChapterStatus) {
+                        splashChapterStatus.textContent = error.message || "Could not add to chapter.";
+                        splashChapterStatus.classList.add("is-error");
+                    }
+                    splashChapterSelect.value = "";
+                } finally {
+                    delete splashChapterForm.dataset.submitting;
+                    splashChapterSelect.removeAttribute("aria-disabled");
+                }
+            });
+        }
+
         if (noDateAssignForm && splashSelectable) {
             noDateAssignForm.addEventListener("submit", async (event) => {
                 event.preventDefault();
@@ -973,6 +1070,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     await loadSplashPage(splashPageIndex);
                 } catch (error) {
                     setSplashStatus(error.message || "Selected photos could not be saved.");
+                    updateSplashSelectionState();
+                } finally {
                     updateSplashSelectionState();
                 }
             });
@@ -1028,7 +1127,13 @@ document.addEventListener("DOMContentLoaded", () => {
         const bulkTotalCount = chapterBulkPage.querySelector("[data-chapter-bulk-total-count]");
         const bulkSelectedProgress = chapterBulkPage.querySelector("[data-chapter-bulk-selected-progress]");
         const bulkSelectedInput = chapterBulkPage.querySelector("[data-chapter-bulk-selected-input]");
-        const bulkSaveButton = chapterBulkPage.querySelector("[data-chapter-bulk-save]");
+        const bulkAssignmentForm = chapterBulkPage.querySelector("[data-chapter-bulk-assignment]");
+        const bulkChapterSelect = chapterBulkPage.querySelector("[data-chapter-bulk-chapter-select]");
+        const bulkActionStatus = chapterBulkPage.querySelector("[data-chapter-bulk-action-status]");
+        const bulkNewModal = document.getElementById("chapter-bulk-new-modal");
+        const bulkNewForm = document.querySelector("[data-chapter-bulk-new-form]");
+        const bulkNewCount = document.querySelector("[data-chapter-bulk-new-count]");
+        const bulkNewStatus = document.querySelector("[data-chapter-bulk-new-status]");
         const bulkUrl = chapterBulkPage.dataset.photoUrl || "/api/splash-photos";
         const bulkSeed = chapterBulkPage.dataset.photoSeed || String(Date.now());
         const selectedPhotoIds = [];
@@ -1072,9 +1177,32 @@ document.addEventListener("DOMContentLoaded", () => {
             if (bulkSelectedInput) {
                 bulkSelectedInput.value = JSON.stringify(selectedPhotoIds);
             }
-            if (bulkSaveButton) {
-                bulkSaveButton.disabled = count === 0;
+            if (bulkChapterSelect) {
+                bulkChapterSelect.disabled = count === 0 || bulkAssignmentForm?.dataset.submitting === "true";
+                if (count === 0) {
+                    bulkChapterSelect.value = "";
+                }
             }
+        };
+
+        const setBulkActionStatus = (message, isError = false) => {
+            if (!bulkActionStatus) {
+                return;
+            }
+            bulkActionStatus.textContent = message;
+            bulkActionStatus.classList.toggle("is-error", isError);
+        };
+
+        const clearBulkSelection = () => {
+            selectedPhotoIds.splice(0, selectedPhotoIds.length);
+            selectedPhotoSet.clear();
+            bulkGrid.querySelectorAll(".chapter-bulk-thumb").forEach((button) => {
+                setBulkThumbSelected(button, false);
+            });
+            if (bulkChapterSelect) {
+                bulkChapterSelect.value = "";
+            }
+            updateBulkSelection();
         };
 
         const updateBulkControls = () => {
@@ -1192,7 +1320,148 @@ document.addEventListener("DOMContentLoaded", () => {
             bulkNextButton.addEventListener("click", () => moveBulkPage(1));
         }
 
+        const closeBulkNewModal = () => {
+            if (!bulkNewModal) {
+                return;
+            }
+            bulkNewModal.hidden = true;
+            if (bulkChapterSelect) {
+                bulkChapterSelect.value = "";
+            }
+            if (bulkNewForm) {
+                bulkNewForm.reset();
+                delete bulkNewForm.dataset.submitting;
+            }
+            if (bulkNewStatus) {
+                bulkNewStatus.textContent = "";
+                bulkNewStatus.classList.remove("is-error");
+            }
+            syncModalOpenState();
+        };
+
+        const openBulkNewModal = () => {
+            if (!bulkNewModal || selectedPhotoIds.length === 0) {
+                return;
+            }
+            if (bulkNewCount) {
+                bulkNewCount.textContent = selectedPhotoIds.length === 1 ? "1 selected photo" : `${selectedPhotoIds.length} selected photos`;
+            }
+            if (bulkNewStatus) {
+                bulkNewStatus.textContent = "";
+                bulkNewStatus.classList.remove("is-error");
+            }
+            bulkNewModal.hidden = false;
+            syncModalOpenState();
+            const titleInput = bulkNewForm?.querySelector("input[name='title']");
+            if (titleInput) {
+                titleInput.focus();
+            }
+        };
+
+        const assignBulkPhotosToChapter = async (chapterId) => {
+            if (!bulkAssignmentForm || !chapterId || selectedPhotoIds.length === 0) {
+                return;
+            }
+            bulkAssignmentForm.dataset.submitting = "true";
+            updateBulkSelection();
+            setBulkActionStatus("Adding...");
+            try {
+                const formData = new FormData();
+                formData.set("chapter_id", chapterId);
+                formData.set("selected_photo_ids", JSON.stringify(selectedPhotoIds));
+                const response = await csrfFetch(bulkAssignmentForm.dataset.bulkAddUrl, {
+                    method: "POST",
+                    headers: {"Accept": "application/json"},
+                    body: formData,
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    throw new Error(payload.error || "Could not add selected photos.");
+                }
+                setBulkActionStatus(payload.message || "Selected photos added.");
+                clearBulkSelection();
+            } catch (error) {
+                setBulkActionStatus(error.message || "Could not add selected photos.", true);
+                if (bulkChapterSelect) {
+                    bulkChapterSelect.value = "";
+                }
+            } finally {
+                delete bulkAssignmentForm.dataset.submitting;
+                updateBulkSelection();
+            }
+        };
+
+        if (bulkChapterSelect) {
+            bulkChapterSelect.addEventListener("change", () => {
+                if (!bulkChapterSelect.value) {
+                    return;
+                }
+                if (bulkChapterSelect.value === "__new__") {
+                    openBulkNewModal();
+                    return;
+                }
+                assignBulkPhotosToChapter(bulkChapterSelect.value);
+            });
+        }
+
+        if (bulkNewModal) {
+            bulkNewModal.querySelectorAll("[data-close-chapter-bulk-new]").forEach((button) => {
+                button.addEventListener("click", closeBulkNewModal);
+            });
+        }
+
+        if (bulkNewForm && bulkAssignmentForm) {
+            bulkNewForm.addEventListener("submit", async (event) => {
+                event.preventDefault();
+                if (selectedPhotoIds.length === 0 || bulkNewForm.dataset.submitting === "true") {
+                    return;
+                }
+                bulkNewForm.dataset.submitting = "true";
+                if (bulkNewStatus) {
+                    bulkNewStatus.textContent = "Creating...";
+                    bulkNewStatus.classList.remove("is-error");
+                }
+                try {
+                    const formData = new FormData(bulkNewForm);
+                    formData.set("selected_photo_ids", JSON.stringify(selectedPhotoIds));
+                    const response = await csrfFetch(bulkAssignmentForm.dataset.bulkCreateUrl, {
+                        method: "POST",
+                        headers: {"Accept": "application/json"},
+                        body: formData,
+                    });
+                    const payload = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        throw new Error(payload.error || "Could not create chapter.");
+                    }
+                    setBulkActionStatus(payload.message || "Chapter created.");
+                    closeBulkNewModal();
+                    clearBulkSelection();
+                    if (payload.chapter && bulkChapterSelect) {
+                        const option = document.createElement("option");
+                        option.value = String(payload.chapter.id);
+                        option.textContent = payload.chapter.title;
+                        const newOption = bulkChapterSelect.querySelector("option[value='__new__']");
+                        bulkChapterSelect.insertBefore(option, newOption);
+                    }
+                } catch (error) {
+                    if (bulkNewStatus) {
+                        bulkNewStatus.textContent = error.message || "Could not create chapter.";
+                        bulkNewStatus.classList.add("is-error");
+                    }
+                } finally {
+                    delete bulkNewForm.dataset.submitting;
+                }
+            });
+        }
+
         document.addEventListener("keydown", (event) => {
+            if (bulkNewModal && !bulkNewModal.hidden && event.key === "Escape") {
+                closeBulkNewModal();
+                return;
+            }
+            if (bulkNewModal && !bulkNewModal.hidden) {
+                return;
+            }
             if (event.key === "ArrowLeft") {
                 moveBulkPage(-1);
             } else if (event.key === "ArrowRight") {

@@ -412,6 +412,9 @@ def test_splash_page_api_and_thumbnails_are_owned(app, client, helpers):
     page = client.get("/splash")
     assert page.status_code == 200
     assert b"data-splash" in page.data
+    assert b'data-splash-size="0.5"' in page.data
+    assert b'data-splash-size="1"' in page.data
+    assert b'data-splash-size="1.5"' in page.data
 
     response = client.get("/api/splash-photos?seed=test-seed&page=0&page_size=1")
     assert response.status_code == 200
@@ -427,6 +430,67 @@ def test_splash_page_api_and_thumbnails_are_owned(app, client, helpers):
     assert thumbnail.mimetype == "image/jpeg"
     assert thumbnail.data.startswith(b"\xff\xd8")
     assert client.get(f"/photo/{other_photo_id}/thumbnail").status_code == 404
+
+
+def test_splash_modal_can_add_photo_to_existing_chapter(client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="chapter-splash-add.png",
+        title="Chapter splash add",
+    )
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Favorites",
+            "description": "Saved from Splash",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Favorites",))["id"]
+
+    page = client.get("/splash")
+    assert page.status_code == 200
+    assert b"data-splash-chapter-form" in page.data
+    assert b"data-splash-chapter-api" in page.data
+    assert b"data-splash-chapter-photo-id" in page.data
+    assert b"data-splash-chapter-select" in page.data
+    assert b"data-splash-chapter-submit" not in page.data
+    assert b"Add to chapter" in page.data
+    assert b"Favorites" in page.data
+
+    response = client.post(
+        "/api/chapters/items",
+        data={
+            **helpers.csrf_form_data(client, "/splash"),
+            "chapter_id": chapter_id,
+            "item_kind": "photo",
+            "item_id": photo_id,
+        },
+    )
+    assert response.status_code == 201
+    assert response.get_json()["status"] == "added"
+    assert helpers.row(
+        """
+        SELECT id
+        FROM chapter_items
+        WHERE chapter_id = ? AND item_kind = 'photo' AND item_id = ?
+        """,
+        (chapter_id, photo_id),
+    )
+    duplicate = client.post(
+        "/api/chapters/items",
+        data={
+            **helpers.csrf_form_data(client, "/splash"),
+            "chapter_id": chapter_id,
+            "item_kind": "photo",
+            "item_id": photo_id,
+        },
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.get_json()["status"] == "exists"
 
 
 def test_admin_page_is_daniel_only_and_converts_existing_images(app, client, helpers):
@@ -1344,8 +1408,57 @@ def test_chapter_visual_bulk_select_creates_chapter_from_selected_photos(app, cl
     assert picker_page.status_code == 200
     assert b"data-chapter-bulk-select" in picker_page.data
     assert b"/api/splash-photos" in picker_page.data
+    assert b"data-chapter-bulk-chapter-select" in picker_page.data
+    assert b"New chapter" in picker_page.data
+    assert b"Save to chapter" not in picker_page.data
 
     selected_ids = [second_photo_id, first_photo_id]
+    api_create_response = client.post(
+        "/api/chapters/bulk-create",
+        data={
+            **helpers.csrf_form_data(client, "/chapters/bulk-select"),
+            "selected_photo_ids": json.dumps(selected_ids),
+            "title": "API visual story",
+            "description": "Made immediately",
+        },
+    )
+    assert api_create_response.status_code == 201
+    api_create_payload = api_create_response.get_json()
+    assert api_create_payload["status"] == "created"
+    assert api_create_payload["added_count"] == 2
+    api_chapter = helpers.row(
+        "SELECT id, description, visibility FROM chapters WHERE title = ?",
+        ("API visual story",),
+    )
+    assert api_chapter["description"] == "Made immediately"
+    assert api_chapter["visibility"] == "private"
+    api_items = helpers.rows(
+        """
+        SELECT item_kind, item_id, position
+        FROM chapter_items
+        WHERE chapter_id = ?
+        ORDER BY position ASC
+        """,
+        (api_chapter["id"],),
+    )
+    assert [(row["item_kind"], row["item_id"], row["position"]) for row in api_items] == [
+        ("photo", second_photo_id, 1),
+        ("photo", first_photo_id, 2),
+    ]
+
+    existing_response = client.post(
+        "/api/chapters/bulk-add",
+        data={
+            **helpers.csrf_form_data(client, "/chapters/bulk-select"),
+            "selected_photo_ids": json.dumps([first_photo_id, second_photo_id]),
+            "chapter_id": api_chapter["id"],
+        },
+    )
+    assert existing_response.status_code == 200
+    existing_payload = existing_response.get_json()
+    assert existing_payload["added_count"] == 0
+    assert existing_payload["existing_count"] == 2
+
     review_page = client.post(
         "/chapters/bulk-review",
         data={
@@ -1398,6 +1511,92 @@ def test_chapter_visual_bulk_select_creates_chapter_from_selected_photos(app, cl
     )
     assert invalid_review.status_code == 302
     assert invalid_review.headers["Location"].endswith("/chapters/bulk-select")
+
+
+def test_chapter_splash_view_pages_photo_thumbnails(app, client, helpers):
+    helpers.create_user(client, "owner")
+
+    def upload_colored_photo(filename, color, title, photo_date):
+        buffer = io.BytesIO()
+        Image.new("RGB", (14, 14), color=color).save(buffer, format="PNG")
+        response = client.post(
+            "/year/2020/5",
+            data={
+                **helpers.csrf_form_data(client, "/year/2020/5"),
+                "photo": (io.BytesIO(buffer.getvalue()), filename, "image/png"),
+                "photo_date": photo_date,
+                "title": title,
+                "caption": "",
+                "tags": "private",
+                "people": "",
+                "location_name": "",
+                "latitude": "",
+                "longitude": "",
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+        return helpers.row("SELECT id FROM photos WHERE original_filename = ?", (filename,))["id"]
+
+    first_photo_id = upload_colored_photo(
+        "chapter-splash-first.png",
+        (22, 109, 103),
+        "First splash photo",
+        "2020-05-04",
+    )
+    text_id = helpers.create_text(client, "Text should not appear in splash", entry_date="2020-05-05")
+    second_photo_id = upload_colored_photo(
+        "chapter-splash-second.png",
+        (184, 79, 62),
+        "Second splash photo",
+        "2020-05-06",
+    )
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Splash Chapter",
+            "description": "A visual chapter wall",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Splash Chapter",))["id"]
+    for item_kind, item_id in (("photo", first_photo_id), ("text", text_id), ("photo", second_photo_id)):
+        assert client.post(
+            "/chapters/items",
+            data={
+                **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+                "chapter_id": chapter_id,
+                "item_kind": item_kind,
+                "item_id": item_id,
+            },
+        ).status_code == 302
+
+    chapter_page = client.get(f"/chapters/{chapter_id}")
+    assert chapter_page.status_code == 200
+    assert f"/chapters/{chapter_id}/splash".encode() in chapter_page.data
+
+    splash_page = client.get(f"/chapters/{chapter_id}/splash")
+    assert splash_page.status_code == 200
+    assert b"data-splash" in splash_page.data
+    assert b'data-splash-tile-size="123"' in splash_page.data
+    assert f"/api/chapters/{chapter_id}/splash-photos".encode() in splash_page.data
+
+    first_payload = client.get(f"/api/chapters/{chapter_id}/splash-photos?page_size=1&page=0").get_json()
+    second_payload = client.get(f"/api/chapters/{chapter_id}/splash-photos?page_size=1&page=1").get_json()
+    assert first_payload["total"] == 2
+    assert first_payload["total_pages"] == 2
+    assert first_payload["photos"][0]["id"] == first_photo_id
+    assert second_payload["photos"][0]["id"] == second_photo_id
+    assert client.get(first_payload["photos"][0]["thumbnail_url"]).status_code == 200
+    assert client.get(first_payload["photos"][0]["full_url"]).status_code == 200
+
+    other_client = app.test_client()
+    helpers.create_user(other_client, "other")
+    assert other_client.get(f"/chapters/{chapter_id}/splash").status_code == 404
+    assert other_client.get(f"/api/chapters/{chapter_id}/splash-photos").status_code == 404
+
 
 def test_privacy_preview_filters_owner_timeline_views(client, helpers):
     helpers.create_user(client, "owner")

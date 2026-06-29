@@ -3434,6 +3434,68 @@ def build_splash_photo_page(db, *, year=None, no_date_only=False):
     }
 
 
+def splash_page_args():
+    page_size = request.args.get("page_size", default=80, type=int)
+    if page_size is None:
+        page_size = 80
+    page_size = max(1, min(page_size, 240))
+
+    page = request.args.get("page", default=0, type=int)
+    if page is None:
+        page = 0
+    return page, page_size
+
+
+def paginated_splash_payload(photos, page, page_size, seed=None):
+    total = len(photos)
+    total_pages = (total + page_size - 1) // page_size if total else 0
+    if total_pages:
+        page = page % total_pages
+    else:
+        page = 0
+
+    start = page * page_size
+    return {
+        "seed": seed or "",
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": total_pages,
+        "photos": photos[start:start + page_size],
+    }
+
+
+def build_chapter_splash_photo_page(db, chapter_id):
+    page, page_size = splash_page_args()
+    rows = db.execute(
+        """
+        SELECT p.id, p.original_filename, p.title, p.caption, p.photo_date,
+               ci.position, ci.id AS chapter_item_id
+        FROM chapter_items ci
+        JOIN chapters c ON c.id = ci.chapter_id
+        JOIN photos p ON p.id = ci.item_id
+        WHERE ci.chapter_id = ?
+          AND c.user_id = ?
+          AND ci.item_kind = 'photo'
+          AND p.user_id = c.user_id
+        ORDER BY ci.position ASC, ci.id ASC
+        """,
+        (chapter_id, g.user["id"]),
+    ).fetchall()
+    photos = [
+        {
+            "id": row["id"],
+            "title": photo_display_title(row),
+            "caption": row["caption"] or "",
+            "display_date": row["photo_date"] or "",
+            "thumbnail_url": url_for("splash_photo_thumbnail", photo_id=row["id"]),
+            "full_url": url_for("photo_image", photo_id=row["id"]),
+        }
+        for row in rows
+    ]
+    return paginated_splash_payload(photos, page, page_size)
+
+
 def build_on_this_day_items(db, owner_id, month, day, image_url_builder):
     date_key = f"{month:02d}-{day:02d}"
     photo_rows = db.execute(
@@ -7809,7 +7871,12 @@ def home():
 @app.route("/splash")
 @birthday_required
 def splash():
-    return render_template("splash.html", seed=secrets.token_hex(8))
+    db = get_db()
+    return render_template(
+        "splash.html",
+        seed=secrets.token_hex(8),
+        chapters=get_chapter_options(db),
+    )
 
 
 @app.route("/api/splash-photos")
@@ -9320,7 +9387,119 @@ def chapter_draft():
 @app.route("/chapters/bulk-select")
 @birthday_required
 def chapter_bulk_select():
-    return render_template("chapter_bulk_select.html", seed=secrets.token_hex(8))
+    db = get_db()
+    return render_template(
+        "chapter_bulk_select.html",
+        seed=secrets.token_hex(8),
+        chapters=get_chapter_options(db),
+    )
+
+
+def add_photos_to_chapter(db, chapter_id, photo_ids):
+    chapter = get_owned_chapter(chapter_id)
+    photos = selected_chapter_bulk_photos(db, photo_ids)
+    if not photos:
+        return None, jsonify({"error": "Choose at least one photo."}), 400
+    if len(photos) != len(photo_ids):
+        return None, jsonify({"error": "Some selected photos could not be found."}), 400
+
+    added_count = 0
+    existing_count = 0
+    for photo_id in photo_ids:
+        existing = db.execute(
+            """
+            SELECT id
+            FROM chapter_items
+            WHERE chapter_id = ? AND item_kind = 'photo' AND item_id = ?
+            """,
+            (chapter_id, photo_id),
+        ).fetchone()
+        if existing is not None:
+            existing_count += 1
+            continue
+        db.execute(
+            """
+            INSERT INTO chapter_items (chapter_id, item_kind, item_id, position)
+            VALUES (?, 'photo', ?, ?)
+            """,
+            (chapter_id, photo_id, next_chapter_position(db, chapter_id)),
+        )
+        added_count += 1
+
+    if added_count:
+        db.execute(
+            "UPDATE chapters SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (chapter_id,),
+        )
+    db.commit()
+    return {
+        "status": "ok",
+        "chapter": {"id": chapter["id"], "title": chapter["title"]},
+        "added_count": added_count,
+        "existing_count": existing_count,
+        "selected_count": len(photo_ids),
+        "message": f"Added {added_count} photo{'s' if added_count != 1 else ''} to {chapter['title']}.",
+    }, None, None
+
+
+@app.route("/api/chapters/bulk-add", methods=("POST",))
+@birthday_required
+def api_chapter_bulk_add():
+    db = get_db()
+    photo_ids = parse_chapter_bulk_photo_ids(request.form.get("selected_photo_ids"))
+    chapter_id = request.form.get("chapter_id", type=int)
+    if chapter_id is None:
+        return jsonify({"error": "Choose a chapter."}), 400
+
+    payload, error_response, status = add_photos_to_chapter(db, chapter_id, photo_ids)
+    if error_response is not None:
+        return error_response, status
+    return jsonify(payload)
+
+
+@app.route("/api/chapters/bulk-create", methods=("POST",))
+@birthday_required
+def api_chapter_bulk_create():
+    db = get_db()
+    photo_ids = parse_chapter_bulk_photo_ids(request.form.get("selected_photo_ids"))
+    photos = selected_chapter_bulk_photos(db, photo_ids)
+    title = request.form.get("title", "").strip()
+    description = request.form.get("description", "").strip()
+    visibility = chapter_visibility(request.form.get("visibility"))
+
+    if not photos:
+        return jsonify({"error": "Choose at least one photo."}), 400
+    if len(photos) != len(photo_ids):
+        return jsonify({"error": "Some selected photos could not be found."}), 400
+    if not title:
+        return jsonify({"error": "Chapter title is required."}), 400
+
+    cursor = db.execute(
+        """
+        INSERT INTO chapters (user_id, title, description, visibility)
+        VALUES (?, ?, ?, ?)
+        """,
+        (g.user["id"], title, description or None, visibility),
+    )
+    chapter_id = cursor.lastrowid
+    for position, photo_id in enumerate(photo_ids, start=1):
+        db.execute(
+            """
+            INSERT INTO chapter_items (chapter_id, item_kind, item_id, position)
+            VALUES (?, 'photo', ?, ?)
+            """,
+            (chapter_id, photo_id, position),
+        )
+    db.commit()
+    return jsonify(
+        {
+            "status": "created",
+            "chapter": {"id": chapter_id, "title": title},
+            "added_count": len(photo_ids),
+            "selected_count": len(photo_ids),
+            "message": f"Created {title} with {len(photo_ids)} photo{'s' if len(photo_ids) != 1 else ''}.",
+        }
+    ), 201
 
 
 @app.route("/chapters/bulk-review", methods=("GET", "POST"))
@@ -9431,6 +9610,25 @@ def chapter_detail(chapter_id):
             else ""
         ),
     )
+
+
+@app.route("/chapters/<int:chapter_id>/splash")
+@birthday_required
+def chapter_splash(chapter_id):
+    chapter = dict(get_owned_chapter(chapter_id))
+    return render_template(
+        "chapter_splash.html",
+        chapter=chapter,
+        seed=secrets.token_hex(8),
+    )
+
+
+@app.route("/api/chapters/<int:chapter_id>/splash-photos")
+@birthday_required
+def chapter_splash_photos(chapter_id):
+    db = get_db()
+    get_owned_chapter(chapter_id)
+    return jsonify(build_chapter_splash_photo_page(db, chapter_id))
 
 
 @app.route("/chapters/<int:chapter_id>/settings", methods=("POST",))
@@ -9618,18 +9816,8 @@ def delete_chapter(chapter_id):
     return redirect(url_for("chapters"))
 
 
-@app.route("/chapters/items", methods=("POST",))
-@birthday_required
-def add_chapter_item():
-    db = get_db()
-    chapter_id = request.form.get("chapter_id", type=int)
-    item_kind = request.form.get("item_kind", "")
-    item_id = request.form.get("item_id", type=int)
-    if chapter_id is None or item_id is None or item_kind not in ("photo", "text"):
-        flash("Choose a chapter and item.", "error")
-        return redirect_back()
-
-    get_owned_chapter(chapter_id)
+def create_chapter_item_assignment(db, chapter_id, item_kind, item_id):
+    chapter = get_owned_chapter(chapter_id)
     item = get_owned_timeline_item(item_kind, item_id)
     existing = db.execute(
         """
@@ -9640,8 +9828,11 @@ def add_chapter_item():
         (chapter_id, item_kind, item_id),
     ).fetchone()
     if existing is not None:
-        flash("That item is already in this chapter.", "error")
-        return redirect_back("chapter_detail", chapter_id=chapter_id)
+        return {
+            "status": "exists",
+            "message": "That item is already in this chapter.",
+            "chapter": {"id": chapter["id"], "title": chapter["title"]},
+        }, False
 
     db.execute(
         """
@@ -9655,8 +9846,41 @@ def add_chapter_item():
         (chapter_id,),
     )
     db.commit()
-    flash("Added item to chapter.", "success")
+    return {
+        "status": "added",
+        "message": "Added item to chapter.",
+        "chapter": {"id": chapter["id"], "title": chapter["title"]},
+    }, True
+
+
+@app.route("/chapters/items", methods=("POST",))
+@birthday_required
+def add_chapter_item():
+    db = get_db()
+    chapter_id = request.form.get("chapter_id", type=int)
+    item_kind = request.form.get("item_kind", "")
+    item_id = request.form.get("item_id", type=int)
+    if chapter_id is None or item_id is None or item_kind not in ("photo", "text"):
+        flash("Choose a chapter and item.", "error")
+        return redirect_back()
+
+    result, created = create_chapter_item_assignment(db, chapter_id, item_kind, item_id)
+    flash(result["message"], "success" if created else "error")
     return redirect_back("chapter_detail", chapter_id=chapter_id)
+
+
+@app.route("/api/chapters/items", methods=("POST",))
+@birthday_required
+def api_add_chapter_item():
+    db = get_db()
+    chapter_id = request.form.get("chapter_id", type=int)
+    item_kind = request.form.get("item_kind", "")
+    item_id = request.form.get("item_id", type=int)
+    if chapter_id is None or item_id is None or item_kind not in ("photo", "text"):
+        return jsonify({"error": "Choose a chapter and item."}), 400
+
+    result, created = create_chapter_item_assignment(db, chapter_id, item_kind, item_id)
+    return jsonify(result), 201 if created else 200
 
 
 @app.route("/chapters/<int:chapter_id>/items/<int:chapter_item_id>/remove", methods=("POST",))

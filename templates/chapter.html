@@ -138,6 +138,7 @@
 {% set carousel_skip_tag_filter = true %}
 <section class="timeline-frame year-carousel-actions" aria-label="Chapter playback">
     <button class="button primary view-all-button" id="view-all-button" type="button" data-carousel-title="{{ chapter['title'] }}">Play chapter</button>
+    <a class="button secondary view-all-button" href="{{ url_for('chapter_splash', chapter_id=chapter['id']) }}">Splash</a>
 </section>
 
 <section class="connection-section">

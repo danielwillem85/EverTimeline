@@ -1563,6 +1563,9 @@ def test_memory_review_queue_prioritizes_incomplete_memories(client, helpers):
     assert b"Public photos need polish" in response.data
     assert b"public-uncaptioned.png" in response.data
     assert b"A short memory without tags or place" in response.data
+    assert b'data-review-action="caption"' in response.data
+    assert b'data-review-action="people"' in response.data
+    assert b'data-review-action="location"' in response.data
     assert b"/timeline/search?kind=photo&amp;caption=without" in response.data
     assert b"/timeline/search?location=without" in response.data
     assert b"/chapters/draft" in response.data
@@ -1609,6 +1612,74 @@ def test_memory_review_queue_empty_and_complete_states(client, helpers):
     complete_response = client.get("/timeline/review")
     assert complete_response.status_code == 200
     assert b"Your timeline has no review issues right now." in complete_response.data
+
+
+def test_memory_review_inline_actions_complete_photo(client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="inline-review.png",
+        photo_date="2020-05-04",
+        tag="private",
+    )
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Inline fixes",
+            "description": "",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Inline fixes",))["id"]
+
+    review_response = client.get("/timeline/review")
+    assert review_response.status_code == 200
+    assert b"inline-review.png" in review_response.data
+    assert b"Save caption" in review_response.data
+    assert b"Save people" in review_response.data
+    assert b"Save place" in review_response.data
+    assert b"Choose chapter" in review_response.data
+
+    headers = helpers.csrf_headers(client, "/timeline/review")
+    caption_response = client.patch(
+        f"/api/photo/{photo_id}",
+        headers=headers,
+        json={"title": "", "caption": "Fixed from the review queue"},
+    )
+    assert caption_response.status_code == 200
+    people_response = client.patch(
+        f"/api/photo/{photo_id}/people",
+        headers=headers,
+        json={"people": "Alice Review"},
+    )
+    assert people_response.status_code == 200
+    location_response = client.patch(
+        f"/api/photo/{photo_id}/location",
+        headers=headers,
+        json={"location_name": "Review Harbor", "latitude": "", "longitude": ""},
+    )
+    assert location_response.status_code == 200
+    chapter_item_response = client.post(
+        f"/api/timeline-review/photo/{photo_id}/chapter",
+        headers=headers,
+        json={"chapter_id": chapter_id},
+    )
+    assert chapter_item_response.status_code == 200
+    assert chapter_item_response.get_json()["chapter_title"] == "Inline fixes"
+
+    assert helpers.row(
+        """
+        SELECT id
+        FROM chapter_items
+        WHERE chapter_id = ? AND item_kind = 'photo' AND item_id = ?
+        """,
+        (chapter_id, photo_id),
+    )
+    fixed_response = client.get("/timeline/review")
+    assert fixed_response.status_code == 200
+    assert b"Your timeline has no review issues right now." in fixed_response.data
 
 
 def test_saved_timeline_collections_filter_save_and_delete(app, client, helpers):

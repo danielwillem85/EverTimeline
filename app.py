@@ -5771,18 +5771,45 @@ def memory_review_item(kind, row, tags, people, chapter_membership=None):
         title = photo_display_title(row)
         preview = row["caption"] or "Photo needs a caption."
         image_url = url_for("photo_image", photo_id=row["id"])
+        api_url = url_for("delete_photo", photo_id=row["id"])
+        people_url = url_for("photo_people", photo_id=row["id"])
+        location_url = url_for("photo_location", photo_id=row["id"])
+        title_value = row["title"] or ""
+        caption = row["caption"] or ""
+        entry_date = ""
+        body = ""
     else:
         title = "Text entry"
         preview = row["body"]
         image_url = ""
+        api_url = url_for("text_entry", entry_id=row["id"])
+        people_url = api_url
+        location_url = api_url
+        title_value = ""
+        caption = ""
+        entry_date = row["entry_date"] or ""
+        body = row["body"]
     return {
         "kind": "Photo" if kind == "photo" else "Text entry",
+        "kind_key": kind,
+        "id": row["id"],
         "title": title,
+        "title_value": title_value,
+        "caption": caption,
+        "body": body,
+        "entry_date": entry_date,
+        "tags_text": tags_to_text(tags),
+        "people_text": people_to_text(people),
+        **timeline_location_payload(row),
         "context": memory_review_context(row),
         "preview": short_preview(preview, 150),
         "meta": timeline_search_meta(row, tags, 0, chapter_membership, people),
         "image_url": image_url,
         "url": timeline_item_link(g.user["id"], row["year"], row["month"], kind, row["id"]),
+        "api_url": api_url,
+        "people_url": people_url,
+        "location_url": location_url,
+        "chapter_url": url_for("review_item_chapter", item_kind=kind, item_id=row["id"]),
     }
 
 
@@ -5817,6 +5844,7 @@ def build_memory_review_queue(db, sample_limit=4):
 
     issue_defs = {
         "captions": {
+            "key": "captions",
             "title": "Photos need captions",
             "description": "Captionless photos are harder to browse, export, and turn into chapters.",
             "action_label": "Caption photos",
@@ -5826,6 +5854,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "priority": 1,
         },
         "places": {
+            "key": "places",
             "title": "Memories need places",
             "description": "Adding places makes maps, place hubs, and family browsing more useful.",
             "action_label": "Add places",
@@ -5835,6 +5864,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "priority": 2,
         },
         "people": {
+            "key": "people",
             "title": "Memories need people",
             "description": "People tags connect scattered photos and notes into personal timelines.",
             "action_label": "Tag people",
@@ -5844,6 +5874,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "priority": 3,
         },
         "chapters": {
+            "key": "chapters",
             "title": "Memories not in chapters",
             "description": "These memories are ready to become stories instead of staying loose.",
             "action_label": "Draft chapter",
@@ -5853,6 +5884,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "priority": 4,
         },
         "public": {
+            "key": "public",
             "title": "Public photos need polish",
             "description": "Public memories without captions are visible but may lack useful context.",
             "action_label": "Review public photos",
@@ -5899,16 +5931,17 @@ def build_memory_review_queue(db, sample_limit=4):
 
     duplicate_groups = db.execute(
         """
-        SELECT image_hash, COUNT(*) AS count, MIN(id) AS first_id
+        SELECT image_hash, COUNT(*) AS count, MIN(id) AS keep_id, MAX(id) AS duplicate_id
         FROM photos
         WHERE user_id = ? AND COALESCE(image_hash, '') <> ''
         GROUP BY image_hash
         HAVING COUNT(*) > 1
-        ORDER BY count DESC, first_id ASC
+        ORDER BY count DESC, keep_id ASC
         """,
         (g.user["id"],),
     ).fetchall()
     duplicate_issue = {
+        "key": "duplicates",
         "title": "Possible duplicate photos",
         "description": "These image matches may be accidental repeats from older uploads or imports.",
         "action_label": "Review duplicates",
@@ -5925,13 +5958,14 @@ def build_memory_review_queue(db, sample_limit=4):
             FROM photos
             WHERE id = ? AND user_id = ?
             """,
-            (group["first_id"], g.user["id"]),
+            (group["duplicate_id"], g.user["id"]),
         ).fetchone()
         if row is not None:
             tags = photo_tags.get(row["id"], get_tags_for_item(db, "photo", row["id"]))
             people = photo_people.get(row["id"], get_people_for_item(db, "photo", row["id"]))
             item = memory_review_item("photo", row, tags, people, photo_chapters.get(row["id"], {}))
             item["meta"] = [*item["meta"], f"{group['count']} matching copies"]
+            item["duplicate_keep_url"] = timeline_item_link(g.user["id"], row["year"], row["month"], "photo", group["keep_id"])
             duplicate_issue["items"].append(item)
 
     issues = [duplicate_issue, *issue_defs.values()]
@@ -5947,6 +5981,14 @@ def build_memory_review_queue(db, sample_limit=4):
             review_issue_stat("Text entries", len(text_rows), url_for("timeline_search", kind="text")),
         ],
         "issues": issues,
+        "chapter_options": [
+            {
+                "id": chapter["id"],
+                "title": chapter["title"],
+                "item_count": chapter["item_count"],
+            }
+            for chapter in get_chapters_with_counts(db)
+        ],
         "complete": total_memories > 0 and not issues,
         "empty": total_memories == 0,
         "top_issue": issues[0] if issues else None,
@@ -8220,6 +8262,57 @@ def timeline_review():
     return render_template(
         "timeline_review.html",
         queue=build_memory_review_queue(get_db()),
+    )
+
+
+@app.route("/api/timeline-review/<item_kind>/<int:item_id>/chapter", methods=("POST",))
+@birthday_required
+def review_item_chapter(item_kind, item_id):
+    if item_kind not in ("photo", "text"):
+        abort(404)
+    db = get_db()
+    payload = request.get_json(silent=True) or request.form
+    try:
+        chapter_id = int(payload.get("chapter_id") or 0)
+    except (TypeError, ValueError):
+        chapter_id = None
+    if chapter_id == 0:
+        chapter_id = None
+    if chapter_id is None:
+        return jsonify({"error": "Choose a chapter."}), 400
+
+    chapter = get_owned_chapter(chapter_id)
+    item = get_owned_timeline_item(item_kind, item_id)
+    existing = db.execute(
+        """
+        SELECT id
+        FROM chapter_items
+        WHERE chapter_id = ? AND item_kind = ? AND item_id = ?
+        """,
+        (chapter_id, item_kind, item["id"]),
+    ).fetchone()
+    if existing is not None:
+        return jsonify({"error": "That item is already in this chapter."}), 409
+
+    db.execute(
+        """
+        INSERT INTO chapter_items (chapter_id, item_kind, item_id, position)
+        VALUES (?, ?, ?, ?)
+        """,
+        (chapter_id, item_kind, item["id"], next_chapter_position(db, chapter_id)),
+    )
+    db.execute(
+        "UPDATE chapters SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (chapter_id,),
+    )
+    db.commit()
+    return jsonify(
+        {
+            "chapter_id": chapter_id,
+            "chapter_title": chapter["title"],
+            "item_kind": item_kind,
+            "item_id": item_id,
+        }
     )
 
 

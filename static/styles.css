@@ -4216,7 +4216,76 @@ details.privacy-toggle-panel {
 }
 
 .review-sample-card {
+    align-items: stretch;
     box-shadow: none;
+}
+
+.review-card-actions {
+    display: grid;
+    align-content: center;
+    gap: 8px;
+    min-width: min(100%, 340px);
+}
+
+.review-inline-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 8px;
+}
+
+.review-place-form {
+    grid-template-columns: minmax(150px, 1fr) minmax(72px, 88px) minmax(72px, 88px) auto;
+}
+
+.review-inline-form label {
+    display: grid;
+    gap: 4px;
+}
+
+.review-inline-form span {
+    color: var(--muted);
+    font-size: 0.76rem;
+    font-weight: 900;
+}
+
+.review-inline-form input,
+.review-inline-form select,
+.review-inline-form textarea {
+    width: 100%;
+    min-height: 36px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0 10px;
+    background: #fff;
+    color: var(--ink);
+    font: inherit;
+    font-size: 0.86rem;
+    font-weight: 800;
+}
+
+.review-inline-form textarea {
+    min-height: 68px;
+    padding: 8px 10px;
+    line-height: 1.35;
+    resize: vertical;
+}
+
+.review-duplicate-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.review-action-status {
+    min-height: 18px;
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 900;
+}
+
+.review-action-status.is-error {
+    color: var(--danger);
 }
 
 .timeline-map-panel {
@@ -4748,6 +4817,8 @@ details.privacy-toggle-panel {
     .import-upload-form,
     .text-entry-form,
     .search-form,
+    .review-inline-form,
+    .review-place-form,
     .collection-filter-form,
     .tags-form,
     .location-form,
@@ -4809,6 +4880,9 @@ details.privacy-toggle-panel {
     .timeline-search-card .button,
     .review-focus-panel .button,
     .review-issue-header .button,
+    .review-card-actions,
+    .review-inline-form .button,
+    .review-duplicate-actions .button,
     .map-place-card .button,
     .saved-view-card .button,
     .collection-result-card .button,

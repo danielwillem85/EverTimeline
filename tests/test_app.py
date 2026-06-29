@@ -198,6 +198,43 @@ def test_uploads_text_entries_and_pdf_exports(client, helpers):
     assert month_pdf.data.startswith(b"%PDF")
 
 
+def test_splash_page_api_and_thumbnails_are_owned(app, client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="splash-photo.png",
+        title="Splash photo",
+        caption="A wall-ready memory",
+    )
+
+    other_client = app.test_client()
+    helpers.create_user(other_client, "other")
+    other_photo_id = helpers.upload_photo(
+        other_client,
+        filename="other-splash-photo.png",
+        title="Other splash photo",
+    )
+
+    page = client.get("/splash")
+    assert page.status_code == 200
+    assert b"data-splash" in page.data
+
+    response = client.get("/api/splash-photos?seed=test-seed&page=0&page_size=1")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total"] == 1
+    assert payload["total_pages"] == 1
+    assert payload["photos"][0]["id"] == photo_id
+    assert payload["photos"][0]["title"] == "Splash photo"
+    assert payload["photos"][0]["full_url"] == f"/photo/{photo_id}/image"
+
+    thumbnail = client.get(payload["photos"][0]["thumbnail_url"])
+    assert thumbnail.status_code == 200
+    assert thumbnail.mimetype == "image/jpeg"
+    assert thumbnail.data.startswith(b"\xff\xd8")
+    assert client.get(f"/photo/{other_photo_id}/thumbnail").status_code == 404
+
+
 def test_admin_page_is_daniel_only_and_converts_existing_images(app, client, helpers):
     helpers.create_user(client, "alice")
 

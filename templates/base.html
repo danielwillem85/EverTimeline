@@ -35,6 +35,11 @@
                     {% if request.endpoint == 'home' %}aria-current="page"{% endif %}
                 >Home</a>
                 <a
+                    class="topbar-link{% if request.endpoint == 'splash' %} is-active{% endif %}"
+                    href="{{ url_for('splash') }}"
+                    {% if request.endpoint == 'splash' %}aria-current="page"{% endif %}
+                >Splash</a>
+                <a
                     class="topbar-link{% if request.endpoint == 'on_this_day' %} is-active{% endif %}"
                     href="{{ url_for('on_this_day') }}"
                     {% if request.endpoint == 'on_this_day' %}aria-current="page"{% endif %}
@@ -104,7 +109,7 @@
         {% endif %}
     </header>
 
-    <main class="shell">
+    <main class="shell {% block shell_class %}{% endblock %}">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 <div class="flash-stack" aria-live="polite">

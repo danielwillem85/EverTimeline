@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Save chapter - EverTimeline{% endblock %}
+
+{% macro tag_radio_group(selected=default_tag) %}
+<fieldset class="tag-radio-group">
+    <legend>Sharing</legend>
+    <div class="tag-radio-list">
+        {% for tag in tag_choices %}
+            <label class="tag-radio">
+                <input type="radio" name="visibility" value="{{ tag }}" {% if tag == selected %}checked{% endif %}>
+                <span>
+                    <strong>{{ tag }}</strong>
+                    <small>{{ privacy_labels[tag] }}</small>
+                </span>
+            </label>
+        {% endfor %}
+    </div>
+</fieldset>
+{% endmacro %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('chapter_bulk_select') }}">Visual bulk select</a>
+        <h1>Save chapter</h1>
+        <p class="muted">{{ photos|length }} selected photo{% if photos|length != 1 %}s{% endif %}</p>
+    </div>
+</section>
+
+<section class="connection-section">
+    <h2>Chapter details</h2>
+    <form class="chapter-bulk-review-form" method="post" action="{{ url_for('chapter_bulk_create') }}">
+        {{ csrf_field() }}
+        <input type="hidden" name="selected_photo_ids" value='{{ selected_photo_ids|tojson }}'>
+        <label>
+            <span>Title</span>
+            <input name="title" value="{{ form['title'] }}" placeholder="College, First job, Family trip" required autofocus>
+        </label>
+        <label>
+            <span>Description</span>
+            <textarea name="description" rows="4" placeholder="A short note about this story">{{ form["description"] }}</textarea>
+        </label>
+        {{ tag_radio_group(form["visibility"]) }}
+        <button class="button primary" type="submit">Save chapter</button>
+    </form>
+</section>
+
+<section class="connection-section">
+    <h2>Selected photos</h2>
+    <div class="chapter-bulk-review-grid">
+        {% for photo in photos %}
+            <article class="chapter-bulk-review-photo">
+                <img src="{{ photo['thumbnail_url'] }}" alt="{{ photo['title'] }}" loading="lazy">
+                <div>
+                    <strong>{{ loop.index }}. {{ photo["title"] }}</strong>
+                    <span>{{ photo["display_date"] }}</span>
+                </div>
+            </article>
+        {% endfor %}
+    </div>
+</section>
+{% endblock %}

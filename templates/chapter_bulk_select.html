@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+
+{% block title %}Visual bulk select - EverTimeline{% endblock %}
+{% block shell_class %}splash-shell{% endblock %}
+
+{% block content %}
+<section
+    class="splash-page chapter-bulk-select-page"
+    data-chapter-bulk-select
+    data-photo-url="{{ url_for('splash_photos') }}"
+    data-photo-seed="{{ seed }}"
+    aria-label="Visual photo selector"
+>
+    <div class="chapter-bulk-toolbar">
+        <a class="button secondary small" href="{{ url_for('chapters') }}">Chapters</a>
+        <strong>Visual bulk select</strong>
+        <span data-chapter-bulk-selected-count>0 selected</span>
+    </div>
+
+    <div class="splash-grid" data-chapter-bulk-grid aria-live="polite"></div>
+    <p class="splash-status" data-chapter-bulk-status>Loading photos...</p>
+    <button class="splash-page-button splash-page-prev" type="button" data-chapter-bulk-prev aria-label="Previous thumbnails">&lt;</button>
+    <button class="splash-page-button splash-page-next" type="button" data-chapter-bulk-next aria-label="Next thumbnails">&gt;</button>
+    <div class="splash-page-count" data-chapter-bulk-page-count></div>
+
+    <form class="chapter-bulk-save-form" method="post" action="{{ url_for('chapter_bulk_review') }}">
+        {{ csrf_field() }}
+        <input type="hidden" name="selected_photo_ids" data-chapter-bulk-selected-input>
+        <button class="button primary chapter-bulk-save-button" type="submit" data-chapter-bulk-save disabled>
+            Save to chapter
+        </button>
+    </form>
+</section>
+{% endblock %}

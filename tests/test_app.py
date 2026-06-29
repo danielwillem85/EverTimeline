@@ -862,7 +862,6 @@ def test_chapter_items_can_be_reordered_with_json_api(client, helpers):
     )
     assert bad_response.status_code == 400
 
-
 def test_chapter_draft_suggests_filtered_items_and_creates_chapter(client, helpers):
     helpers.create_user(client, "owner")
     photo_id = helpers.upload_photo(
@@ -926,6 +925,108 @@ def test_chapter_draft_suggests_filtered_items_and_creates_chapter(client, helpe
         ("text", text_id, 2),
     ]
 
+
+def test_chapter_visual_bulk_select_creates_chapter_from_selected_photos(app, client, helpers):
+    helpers.create_user(client, "owner")
+
+    def upload_colored_photo(filename, color, title):
+        buffer = io.BytesIO()
+        Image.new("RGB", (14, 14), color=color).save(buffer, format="PNG")
+        response = client.post(
+            "/year/2020/5",
+            data={
+                **helpers.csrf_form_data(client, "/year/2020/5"),
+                "photo": (io.BytesIO(buffer.getvalue()), filename, "image/png"),
+                "photo_date": "2020-05-04",
+                "title": title,
+                "caption": "",
+                "tags": "private",
+                "people": "",
+                "location_name": "",
+                "latitude": "",
+                "longitude": "",
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+        return helpers.row(
+            "SELECT id FROM photos WHERE original_filename = ?",
+            (filename,),
+        )["id"]
+
+    first_photo_id = upload_colored_photo("bulk-first.png", (22, 109, 103), "First bulk")
+    second_photo_id = upload_colored_photo("bulk-second.png", (184, 79, 62), "Second bulk")
+
+    other_client = app.test_client()
+    helpers.create_user(other_client, "other")
+    other_photo_id = helpers.upload_photo(
+        other_client,
+        filename="not-your-bulk-photo.png",
+        title="Not yours",
+    )
+
+    chapters_page = client.get("/chapters")
+    assert chapters_page.status_code == 200
+    assert b"Visual bulk select" in chapters_page.data
+
+    picker_page = client.get("/chapters/bulk-select")
+    assert picker_page.status_code == 200
+    assert b"data-chapter-bulk-select" in picker_page.data
+    assert b"/api/splash-photos" in picker_page.data
+
+    selected_ids = [second_photo_id, first_photo_id]
+    review_page = client.post(
+        "/chapters/bulk-review",
+        data={
+            **helpers.csrf_form_data(client, "/chapters/bulk-select"),
+            "selected_photo_ids": json.dumps(selected_ids),
+        },
+    )
+    assert review_page.status_code == 200
+    assert b"Save chapter" in review_page.data
+    assert b"Second bulk" in review_page.data
+    assert b"First bulk" in review_page.data
+
+    create_response = client.post(
+        "/chapters/bulk-create",
+        data={
+            **helpers.csrf_form_data(client, "/chapters/bulk-review"),
+            "selected_photo_ids": json.dumps(selected_ids),
+            "title": "Visual story",
+            "description": "Made from the visual selector",
+            "visibility": "friends",
+        },
+    )
+    assert create_response.status_code == 302
+    chapter = helpers.row(
+        "SELECT id, description, visibility FROM chapters WHERE title = ?",
+        ("Visual story",),
+    )
+    assert chapter["description"] == "Made from the visual selector"
+    assert chapter["visibility"] == "friends"
+    items = helpers.rows(
+        """
+        SELECT item_kind, item_id, position
+        FROM chapter_items
+        WHERE chapter_id = ?
+        ORDER BY position ASC
+        """,
+        (chapter["id"],),
+    )
+    assert [(row["item_kind"], row["item_id"], row["position"]) for row in items] == [
+        ("photo", second_photo_id, 1),
+        ("photo", first_photo_id, 2),
+    ]
+
+    invalid_review = client.post(
+        "/chapters/bulk-review",
+        data={
+            **helpers.csrf_form_data(client, "/chapters/bulk-select"),
+            "selected_photo_ids": json.dumps([other_photo_id]),
+        },
+    )
+    assert invalid_review.status_code == 302
+    assert invalid_review.headers["Location"].endswith("/chapters/bulk-select")
 
 def test_privacy_preview_filters_owner_timeline_views(client, helpers):
     helpers.create_user(client, "owner")

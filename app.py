@@ -9125,10 +9125,46 @@ def admin_connection_full_splash(connection_id):
     )
 
 
+@app.route("/admin/connections/<int:connection_id>/bulk-delete")
+@admin_required
+def admin_connection_bulk_delete(connection_id):
+    connected_user = get_admin_full_splash_user(connection_id)
+    return render_template(
+        "admin_bulk_delete.html",
+        connection=public_user_payload(connected_user),
+    )
+
+
 @app.route("/admin/connections/<int:connection_id>/api/full-splash-photos")
 @admin_required
 def admin_full_splash_photos(connection_id):
     return jsonify(build_admin_full_splash_photo_page(get_db(), connection_id))
+
+
+@app.route("/admin/connections/<int:connection_id>/api/photos/delete", methods=("POST",))
+@admin_required
+def api_admin_bulk_delete_photos(connection_id):
+    connected_user = get_admin_full_splash_user(connection_id)
+    payload = request.get_json(silent=True) or request.form
+    photo_ids = parse_chapter_bulk_photo_ids(payload.get("photo_ids") or payload.get("selected_photo_ids"))
+    if not photo_ids:
+        return jsonify({"error": "Choose at least one photo to delete."}), 400
+
+    db = get_db()
+    deleted_ids = delete_owned_photos(db, photo_ids, connected_user["id"])
+    if not deleted_ids:
+        return jsonify({"error": "No matching photos were found."}), 404
+
+    db.commit()
+    deleted_count = len(deleted_ids)
+    return jsonify(
+        {
+            "status": "deleted",
+            "deleted_photo_ids": deleted_ids,
+            "deleted_count": deleted_count,
+            "message": f"Deleted {deleted_count} photo{'s' if deleted_count != 1 else ''}.",
+        }
+    )
 
 
 @app.route("/admin/connections/<int:connection_id>/photo/<int:photo_id>/image")

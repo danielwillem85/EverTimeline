@@ -1254,6 +1254,7 @@ def test_admin_connection_visit_full_shows_all_photos_regardless_visibility(app,
     with app.app_context():
         db = helpers.app_module.get_db()
         tag_ids = {}
+        photo_ids = {}
         for tag in ("private", "family", "public"):
             db.execute(
                 "INSERT INTO tags (user_id, name) VALUES (?, ?)",
@@ -1293,6 +1294,7 @@ def test_admin_connection_visit_full_shows_all_photos_regardless_visibility(app,
                     f"2020-05-0{index}",
                 ),
             )
+            photo_ids[tag] = cursor.lastrowid
             db.execute(
                 "INSERT INTO photo_tags (photo_id, tag_id) VALUES (?, ?)",
                 (cursor.lastrowid, tag_ids[tag]),
@@ -1307,7 +1309,18 @@ def test_admin_connection_visit_full_shows_all_photos_regardless_visibility(app,
     full_page = client.get(f"/admin/connections/{other_id}/full-splash")
     assert full_page.status_code == 200
     assert b"All photos, regardless of visibility" in full_page.data
+    assert b"Bulk delete" in full_page.data
+    assert f"/admin/connections/{other_id}/bulk-delete".encode() in full_page.data
     assert f"/admin/connections/{other_id}/api/full-splash-photos".encode() in full_page.data
+
+    bulk_delete_page = client.get(f"/admin/connections/{other_id}/bulk-delete")
+    assert bulk_delete_page.status_code == 200
+    assert b"data-month-bulk-actions" in bulk_delete_page.data
+    assert b"data-month-bulk-grid" in bulk_delete_page.data
+    assert b"data-month-bulk-delete-button" in bulk_delete_page.data
+    assert b"Delete" in bulk_delete_page.data
+    assert f"/admin/connections/{other_id}/api/full-splash-photos".encode() in bulk_delete_page.data
+    assert f"/admin/connections/{other_id}/api/photos/delete".encode() in bulk_delete_page.data
 
     payload = client.get(
         f"/admin/connections/{other_id}/api/full-splash-photos?seed=test&page=0&page_size=10"
@@ -1322,7 +1335,31 @@ def test_admin_connection_visit_full_shows_all_photos_regardless_visibility(app,
     assert client.get(private_photo["thumbnail_url"]).status_code == 200
     assert client.get(private_photo["full_url"]).status_code == 200
 
+    delete_response = client.post(
+        f"/admin/connections/{other_id}/api/photos/delete",
+        headers=helpers.csrf_headers(client, f"/admin/connections/{other_id}/bulk-delete"),
+        json={"photo_ids": [photo_ids["private"], photo_ids["public"]]},
+    )
+    assert delete_response.status_code == 200
+    delete_payload = delete_response.get_json()
+    assert delete_payload["deleted_count"] == 2
+    assert set(delete_payload["deleted_photo_ids"]) == {photo_ids["private"], photo_ids["public"]}
+    assert helpers.row(
+        "SELECT COUNT(*) AS count FROM photos WHERE user_id = ?",
+        (other_id,),
+    )["count"] == 1
+    assert helpers.row(
+        "SELECT title FROM photos WHERE user_id = ?",
+        (other_id,),
+    )["title"] == "Family full photo"
+
     assert other.get(f"/admin/connections/{other_id}/full-splash").status_code == 404
+    assert other.get(f"/admin/connections/{other_id}/bulk-delete").status_code == 404
+    assert other.post(
+        f"/admin/connections/{other_id}/api/photos/delete",
+        headers=helpers.csrf_headers(other, "/timeline"),
+        json={"photo_ids": [photo_ids["family"]]},
+    ).status_code == 404
 
 
 def test_manual_people_tagging_for_items_search_and_updates(app, client, helpers):

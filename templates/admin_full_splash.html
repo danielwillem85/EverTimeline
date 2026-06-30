@@ -13,6 +13,7 @@
 >
     <div class="splash-page-meta admin-full-splash-meta">
         <a class="button secondary small" href="{{ url_for('connections') }}">Connections</a>
+        <a class="button danger small" href="{{ url_for('admin_connection_bulk_delete', connection_id=connection['id']) }}">Bulk delete</a>
         <strong>{{ connection["full_name"] or connection["username"] }}</strong>
         <span>All photos, regardless of visibility</span>
     </div>

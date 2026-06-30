@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block title %}Bulk delete photos - {{ connection["username"] }} - EverTimeline{% endblock %}
+{% block shell_class %}splash-shell{% endblock %}
+
+{% block content %}
+<section
+    class="splash-page chapter-bulk-select-page month-bulk-actions-page admin-bulk-delete-page"
+    data-month-bulk-actions
+    data-photo-url="{{ url_for('admin_full_splash_photos', connection_id=connection['id']) }}"
+    data-delete-url="{{ url_for('api_admin_bulk_delete_photos', connection_id=connection['id']) }}"
+    data-return-url="{{ url_for('admin_connection_full_splash', connection_id=connection['id']) }}"
+    aria-label="Bulk delete photos for {{ connection['username'] }}"
+>
+    <div class="chapter-bulk-toolbar month-bulk-actions-toolbar">
+        <a class="button secondary small" href="{{ url_for('admin_connection_full_splash', connection_id=connection['id']) }}">Full page</a>
+        <strong>Bulk delete {{ connection["full_name"] or connection["username"] }}</strong>
+        <div class="month-bulk-action-controls">
+            <form class="chapter-bulk-save-form month-bulk-delete-form" data-month-bulk-delete-form>
+                <button class="button danger small month-bulk-delete-button" type="submit" data-month-bulk-delete-button disabled>
+                    Delete
+                </button>
+            </form>
+            <span class="chapter-bulk-action-status" data-month-bulk-action-status aria-live="polite"></span>
+        </div>
+        <div class="chapter-bulk-progress">
+            <div class="chapter-bulk-progress-row">
+                <span data-month-bulk-selected-count>0 selected</span>
+                <span data-month-bulk-total-count>0 photos total</span>
+            </div>
+            <progress max="1" value="0" data-month-bulk-selected-progress aria-label="Selected photos progress"></progress>
+        </div>
+    </div>
+
+    <div class="splash-grid" data-month-bulk-grid aria-live="polite"></div>
+    <p class="splash-status" data-month-bulk-status>Loading photos...</p>
+    <button class="splash-page-button splash-page-prev" type="button" data-month-bulk-prev aria-label="Previous thumbnails">&lt;</button>
+    <button class="splash-page-button splash-page-next" type="button" data-month-bulk-next aria-label="Next thumbnails">&gt;</button>
+    <div class="splash-page-count chapter-bulk-page-progress" data-month-bulk-page-count-wrap>
+        <span data-month-bulk-page-count></span>
+        <progress max="1" value="0" data-month-bulk-page-progress aria-label="Photo page progress"></progress>
+    </div>
+</section>
+{% endblock %}

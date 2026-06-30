@@ -464,6 +464,17 @@ def init_db():
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL DEFAULT '',
+                first_name TEXT NOT NULL DEFAULT '',
+                last_name TEXT NOT NULL DEFAULT '',
+                ip_address TEXT NOT NULL DEFAULT '',
+                button_text TEXT NOT NULL,
+                context TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE TABLE IF NOT EXISTS photos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
@@ -895,6 +906,12 @@ def init_db():
             ON jobs (status, created_at, id)
             """
         )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS actions_created
+            ON actions (created_at, id)
+            """
+        )
         db.commit()
 
 
@@ -1015,6 +1032,52 @@ def birthday_required(view):
         return view(**kwargs)
 
     return wrapped_view
+
+
+def client_ip_address():
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    if forwarded_for:
+        forwarded_ip = forwarded_for.split(",", 1)[0].strip()
+        if forwarded_ip:
+            return forwarded_ip[:120]
+    real_ip = (request.headers.get("X-Real-IP") or "").strip()
+    if real_ip:
+        return real_ip[:120]
+    return (request.remote_addr or "")[:120]
+
+
+def action_text(value, max_length=240):
+    return " ".join(str(value or "").split())[:max_length]
+
+
+@app.route("/api/actions", methods=("POST",))
+@login_required
+def record_action():
+    payload = request.get_json(silent=True) or {}
+    button_text = action_text(payload.get("button_text"))
+    context = action_text(payload.get("context"))
+    if not button_text:
+        return jsonify({"error": "Button text is required."}), 400
+
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO actions (
+            email, first_name, last_name, ip_address, button_text, context
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            g.user["email"] or "",
+            g.user["first_name"] or "",
+            g.user["last_name"] or "",
+            client_ip_address(),
+            button_text,
+            context,
+        ),
+    )
+    db.commit()
+    return ("", 204)
 
 
 def parse_iso_date(value, field_name):

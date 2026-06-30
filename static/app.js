@@ -21,6 +21,91 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         return fetch(url, options);
     };
+    const actionTrackUrl = document.body.dataset.actionTrackUrl || "";
+    const pageContext = document.body.dataset.pageContext || window.location.pathname;
+    const actionTargetSelector = [
+        "button",
+        "summary.button",
+        "[role='button']",
+        "input[type='button']",
+        "input[type='submit']",
+        "input[type='reset']",
+        "a.button",
+        "a.topbar-link",
+        "a.account-menu-link",
+        "a.back-link",
+        "a.timeline-button",
+        "a.month-button",
+        "a.icon-button",
+    ].join(",");
+    const compactText = (value) => String(value || "").replace(/\s+/g, " ").trim();
+    const actionButtonText = (element) => compactText(
+        element.innerText
+        || element.textContent
+        || element.value
+        || element.getAttribute("aria-label")
+        || element.title
+        || element.name
+        || element.type,
+    );
+    const headingText = (container) => compactText(container?.querySelector("h1, h2, h3")?.innerText);
+    const actionContext = (element) => {
+        const explicit = element.closest("[data-action-context]");
+        if (explicit?.dataset.actionContext) {
+            return compactText(explicit.dataset.actionContext);
+        }
+        const nav = element.closest("nav[aria-label]");
+        if (nav) {
+            return compactText(nav.getAttribute("aria-label"));
+        }
+        const dialog = element.closest("[role='dialog'][aria-labelledby]");
+        if (dialog) {
+            const label = document.getElementById(dialog.getAttribute("aria-labelledby"));
+            if (label) {
+                return compactText(label.innerText);
+            }
+        }
+        const form = element.closest("form");
+        if (form) {
+            const formRegion = form.closest("section, article, aside, main");
+            const label = headingText(formRegion) || compactText(formRegion?.getAttribute("aria-label"));
+            return label ? `${label} form` : "Form";
+        }
+        const region = element.closest("section, article, aside, header, main");
+        const regionLabel = headingText(region) || compactText(region?.getAttribute("aria-label"));
+        if (regionLabel) {
+            return regionLabel;
+        }
+        const pageLabel = compactText(document.querySelector(".page-heading h1, main h1")?.innerText);
+        return pageLabel ? `${pageLabel} page` : pageContext;
+    };
+    const trackActionClick = (element) => {
+        if (!actionTrackUrl || element.closest("[data-no-action-track]")) {
+            return;
+        }
+        const buttonText = actionButtonText(element);
+        if (!buttonText) {
+            return;
+        }
+        csrfFetch(actionTrackUrl, {
+            method: "POST",
+            keepalive: true,
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                button_text: buttonText,
+                context: actionContext(element),
+            }),
+        }).catch(() => {});
+    };
+    document.addEventListener("click", (event) => {
+        if (!(event.target instanceof Element)) {
+            return;
+        }
+        const actionElement = event.target.closest(actionTargetSelector);
+        if (actionElement) {
+            trackActionClick(actionElement);
+        }
+    }, true);
     const privacyLabelFromTag = (tag) => privacyLabels[tag] || privacyLabels.private;
     const privacyHelpFromTag = (tag) => privacyHelp[tag] || privacyHelp.private;
     const setPrivacySummary = (summary, label, help) => {

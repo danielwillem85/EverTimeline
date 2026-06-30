@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}Anniversaries - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
+        <h1>Anniversaries</h1>
+        <p class="muted">Memories from this day and the week ahead.</p>
+    </div>
+</section>
+
+<section class="hub-stat-grid" aria-label="Anniversary summary">
+    <div class="hub-stat">
+        <span>Today</span>
+        <strong>{{ anniversaries["today_count"] }}</strong>
+    </div>
+    <div class="hub-stat">
+        <span>Coming week</span>
+        <strong>{{ anniversaries["upcoming_count"] }}</strong>
+    </div>
+    <div class="hub-stat">
+        <span>Memories</span>
+        <strong>{{ anniversaries["memory_count"] }}</strong>
+    </div>
+    <div class="hub-stat">
+        <span>Date</span>
+        <strong>{{ anniversaries["today_label"] }}</strong>
+    </div>
+</section>
+
+{% if anniversaries["groups"] %}
+    <section class="anniversary-group-list" aria-label="Anniversary memories">
+        {% for group in anniversaries["groups"] %}
+            <section class="anniversary-group">
+                <header class="anniversary-group-header">
+                    <div>
+                        <span class="status-badge">{{ group["date_label"] }}</span>
+                        <h2>{{ group["label"] }}</h2>
+                    </div>
+                    <span>{{ group["items"]|length }} {{ "item" if group["items"]|length == 1 else "items" }}</span>
+                </header>
+                <div class="timeline-search-list">
+                    {% for item in group["items"] %}
+                        <article class="timeline-search-card anniversary-card">
+                            <div class="timeline-search-content">
+                                {% if item.get("image_url") %}
+                                    <img class="timeline-search-thumb" src="{{ item['image_url'] }}" alt="">
+                                {% endif %}
+                                <div class="timeline-search-main">
+                                    <span class="status-badge">{{ item["kind"] }}</span>
+                                    <h2>{{ item["title"] }}</h2>
+                                    <span>{{ item["context"] }}</span>
+                                    <p>{{ item["preview"] }}</p>
+                                    {% if item.get("meta") %}
+                                        <div class="timeline-search-meta">
+                                            {% for meta in item["meta"] %}
+                                                <span>{{ meta }}</span>
+                                            {% endfor %}
+                                        </div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            <a class="button primary small" href="{{ item['url'] }}">Open</a>
+                        </article>
+                    {% endfor %}
+                </div>
+            </section>
+        {% endfor %}
+    </section>
+{% else %}
+    <section class="progress-card anniversary-empty-card">
+        <div class="progress-card-row">
+            <strong>No anniversaries this week</strong>
+            <span>{{ anniversaries["today_label"] }}</span>
+        </div>
+        <p>Add dated photos and text entries to see memories resurface here.</p>
+    </section>
+{% endif %}
+{% endblock %}

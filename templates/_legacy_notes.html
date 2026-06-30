@@ -1,0 +1,61 @@
+{% set notes = legacy_notes or [] %}
+{% set target = legacy_note_target %}
+{% set return_to = request.full_path if request.query_string else request.path %}
+
+<section class="legacy-notes-panel" aria-label="Legacy notes">
+    <header class="legacy-notes-header">
+        <div>
+            <span class="status-badge">Private</span>
+            <h2>Legacy notes</h2>
+            <p>Keep meaning, context, and messages for later. Only your account can see these notes.</p>
+        </div>
+    </header>
+
+    <form class="legacy-note-form" method="post" action="{{ url_for('create_legacy_note') }}">
+        {{ csrf_field() }}
+        <input type="hidden" name="target_type" value="{{ target['type'] }}">
+        <input type="hidden" name="target_key" value="{{ target['key'] }}">
+        <input type="hidden" name="next" value="{{ return_to }}">
+        <label>
+            <span>Title</span>
+            <input name="title" maxlength="120" placeholder="{{ legacy_note_prompt or 'What should someone know?' }}">
+        </label>
+        <label>
+            <span>Note</span>
+            <textarea name="body" rows="4" maxlength="4000" placeholder="{{ legacy_note_prompt or 'What should someone know?' }}" required></textarea>
+        </label>
+        <button class="button primary" type="submit">Save private note</button>
+    </form>
+
+    {% if notes %}
+        <div class="legacy-note-list">
+            {% for note in notes %}
+                <article class="legacy-note-card">
+                    <div>
+                        {% if note["title"] %}
+                            <h3>{{ note["title"] }}</h3>
+                        {% endif %}
+                        <p>{{ note["body"] }}</p>
+                        <span>{{ note["updated_at"] or note["created_at"] }}</span>
+                    </div>
+                    <form
+                        class="inline-form"
+                        method="post"
+                        action="{{ url_for('delete_legacy_note', note_id=note['id']) }}"
+                        data-confirm
+                        data-confirm-title="Delete legacy note?"
+                        data-confirm-message="This permanently removes this private note."
+                        data-confirm-action="Delete note"
+                        data-confirm-danger="true"
+                    >
+                        {{ csrf_field() }}
+                        <input type="hidden" name="next" value="{{ return_to }}">
+                        <button class="button danger small" type="submit">Delete</button>
+                    </form>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty-state">No legacy notes yet.</p>
+    {% endif %}
+</section>

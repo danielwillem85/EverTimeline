@@ -276,12 +276,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 let url = card.dataset.apiUrl;
                 let method = "PATCH";
 
-                if (action === "caption") {
+                if (action === "caption" || action === "prompt-caption") {
                     payload.caption = form.elements.caption.value;
-                } else if (action === "people") {
+                } else if (action === "prompt-body") {
+                    payload.body = form.elements.body.value;
+                } else if (action === "people" || action === "prompt-people") {
                     payload.people = form.elements.people.value;
                     url = card.dataset.peopleUrl;
-                } else if (action === "location") {
+                } else if (action === "location" || action === "prompt-location") {
                     payload.location_name = form.elements.location_name.value;
                     payload.latitude = form.elements.latitude.value;
                     payload.longitude = form.elements.longitude.value;
@@ -3348,6 +3350,94 @@ document.addEventListener("DOMContentLoaded", () => {
             updateChapterPositions();
         });
     });
+
+    const homePhotoWall = document.querySelector("[data-home-photo-wall]");
+    if (homePhotoWall) {
+        const grid = homePhotoWall.querySelector("[data-home-photo-grid]");
+        const status = homePhotoWall.querySelector("[data-home-photo-status]");
+        const photoUrl = homePhotoWall.dataset.photoUrl || "";
+        const fadeOutMs = 900;
+        let isRefreshingHomeWall = false;
+
+        const randomHomeFadeInMs = () => Math.round(1000 + Math.random() * 2000);
+
+        const fadeInHomePhotoTiles = () => {
+            if (!grid) {
+                return;
+            }
+            grid.querySelectorAll(".home-photo-tile:not(.home-photo-reserved)").forEach((tile) => {
+                tile.classList.remove("is-fading-in");
+                tile.style.setProperty("--home-fade-in", `${randomHomeFadeInMs()}ms`);
+                window.requestAnimationFrame(() => {
+                    tile.classList.add("is-fading-in");
+                });
+            });
+        };
+
+        const renderHomePhotoWall = (photos) => {
+            if (!grid) {
+                return;
+            }
+
+            grid.replaceChildren(...photos.map((photo) => {
+                const tile = document.createElement("div");
+                tile.className = "home-photo-tile";
+                if (photo.placeholder) {
+                    tile.classList.add("home-photo-placeholder");
+                    if (photo.reserved) {
+                        tile.classList.add("home-photo-reserved");
+                    }
+                    return tile;
+                }
+
+                tile.style.backgroundImage = `url("${photo.image_url}")`;
+                return tile;
+            }));
+
+            if (status) {
+                status.hidden = photos.length > 0;
+                status.textContent = photos.length > 0 ? "" : "No public photos yet.";
+            }
+
+            fadeInHomePhotoTiles();
+        };
+
+        const refreshHomePhotoWall = async () => {
+            if (!photoUrl || isRefreshingHomeWall || !grid) {
+                return;
+            }
+
+            isRefreshingHomeWall = true;
+            try {
+                const response = await csrfFetch(photoUrl, {
+                    cache: "no-store",
+                    headers: {"Accept": "application/json"},
+                });
+                if (!response.ok) {
+                    throw new Error("Photo refresh failed");
+                }
+                const payload = await response.json();
+                grid.style.setProperty("--home-fade-out", `${fadeOutMs}ms`);
+                grid.classList.add("is-fading-out");
+                await new Promise((resolve) => {
+                    window.setTimeout(resolve, fadeOutMs);
+                });
+                grid.classList.remove("is-fading-out");
+                renderHomePhotoWall(Array.isArray(payload.photos) ? payload.photos : []);
+            } catch (error) {
+                grid.classList.remove("is-fading-out");
+                if (status) {
+                    status.hidden = false;
+                    status.textContent = "Photos could not be refreshed.";
+                }
+            } finally {
+                isRefreshingHomeWall = false;
+            }
+        };
+
+        fadeInHomePhotoTiles();
+        window.setInterval(refreshHomePhotoWall, 5000);
+    }
 
     const homePhotoModal = document.getElementById("home-photo-modal");
     if (homePhotoModal) {

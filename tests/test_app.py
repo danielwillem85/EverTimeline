@@ -1,8 +1,10 @@
 import io
 import json
 import re
+import warnings
 import zipfile
 import hashlib
+from datetime import date
 
 from PIL import Image
 
@@ -39,6 +41,49 @@ def test_auth_registration_birthday_login_and_logout(client, helpers):
     assert good_login.status_code == 302
 
 
+def test_home_photo_wall_uses_placeholder_tiles_without_public_photos(client, helpers):
+    helpers.create_user(client, "alice")
+
+    response = client.get("/home")
+
+    assert response.status_code == 200
+    assert b"EverTimeline helps you preserve life&rsquo;s moments" in response.data
+    assert response.data.count(b"home-photo-placeholder") == 80
+    assert response.data.count(b"home-photo-reserved") == 18
+    assert response.data.count(b"home-photo-tile") == 80
+    assert b"data-photo-url=\"/api/home/public-photos\"" in response.data
+
+
+def test_home_public_photos_api_fills_missing_tiles_with_placeholders(client, helpers):
+    helpers.create_user(client, "alice")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="home-public.png",
+        title="Public home photo",
+        tag="public",
+    )
+
+    response = client.get("/api/home/public-photos")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert len(payload["photos"]) == 80
+    real_photos = [photo for photo in payload["photos"] if not photo["placeholder"]]
+    placeholders = [photo for photo in payload["photos"] if photo["placeholder"]]
+    reserved = [photo for photo in placeholders if photo["reserved"]]
+    assert real_photos == [
+        {
+            "id": photo_id,
+            "image_url": f"/public/photo/{photo_id}/image",
+            "placeholder": False,
+            "reserved": False,
+            "title": "Public home photo",
+        }
+    ]
+    assert len(placeholders) == 79
+    assert len(reserved) == 18
+
+
 def test_csrf_token_required_for_unsafe_requests(client, helpers):
     helpers.create_user(client, "alice")
 
@@ -52,6 +97,31 @@ def test_csrf_token_required_for_unsafe_requests(client, helpers):
     )
 
     assert response.status_code == 400
+
+
+def test_security_headers_and_secure_session_cookie_can_be_enabled(app, client):
+    previous_headers = app.config["PRODUCTION_SECURITY_HEADERS"]
+    previous_secure_cookie = app.config["SESSION_COOKIE_SECURE"]
+    app.config.update(
+        PRODUCTION_SECURITY_HEADERS=True,
+        SESSION_COOKIE_SECURE=True,
+    )
+    try:
+        response = client.get("/login")
+    finally:
+        app.config.update(
+            PRODUCTION_SECURITY_HEADERS=previous_headers,
+            SESSION_COOKIE_SECURE=previous_secure_cookie,
+        )
+
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+    assert "default-src 'self'" in response.headers["Content-Security-Policy"]
+    assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"
+    assert "Secure" in response.headers["Set-Cookie"]
+    assert "HttpOnly" in response.headers["Set-Cookie"]
+    assert "SameSite=Lax" in response.headers["Set-Cookie"]
 
 
 def test_oversized_upload_redirects_with_flash(app, client, helpers):
@@ -76,6 +146,30 @@ def test_oversized_upload_redirects_with_flash(app, client, helpers):
     assert response.status_code == 200
     assert b"That upload is too large." in response.data
     assert b"The current limit is 1 KB per request." in response.data
+
+
+def test_upload_rejects_images_over_pixel_limit(app, client, helpers):
+    helpers.create_user(client, "owner")
+    previous_pixel_limit = app.config["MAX_IMAGE_PIXELS"]
+    app.config["MAX_IMAGE_PIXELS"] = 3
+    try:
+        response = client.post(
+            "/year/2020/5",
+            data={
+                **helpers.csrf_form_data(client, "/year/2020/5"),
+                "photo": (io.BytesIO(helpers.png_bytes()), "too-many-pixels.png", "image/png"),
+                "photo_date": "2020-05-04",
+                "tags": "private",
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+    finally:
+        app.config["MAX_IMAGE_PIXELS"] = previous_pixel_limit
+
+    assert response.status_code == 200
+    assert b"No photos uploaded." in response.data
+    assert helpers.row("SELECT COUNT(*) AS count FROM photos")["count"] == 0
 
 
 def test_password_reset_link_is_local_dev_only(app, client, helpers):
@@ -105,6 +199,43 @@ def test_password_reset_link_is_local_dev_only(app, client, helpers):
 
     assert response.status_code == 200
     assert b"/reset-password/" in response.data
+    assert helpers.row("SELECT COUNT(*) AS token_count FROM password_reset_tokens")["token_count"] == 1
+
+
+def test_password_reset_sends_resend_email_when_configured(app, client, helpers, monkeypatch):
+    helpers.create_user(client, "alice")
+    app.config.update(
+        LOCAL_PASSWORD_RESET_LINKS=False,
+        PASSWORD_RESET_EMAIL_ENABLED=True,
+        RESEND_API_KEY="test-resend-key",
+        RESEND_FROM_EMAIL="EverTimeline <reset@example.com>",
+    )
+    sent_messages = []
+
+    def fake_send(payload):
+        sent_messages.append(payload)
+        return {"id": "email_123"}
+
+    monkeypatch.setattr(helpers.app_module.resend.Emails, "send", fake_send)
+
+    response = client.post(
+        "/forgot-password",
+        data={
+            **helpers.csrf_form_data(client, "/forgot-password"),
+            "identifier": "alice@example.com",
+        },
+    )
+
+    assert response.status_code == 200
+    assert b"/reset-password/" not in response.data
+    assert helpers.app_module.resend.api_key == "test-resend-key"
+    assert len(sent_messages) == 1
+    payload = sent_messages[0]
+    assert payload["from"] == "EverTimeline <reset@example.com>"
+    assert payload["to"] == ["alice@example.com"]
+    assert payload["subject"] == "Reset your EverTimeline password"
+    assert "/reset-password/" in payload["text"]
+    assert "/reset-password/" in payload["html"]
     assert helpers.row("SELECT COUNT(*) AS token_count FROM password_reset_tokens")["token_count"] == 1
 
 
@@ -155,6 +286,76 @@ def test_password_reset_token_changes_password_and_cannot_be_reused(app, client,
     reused = client.get(f"/reset-password/{token}", follow_redirects=True)
     assert reused.status_code == 200
     assert b"invalid or expired" in reused.data
+
+
+def test_login_posts_are_rate_limited_with_form_error(app, client, helpers):
+    helpers.create_user(client, "alice")
+    assert client.post(
+        "/logout",
+        data=helpers.csrf_form_data(client, "/timeline"),
+    ).status_code == 302
+
+    app.config["RATELIMIT_ENABLED"] = True
+    helpers.app_module.limiter.enabled = True
+    helpers.app_module.limiter.reset()
+    try:
+        for _ in range(10):
+            response = client.post(
+                "/login",
+                data={
+                    **helpers.csrf_form_data(client, "/login"),
+                    "username": "alice",
+                    "password": "wrong-password",
+                },
+            )
+            assert response.status_code == 200
+
+        limited = client.post(
+            "/login",
+            data={
+                **helpers.csrf_form_data(client, "/login"),
+                "username": "alice",
+                "password": "wrong-password",
+            },
+            follow_redirects=True,
+        )
+    finally:
+        app.config["RATELIMIT_ENABLED"] = False
+        helpers.app_module.limiter.enabled = False
+        helpers.app_module.limiter.reset()
+
+    assert limited.status_code == 200
+    assert b"Too many requests. Please wait and try again." in limited.data
+
+
+def test_message_posts_are_rate_limited_with_json_error(app, client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(client)
+
+    app.config["RATELIMIT_ENABLED"] = True
+    helpers.app_module.limiter.enabled = True
+    helpers.app_module.limiter.reset()
+    try:
+        for index in range(30):
+            response = client.post(
+                f"/api/timeline-item/photo/{photo_id}/messages",
+                headers=helpers.csrf_headers(client, "/timeline"),
+                json={"body": f"Message {index}"},
+            )
+            assert response.status_code == 201
+
+        limited = client.post(
+            f"/api/timeline-item/photo/{photo_id}/messages",
+            headers=helpers.csrf_headers(client, "/timeline"),
+            json={"body": "One too many"},
+        )
+    finally:
+        app.config["RATELIMIT_ENABLED"] = False
+        helpers.app_module.limiter.enabled = False
+        helpers.app_module.limiter.reset()
+
+    assert limited.status_code == 429
+    assert limited.get_json() == {"error": "Too many requests. Please wait and try again."}
 
 
 def test_uploads_text_entries_and_pdf_exports(client, helpers):
@@ -1086,6 +1287,124 @@ def test_admin_maintenance_compacts_existing_jpegs_and_vacuums_database(app, cli
     assert client.get(f"/admin/jobs/{vacuum_job['id']}").get_json()["progress_percent"] == 100
 
 
+def test_admin_connection_visit_full_shows_all_photos_regardless_visibility(app, client, helpers):
+    helpers.create_user(client, "Daniel")
+    other = app.test_client()
+    other_id = helpers.create_user(other, "bob")
+    request_id = helpers.request_connection(client, other_id, relation="friend")
+    helpers.accept_connection(other, request_id)
+
+    with app.app_context():
+        db = helpers.app_module.get_db()
+        tag_ids = {}
+        photo_ids = {}
+        for tag in ("private", "family", "public"):
+            db.execute(
+                "INSERT INTO tags (user_id, name) VALUES (?, ?)",
+                (other_id, tag),
+            )
+            tag_ids[tag] = db.execute(
+                "SELECT id FROM tags WHERE user_id = ? AND name = ?",
+                (other_id, tag),
+            ).fetchone()["id"]
+
+        for index, (tag, title, color) in enumerate(
+            (
+                ("private", "Private full photo", (220, 60, 70)),
+                ("family", "Family full photo", (50, 150, 90)),
+                ("public", "Public full photo", (45, 100, 210)),
+            ),
+            start=1,
+        ):
+            image = io.BytesIO()
+            Image.new("RGB", (16, 16), color=color).save(image, format="JPEG")
+            image_data = image.getvalue()
+            cursor = db.execute(
+                """
+                INSERT INTO photos (
+                    user_id, year, month, original_filename, title, caption,
+                    mime_type, image_data, image_hash, photo_date
+                )
+                VALUES (?, 2020, 5, ?, ?, '', ?, ?, ?, ?)
+                """,
+                (
+                    other_id,
+                    f"{tag}-full.jpg",
+                    title,
+                    "image/jpeg",
+                    image_data,
+                    helpers.app_module.photo_image_hash(image_data),
+                    f"2020-05-0{index}",
+                ),
+            )
+            photo_ids[tag] = cursor.lastrowid
+            db.execute(
+                "INSERT INTO photo_tags (photo_id, tag_id) VALUES (?, ?)",
+                (cursor.lastrowid, tag_ids[tag]),
+            )
+        db.commit()
+
+    connections_page = client.get("/connections")
+    assert connections_page.status_code == 200
+    assert b"Visit full" in connections_page.data
+    assert b"/admin/connections/" in connections_page.data
+
+    full_page = client.get(f"/admin/connections/{other_id}/full-splash")
+    assert full_page.status_code == 200
+    assert b"All photos, regardless of visibility" in full_page.data
+    assert b"Bulk delete" in full_page.data
+    assert f"/admin/connections/{other_id}/bulk-delete".encode() in full_page.data
+    assert f"/admin/connections/{other_id}/api/full-splash-photos".encode() in full_page.data
+
+    bulk_delete_page = client.get(f"/admin/connections/{other_id}/bulk-delete")
+    assert bulk_delete_page.status_code == 200
+    assert b"data-month-bulk-actions" in bulk_delete_page.data
+    assert b"data-month-bulk-grid" in bulk_delete_page.data
+    assert b"data-month-bulk-delete-button" in bulk_delete_page.data
+    assert b"Delete" in bulk_delete_page.data
+    assert f"/admin/connections/{other_id}/api/full-splash-photos".encode() in bulk_delete_page.data
+    assert f"/admin/connections/{other_id}/api/photos/delete".encode() in bulk_delete_page.data
+
+    payload = client.get(
+        f"/admin/connections/{other_id}/api/full-splash-photos?seed=test&page=0&page_size=10"
+    ).get_json()
+    assert payload["total"] == 3
+    assert {photo["title"] for photo in payload["photos"]} == {
+        "Private full photo",
+        "Family full photo",
+        "Public full photo",
+    }
+    private_photo = next(photo for photo in payload["photos"] if photo["title"] == "Private full photo")
+    assert client.get(private_photo["thumbnail_url"]).status_code == 200
+    assert client.get(private_photo["full_url"]).status_code == 200
+
+    delete_response = client.post(
+        f"/admin/connections/{other_id}/api/photos/delete",
+        headers=helpers.csrf_headers(client, f"/admin/connections/{other_id}/bulk-delete"),
+        json={"photo_ids": [photo_ids["private"], photo_ids["public"]]},
+    )
+    assert delete_response.status_code == 200
+    delete_payload = delete_response.get_json()
+    assert delete_payload["deleted_count"] == 2
+    assert set(delete_payload["deleted_photo_ids"]) == {photo_ids["private"], photo_ids["public"]}
+    assert helpers.row(
+        "SELECT COUNT(*) AS count FROM photos WHERE user_id = ?",
+        (other_id,),
+    )["count"] == 1
+    assert helpers.row(
+        "SELECT title FROM photos WHERE user_id = ?",
+        (other_id,),
+    )["title"] == "Family full photo"
+
+    assert other.get(f"/admin/connections/{other_id}/full-splash").status_code == 404
+    assert other.get(f"/admin/connections/{other_id}/bulk-delete").status_code == 404
+    assert other.post(
+        f"/admin/connections/{other_id}/api/photos/delete",
+        headers=helpers.csrf_headers(other, "/timeline"),
+        json={"photo_ids": [photo_ids["family"]]},
+    ).status_code == 404
+
+
 def test_manual_people_tagging_for_items_search_and_updates(app, client, helpers):
     helpers.create_user(client, "owner")
     photo_id = helpers.upload_photo(
@@ -1633,6 +1952,129 @@ def test_full_account_backup_export_and_import(client, helpers):
     )["count"] == 1
 
 
+def backup_zip_bytes(manifest, files=None):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("evertimeline-backup.json", json.dumps(manifest).encode("utf-8"))
+        for filename, data in (files or {}).items():
+            archive.writestr(filename, data)
+    return buffer.getvalue()
+
+
+def minimal_backup_manifest(**overrides):
+    manifest = {
+        "format": "evertimeline.account_backup",
+        "format_version": 1,
+        "user": {"birthday": "2000-01-15"},
+        "photos": [],
+        "text_entries": [],
+        "chapters": [],
+    }
+    manifest.update(overrides)
+    return manifest
+
+
+def post_backup_import(client, helpers, backup_bytes, filename="backup.zip"):
+    return client.post(
+        "/account/import",
+        data={
+            **helpers.csrf_form_data(client, "/profile"),
+            "backup": (io.BytesIO(backup_bytes), filename, "application/zip"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+
+def test_backup_import_rejects_archive_metadata_limits(app, client, helpers):
+    helpers.create_user(client, "owner")
+    manifest = minimal_backup_manifest()
+
+    previous_file_count = app.config["MAX_BACKUP_FILE_COUNT"]
+    app.config["MAX_BACKUP_FILE_COUNT"] = 1
+    try:
+        too_many_files = post_backup_import(
+            client,
+            helpers,
+            backup_zip_bytes(manifest, {"extra.txt": b"unused"}),
+        )
+    finally:
+        app.config["MAX_BACKUP_FILE_COUNT"] = previous_file_count
+    assert too_many_files.status_code == 200
+    assert b"Backup contains too many files." in too_many_files.data
+
+    previous_manifest_limit = app.config["MAX_BACKUP_MANIFEST_BYTES"]
+    app.config["MAX_BACKUP_MANIFEST_BYTES"] = 16
+    try:
+        oversized_manifest = post_backup_import(client, helpers, backup_zip_bytes(manifest))
+    finally:
+        app.config["MAX_BACKUP_MANIFEST_BYTES"] = previous_manifest_limit
+    assert oversized_manifest.status_code == 200
+    assert b"Backup manifest is too large." in oversized_manifest.data
+
+    previous_uncompressed_limit = app.config["MAX_BACKUP_UNCOMPRESSED_BYTES"]
+    app.config["MAX_BACKUP_UNCOMPRESSED_BYTES"] = 64
+    try:
+        oversized_archive = post_backup_import(
+            client,
+            helpers,
+            backup_zip_bytes(
+                minimal_backup_manifest(
+                    text_entries=[{"body": "x" * 200, "year": 2020, "month": 5}]
+                )
+            ),
+        )
+    finally:
+        app.config["MAX_BACKUP_UNCOMPRESSED_BYTES"] = previous_uncompressed_limit
+    assert oversized_archive.status_code == 200
+    assert b"Backup is too large to import." in oversized_archive.data
+
+
+def test_backup_import_rejects_duplicate_entries_and_pixel_limit(app, client, helpers):
+    helpers.create_user(client, "owner")
+    duplicate_buffer = io.BytesIO()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        with zipfile.ZipFile(duplicate_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("evertimeline-backup.json", json.dumps(minimal_backup_manifest()))
+            archive.writestr("photos/one.jpg", b"first")
+            archive.writestr("photos/one.jpg", b"second")
+
+    duplicate_response = post_backup_import(client, helpers, duplicate_buffer.getvalue())
+    assert duplicate_response.status_code == 200
+    assert b"Backup contains duplicate file entries." in duplicate_response.data
+
+    manifest = minimal_backup_manifest(
+        photos=[
+            {
+                "id": 1,
+                "year": 2020,
+                "month": 5,
+                "original_filename": "large-pixels.png",
+                "title": "",
+                "caption": "",
+                "mime_type": "image/png",
+                "photo_date": "2020-05-04",
+                "image_path": "photos/large-pixels.png",
+            }
+        ]
+    )
+    previous_pixel_limit = app.config["MAX_IMAGE_PIXELS"]
+    app.config["MAX_IMAGE_PIXELS"] = 3
+    try:
+        pixel_response = post_backup_import(
+            client,
+            helpers,
+            backup_zip_bytes(manifest, {"photos/large-pixels.png": helpers.png_bytes()}),
+        )
+    finally:
+        app.config["MAX_IMAGE_PIXELS"] = previous_pixel_limit
+
+    assert pixel_response.status_code == 200
+    assert b"Backup contains a photo that could not be converted." in pixel_response.data
+    assert helpers.row("SELECT COUNT(*) AS count FROM photos")["count"] == 0
+
+
 def test_chapter_items_can_be_reordered_with_json_api(client, helpers):
     helpers.create_user(client, "owner")
     photo_id = helpers.upload_photo(
@@ -1719,6 +2161,106 @@ def test_chapter_items_can_be_reordered_with_json_api(client, helpers):
         json={"item_ids": reordered_ids[:-1]},
     )
     assert bad_response.status_code == 400
+
+
+def test_chapter_pdf_export_preserves_chapter_access_and_sequence(app, client, helpers):
+    owner_id = helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="chapter-export-photo.png",
+        title="Chapter export photo",
+        caption="A caption for the chapter PDF",
+        photo_date="2020-05-04",
+        tag="private",
+    )
+    text_id = helpers.create_text(
+        client,
+        "A chapter export text memory",
+        entry_date="2020-05-05",
+        tag="private",
+    )
+
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Export Story",
+            "description": "A keepsake chapter",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Export Story",))["id"]
+
+    for item_kind, item_id in (("text", text_id), ("photo", photo_id)):
+        response = client.post(
+            "/chapters/items",
+            data={
+                **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+                "chapter_id": chapter_id,
+                "item_kind": item_kind,
+                "item_id": item_id,
+            },
+        )
+        assert response.status_code == 302
+
+    with app.app_context():
+        export_items = helpers.app_module.build_chapter_pdf_export_items(
+            helpers.app_module.get_db(),
+            chapter_id,
+            owner_id,
+        )
+    assert [(item["kind"], item["id"]) for item in export_items] == [
+        ("text", text_id),
+        ("photo", photo_id),
+    ]
+
+    chapter_page = client.get(f"/chapters/{chapter_id}")
+    assert chapter_page.status_code == 200
+    assert f"/chapters/{chapter_id}/export.pdf".encode() in chapter_page.data
+    assert b"Export chapter PDF" in chapter_page.data
+
+    owner_pdf = client.get(f"/chapters/{chapter_id}/export.pdf")
+    assert owner_pdf.status_code == 200
+    assert owner_pdf.mimetype == "application/pdf"
+    assert owner_pdf.data.startswith(b"%PDF")
+    assert "evertimeline-chapter-Export_Story.pdf" in owner_pdf.headers["Content-Disposition"]
+
+    friend = app.test_client()
+    friend_id = helpers.create_user(friend, "friend")
+    request_id = helpers.request_connection(friend, owner_id, relation="friend")
+    helpers.accept_connection(client, request_id)
+
+    stranger = app.test_client()
+    helpers.create_user(stranger, "stranger")
+    assert stranger.get(f"/shared/chapters/{chapter_id}/export.pdf").status_code == 404
+
+    invite_response = client.post(
+        f"/chapters/{chapter_id}/invites",
+        data={
+            **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+            "recipient_id": friend_id,
+        },
+    )
+    assert invite_response.status_code == 302
+    invite = helpers.row(
+        "SELECT id FROM chapter_invites WHERE chapter_id = ? AND recipient_id = ?",
+        (chapter_id, friend_id),
+    )
+    accept_response = friend.post(
+        f"/chapter-invites/{invite['id']}/accept",
+        data=helpers.csrf_form_data(friend, "/notifications"),
+    )
+    assert accept_response.status_code == 302
+
+    shared_page = friend.get(f"/shared/chapters/{chapter_id}")
+    assert shared_page.status_code == 200
+    assert f"/shared/chapters/{chapter_id}/export.pdf".encode() in shared_page.data
+
+    shared_pdf = friend.get(f"/shared/chapters/{chapter_id}/export.pdf")
+    assert shared_pdf.status_code == 200
+    assert shared_pdf.mimetype == "application/pdf"
+    assert shared_pdf.data.startswith(b"%PDF")
 
 def test_chapter_draft_suggests_filtered_items_and_creates_chapter(client, helpers):
     helpers.create_user(client, "owner")
@@ -2050,6 +2592,9 @@ def test_privacy_preview_filters_owner_timeline_views(client, helpers):
 
     timeline = client.get("/timeline?preview=friend")
     assert timeline.status_code == 200
+    assert b'<details class="privacy-preview-panel"' in timeline.data
+    assert b'<summary class="button secondary privacy-preview-toggle">' in timeline.data
+    assert b"<span>Privacy preview</span>" in timeline.data
     assert b"Friend view" in timeline.data
     assert b'href="/year/2020?preview=friend"' in timeline.data
     assert b'<span class="count-badge">2</span>' in timeline.data
@@ -2154,6 +2699,192 @@ def test_timeline_search_finds_owned_content_types_and_excludes_other_users(app,
     assert b"No timeline matches." in response.data
 
 
+def test_anniversary_mode_surfaces_today_upcoming_and_birthday(app, client, helpers):
+    app.config["ANNIVERSARY_TODAY"] = date(2026, 5, 4)
+    helpers.create_user(client, "owner", birthday="2000-05-06")
+    helpers.upload_photo(
+        client,
+        filename="anniversary-picnic.png",
+        photo_date="2020-05-04",
+        title="Park picnic",
+        caption="Blanket by the old willow",
+        people="Avery Guide",
+        location_name="Harbor Park",
+    )
+    helpers.create_text(
+        client,
+        "Graduation week dinner",
+        year=2019,
+        month=5,
+        entry_date="2019-05-06",
+        people="Riley Reader",
+    )
+    helpers.create_text(
+        client,
+        "Outside window",
+        year=2020,
+        month=7,
+        entry_date="2020-07-04",
+    )
+
+    timeline = client.get("/timeline")
+    assert timeline.status_code == 200
+    assert b"/timeline/anniversaries" in timeline.data
+    assert b"Anniversaries" in timeline.data
+
+    response = client.get("/timeline/anniversaries")
+    assert response.status_code == 200
+    assert b"Anniversaries" in response.data
+    assert b"On this day" in response.data
+    assert b"Coming this week" in response.data
+    assert b"Park picnic" in response.data
+    assert b"6 years ago" in response.data
+    assert b"Graduation week dinner" in response.data
+    assert b"7 years ago" in response.data
+    assert b"Your birthday" in response.data
+    assert b"You turn 26." in response.data
+    assert b"Outside window" not in response.data
+
+
+def test_legacy_notes_attach_to_private_timeline_hubs(app, client, helpers):
+    helpers.create_user(client, "owner")
+    helpers.upload_photo(
+        client,
+        filename="legacy-place.png",
+        photo_date="2020-05-04",
+        title="Harbor picnic",
+        caption="Blanket by the water",
+        people="Avery Guide",
+        location_name="Harbor Park",
+    )
+    person_id = helpers.row("SELECT id FROM people WHERE name = ?", ("Avery Guide",))["id"]
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Legacy chapter",
+            "description": "A family story",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Legacy chapter",))["id"]
+
+    note_targets = [
+        ("person", person_id, f"/timeline/people/{person_id}", "For Avery", "What I want you to know about Avery."),
+        ("chapter", chapter_id, f"/chapters/{chapter_id}", "For the chapter", "Why this trip mattered."),
+        ("year", 2020, "/year/2020", "For 2020", "For my children later."),
+        ("place", "Harbor Park", "/timeline/map/place?name=Harbor%20Park", "For Harbor Park", "This place held us together."),
+    ]
+    for target_type, target_key, next_url, title, body in note_targets:
+        response = client.post(
+            "/legacy-notes",
+            data={
+                **helpers.csrf_form_data(client, next_url),
+                "target_type": target_type,
+                "target_key": target_key,
+                "title": title,
+                "body": body,
+                "next": next_url,
+            },
+        )
+        assert response.status_code == 302
+
+    person_page = client.get(f"/timeline/people/{person_id}")
+    assert b"Legacy notes" in person_page.data
+    assert b"For Avery" in person_page.data
+    assert b"What I want you to know about Avery." in person_page.data
+
+    chapter_page = client.get(f"/chapters/{chapter_id}")
+    assert b"For the chapter" in chapter_page.data
+    assert b"Why this trip mattered." in chapter_page.data
+
+    year_page = client.get("/year/2020")
+    assert b"For 2020" in year_page.data
+    assert b"For my children later." in year_page.data
+
+    place_page = client.get("/timeline/map/place?name=Harbor%20Park")
+    assert b"For Harbor Park" in place_page.data
+    assert b"This place held us together." in place_page.data
+
+    note_id = helpers.row("SELECT id FROM legacy_notes WHERE title = ?", ("For Avery",))["id"]
+    other = app.test_client()
+    helpers.create_user(other, "other")
+    assert other.post(
+        f"/legacy-notes/{note_id}/delete",
+        data={
+            **helpers.csrf_form_data(other, "/timeline"),
+            "next": "/timeline",
+        },
+    ).status_code == 404
+
+    delete_response = client.post(
+        f"/legacy-notes/{note_id}/delete",
+        data={
+            **helpers.csrf_form_data(client, f"/timeline/people/{person_id}"),
+            "next": f"/timeline/people/{person_id}",
+        },
+    )
+    assert delete_response.status_code == 302
+    assert b"What I want you to know about Avery." not in client.get(f"/timeline/people/{person_id}").data
+
+
+def test_timeline_heat_map_button_and_png_use_photo_counts(app, client, helpers):
+    user_id = helpers.create_user(client, "owner", birthday="2020-01-15")
+    with app.app_context():
+        db = helpers.app_module.get_db()
+        for index, year in enumerate([2022, 2022, 2022, 2022], start=1):
+            image = io.BytesIO()
+            Image.new("RGB", (12, 12), color=(40 + index, 80, 120)).save(image, format="JPEG")
+            image_data = image.getvalue()
+            db.execute(
+                """
+                INSERT INTO photos (
+                    user_id, year, month, original_filename, title, caption,
+                    image_hash, mime_type, image_data, photo_date
+                )
+                VALUES (?, ?, 5, ?, ?, '', ?, 'image/jpeg', ?, ?)
+                """,
+                (
+                    user_id,
+                    year,
+                    f"heat-{index}.jpg",
+                    f"Heat photo {index}",
+                    helpers.app_module.photo_image_hash(image_data),
+                    image_data,
+                    f"{year}-05-{index:02d}",
+                ),
+            )
+        db.execute(
+            """
+            INSERT INTO text_entries (user_id, year, month, body, entry_date)
+            VALUES (?, 2021, 5, 'Text should not affect photo heat', '2021-05-04')
+            """,
+            (user_id,),
+        )
+        db.commit()
+
+    timeline = client.get("/timeline")
+    assert timeline.status_code == 200
+    assert b"Heat map" in timeline.data
+    assert b"/timeline/heat-map" in timeline.data
+
+    heat_map_page = client.get("/timeline/heat-map")
+    assert heat_map_page.status_code == 200
+    assert b"Timeline photo heat map" in heat_map_page.data
+    assert b"/timeline/heat-map.png" in heat_map_page.data
+
+    response = client.get("/timeline/heat-map.png")
+    assert response.status_code == 200
+    assert response.mimetype == "image/png"
+    assert response.data.startswith(b"\x89PNG")
+
+    heat_map = Image.open(io.BytesIO(response.data)).convert("RGB")
+    colors = set(heat_map.getdata())
+    assert (29, 78, 216) in colors
+    assert (220, 38, 38) in colors
+
+
 def test_memory_review_queue_prioritizes_incomplete_memories(client, helpers):
     helpers.create_user(client, "owner")
     helpers.upload_photo(
@@ -2173,18 +2904,31 @@ def test_memory_review_queue_prioritizes_incomplete_memories(client, helpers):
     timeline_response = client.get("/timeline")
     assert timeline_response.status_code == 200
     assert b"Review queue" in timeline_response.data
+    assert b"Memory completeness" in timeline_response.data
+    assert b"14% - Needs context" in timeline_response.data
+    assert b"Timeline coverage" in timeline_response.data
 
     response = client.get("/timeline/review")
     assert response.status_code == 200
     assert b"Review queue" in response.data
+    assert b"Memory completeness score" in response.data
+    assert b"14%" in response.data
+    assert b"1 of 7 checks complete" in response.data
     assert b"Start here" in response.data
+    assert b"Time capsule questions" in response.data
     assert b"Photos need captions" in response.data
     assert b"Memories need places" in response.data
     assert b"Memories need people" in response.data
     assert b"Memories not in chapters" in response.data
     assert b"Public photos need polish" in response.data
+    assert b"What do you remember most?" in response.data
+    assert b"Add why it mattered" in response.data
     assert b"public-uncaptioned.png" in response.data
     assert b"A short memory without tags or place" in response.data
+    assert b'data-review-action="prompt-caption"' in response.data
+    assert b'data-review-action="prompt-body"' in response.data
+    assert b'data-review-action="prompt-people"' in response.data
+    assert b'data-review-action="prompt-location"' in response.data
     assert b'data-review-action="caption"' in response.data
     assert b'data-review-action="people"' in response.data
     assert b'data-review-action="location"' in response.data
@@ -2199,6 +2943,9 @@ def test_memory_review_queue_empty_and_complete_states(client, helpers):
 
     empty_response = client.get("/timeline/review")
     assert empty_response.status_code == 200
+    assert b"Memory completeness score" in empty_response.data
+    assert b"0%" in empty_response.data
+    assert b"Add memories to start building your score." in empty_response.data
     assert b"Add memories to start building your review queue." in empty_response.data
 
     photo_id = helpers.upload_photo(
@@ -2233,7 +2980,11 @@ def test_memory_review_queue_empty_and_complete_states(client, helpers):
 
     complete_response = client.get("/timeline/review")
     assert complete_response.status_code == 200
+    assert b"100%" in complete_response.data
+    assert b"Polished" in complete_response.data
+    assert b"4 of 4 checks complete" in complete_response.data
     assert b"Your timeline has no review issues right now." in complete_response.data
+    assert b"Time capsule questions" not in complete_response.data
 
 
 def test_memory_review_inline_actions_complete_photo(client, helpers):
@@ -2381,124 +3132,6 @@ def test_saved_timeline_collections_filter_save_and_delete(app, client, helpers)
     )
     assert delete_response.status_code == 302
     assert helpers.row("SELECT COUNT(*) AS count FROM saved_timeline_views")["count"] == 0
-
-
-def test_timeline_stories_can_save_and_delete_from_search_filters(app, client, helpers):
-    helpers.create_user(client, "owner")
-    helpers.upload_photo(
-        client,
-        filename="story-photo.png",
-        title="Weekend walk",
-        caption="Summer walk by the river",
-        tag="private",
-    )
-    helpers.create_text(
-        client,
-        "Family picnic notes",
-        entry_date="2020-05-06",
-        tag="private",
-    )
-    other = app.test_client()
-    helpers.create_user(other, "other")
-    helpers.upload_photo(
-        other,
-        filename="other-story-photo.png",
-        title="Other photo walk",
-        tag="private",
-    )
-
-    save_response = client.post(
-        "/timeline/stories",
-        data={
-            **helpers.csrf_form_data(client, "/timeline/stories"),
-            "source_mode": "search",
-            "q": "walk",
-            "kind": "all",
-            "title": "Weekend memories",
-            "subtitle": "An easy one",
-        },
-    )
-    assert save_response.status_code == 302
-    story_id = save_response.headers["Location"].rsplit("/", 1)[-1]
-
-    stories = helpers.row(
-        "SELECT * FROM timeline_stories WHERE title = ?",
-        ("Weekend memories",),
-    )
-    assert stories
-    assert stories["source_mode"] == "search"
-    assert json.loads(stories["filter_payload"])["query"] == "walk"
-
-    story_page = client.get(f"/timeline/stories/{story_id}")
-    assert story_page.status_code == 200
-    assert b"Weekend memories" in story_page.data
-    assert b"Weekend walk" in story_page.data
-    assert b"Other photo walk" not in story_page.data
-
-    saved_stories_page = client.get("/timeline/stories")
-    assert saved_stories_page.status_code == 200
-    assert b"Weekend memories" in saved_stories_page.data
-
-    delete_response = client.post(
-        f"/timeline/stories/{story_id}/delete",
-        data=helpers.csrf_form_data(client, "/timeline/stories"),
-    )
-    assert delete_response.status_code == 302
-    assert helpers.row("SELECT COUNT(*) AS count FROM timeline_stories")["count"] == 0
-
-
-def test_timeline_stories_can_save_and_delete_from_collections_filters(app, client, helpers):
-    helpers.create_user(client, "owner")
-    helpers.create_text(
-        client,
-        "Family trail notes",
-        entry_date="2020-05-03",
-        tag="friends",
-        people="Alice Walker",
-        location_name="Trailhead",
-    )
-    helpers.upload_photo(
-        client,
-        filename="trail-photo.png",
-        title="Trail photo",
-        photo_date="2020-05-04",
-        tag="friends",
-        people="Alice Walker",
-        location_name="Trailhead",
-    )
-
-    save_response = client.post(
-        "/timeline/stories",
-        data={
-            **helpers.csrf_form_data(client, "/timeline/stories"),
-            "source_mode": "collections",
-            "item_kind": "photo",
-            "people": "Alice Walker",
-            "location": "Trailhead",
-            "privacy_tag": "friends",
-            "title": "Trail stories",
-            "subtitle": "Friendship routes",
-            "date_start": "2020-05-01",
-            "date_end": "2020-05-31",
-        },
-    )
-    assert save_response.status_code == 302
-    story_id = save_response.headers["Location"].rsplit("/", 1)[-1]
-
-    story = helpers.row("SELECT * FROM timeline_stories WHERE id = ?", (story_id,))
-    assert story["source_mode"] == "collections"
-
-    story_page = client.get(f"/timeline/stories/{story_id}")
-    assert story_page.status_code == 200
-    assert b"Trail stories" in story_page.data
-    assert b"Trail photo" in story_page.data
-    assert b"Family trail notes" not in story_page.data
-
-    delete_response = client.post(
-        f"/timeline/stories/{story_id}/delete",
-        data=helpers.csrf_form_data(client, "/timeline/stories"),
-    )
-    assert delete_response.status_code == 302
 
 
 def test_timeline_map_shows_owned_locations_and_updates_photo_place(app, client, helpers):
@@ -2753,6 +3386,112 @@ def test_shared_chapter_invite_allows_album_comments_without_timeline_access(app
     notifications = client.get("/notifications")
     assert b"I can see just this album." in notifications.data
     assert b"loved your text entry" in notifications.data
+
+
+def test_private_chapter_share_link_is_expiring_read_only_access(app, client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="share-link-photo.png",
+        title="Shared link photo",
+        caption="Caption visible through the private link",
+        tag="private",
+    )
+    text_id = helpers.create_text(
+        client,
+        "Read-only link text memory",
+        tag="private",
+    )
+
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Link-only chapter",
+            "description": "No account needed",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Link-only chapter",))["id"]
+
+    for item_kind, item_id in (("photo", photo_id), ("text", text_id)):
+        response = client.post(
+            "/chapters/items",
+            data={
+                **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+                "chapter_id": chapter_id,
+                "item_kind": item_kind,
+                "item_id": item_id,
+            },
+        )
+        assert response.status_code == 302
+
+    chapter_page = client.get(f"/chapters/{chapter_id}")
+    assert chapter_page.status_code == 200
+    assert b"Private sharing links" in chapter_page.data
+    assert b"Create private link" in chapter_page.data
+
+    create_link_response = client.post(
+        f"/chapters/{chapter_id}/share-links",
+        data={
+            **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+            "expires_days": "7",
+        },
+    )
+    assert create_link_response.status_code == 302
+    link = helpers.row(
+        "SELECT id, token, expires_at, revoked_at FROM chapter_share_links WHERE chapter_id = ?",
+        (chapter_id,),
+    )
+    assert link["token"]
+    assert link["revoked_at"] is None
+
+    updated_chapter_page = client.get(f"/chapters/{chapter_id}")
+    assert updated_chapter_page.status_code == 200
+    assert f"/share/chapter/{link['token']}".encode() in updated_chapter_page.data
+    assert b"Active link" in updated_chapter_page.data
+
+    public = app.test_client()
+    public_page = public.get(f"/share/chapter/{link['token']}")
+    assert public_page.status_code == 200
+    assert b"Link-only chapter" in public_page.data
+    assert b"Read-only link text memory" in public_page.data
+    assert b"Caption visible through the private link" in public_page.data
+    assert b"Export chapter PDF" in public_page.data
+    assert b"chapter-reactions" not in public_page.data
+    assert b"api/timeline-item" not in public_page.data
+
+    image_response = public.get(f"/share/chapter/{link['token']}/photo/{photo_id}/image")
+    assert image_response.status_code == 200
+    assert image_response.mimetype == "image/jpeg"
+
+    assert public.get(f"/share/chapter/{link['token']}/photo/{photo_id + 999}/image").status_code == 404
+
+    pdf_response = public.get(f"/share/chapter/{link['token']}/export.pdf")
+    assert pdf_response.status_code == 200
+    assert pdf_response.mimetype == "application/pdf"
+    assert pdf_response.data.startswith(b"%PDF")
+
+    revoke_response = client.post(
+        f"/chapters/{chapter_id}/share-links/{link['id']}/revoke",
+        data=helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+    )
+    assert revoke_response.status_code == 302
+    assert public.get(f"/share/chapter/{link['token']}").status_code == 404
+
+    expired_token = "expired-test-token"
+    with app.app_context():
+        db = helpers.app_module.get_db()
+        db.execute(
+            """
+            INSERT INTO chapter_share_links (chapter_id, token, expires_at)
+            VALUES (?, ?, ?)
+            """,
+            (chapter_id, expired_token, "2000-01-01T00:00:00+00:00"),
+        )
+        db.commit()
+    assert public.get(f"/share/chapter/{expired_token}").status_code == 404
 
 
 def test_reactions_messages_and_notifications_for_connection(app, client, helpers):

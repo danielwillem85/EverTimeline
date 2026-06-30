@@ -5,6 +5,7 @@ import calendar
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import random
@@ -17,6 +18,7 @@ import traceback
 import zipfile
 from xml.sax.saxutils import escape
 
+import resend
 from flask import (
     Flask,
     Response,
@@ -31,10 +33,13 @@ from flask import (
     url_for,
 )
 from markupsafe import Markup, escape as html_escape
+from flask_limiter import Limiter
+from flask_limiter.errors import RateLimitExceeded
+from flask_limiter.util import get_remote_address
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
-from PIL import Image, ImageOps
+from PIL import Image, ImageDraw, ImageOps
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -65,6 +70,12 @@ PRIVACY_AUDIENCE_HELP = {
     "public": "All accepted connections can see this item.",
 }
 CONNECTION_RELATIONS = ("friend", "family")
+CHAPTER_SHARE_LINK_DURATIONS = (
+    (7, "7 days"),
+    (30, "30 days"),
+    (90, "90 days"),
+    (365, "1 year"),
+)
 CONNECTION_VISIBLE_TAGS = {
     "friend": ("friends", "public"),
     "family": ("family", "friends", "public"),
@@ -111,7 +122,17 @@ MONTH_NAMES = [
 BACKUP_FORMAT = "evertimeline.account_backup"
 BACKUP_FORMAT_VERSION = 1
 BACKUP_MANIFEST_NAME = "evertimeline-backup.json"
-DEFAULT_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
+DEFAULT_MAX_UPLOAD_BYTES = 256 * 1024 * 1024
+DEFAULT_MAX_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024
+DEFAULT_MAX_IMAGE_PIXELS = 50_000_000
+DEFAULT_MAX_BACKUP_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+DEFAULT_MAX_BACKUP_MANIFEST_BYTES = 10 * 1024 * 1024
+DEFAULT_MAX_BACKUP_FILE_COUNT = 5_000
+LOGIN_RATE_LIMIT = "10 per minute"
+REGISTER_RATE_LIMIT = "5 per hour"
+PASSWORD_RESET_REQUEST_RATE_LIMIT = "5 per hour"
+PASSWORD_RESET_SUBMIT_RATE_LIMIT = "10 per hour"
+MESSAGE_RATE_LIMIT = "30 per minute"
 ADMIN_USERNAME = "Daniel"
 SQLITE_BUSY_TIMEOUT_MS = 30000
 IMAGE_CONVERSION_COMMIT_INTERVAL = 5
@@ -161,16 +182,75 @@ def run_debug_enabled():
 
 
 def configured_max_upload_bytes():
-    value = os.environ.get("EVERTIMELINE_MAX_UPLOAD_MB")
+    return configured_megabyte_limit("EVERTIMELINE_MAX_UPLOAD_MB", DEFAULT_MAX_UPLOAD_BYTES)
+
+
+def configured_max_image_upload_bytes():
+    return configured_megabyte_limit(
+        "EVERTIMELINE_MAX_IMAGE_MB",
+        DEFAULT_MAX_IMAGE_UPLOAD_BYTES,
+    )
+
+
+def configured_max_backup_uncompressed_bytes():
+    return configured_megabyte_limit(
+        "EVERTIMELINE_MAX_BACKUP_UNCOMPRESSED_MB",
+        DEFAULT_MAX_BACKUP_UNCOMPRESSED_BYTES,
+    )
+
+
+def configured_max_backup_manifest_bytes():
+    return configured_megabyte_limit(
+        "EVERTIMELINE_MAX_BACKUP_MANIFEST_MB",
+        DEFAULT_MAX_BACKUP_MANIFEST_BYTES,
+    )
+
+
+def configured_megabyte_limit(env_name, default_bytes):
+    value = os.environ.get(env_name)
     if not value:
-        return DEFAULT_MAX_UPLOAD_BYTES
+        return default_bytes
     try:
         megabytes = int(value)
     except ValueError:
-        return DEFAULT_MAX_UPLOAD_BYTES
+        return default_bytes
     if megabytes <= 0:
-        return DEFAULT_MAX_UPLOAD_BYTES
+        return default_bytes
     return megabytes * 1024 * 1024
+
+
+def configured_max_image_pixels():
+    value = os.environ.get("EVERTIMELINE_MAX_IMAGE_PIXELS")
+    if not value:
+        return DEFAULT_MAX_IMAGE_PIXELS
+    try:
+        pixels = int(value)
+    except ValueError:
+        return DEFAULT_MAX_IMAGE_PIXELS
+    if pixels <= 0:
+        return DEFAULT_MAX_IMAGE_PIXELS
+    return pixels
+
+
+def configured_max_backup_file_count():
+    value = os.environ.get("EVERTIMELINE_MAX_BACKUP_FILES")
+    if not value:
+        return DEFAULT_MAX_BACKUP_FILE_COUNT
+    try:
+        file_count = int(value)
+    except ValueError:
+        return DEFAULT_MAX_BACKUP_FILE_COUNT
+    if file_count <= 0:
+        return DEFAULT_MAX_BACKUP_FILE_COUNT
+    return file_count
+
+
+def configured_resend_api_key():
+    return os.environ.get("RESEND_API_KEY", "").strip()
+
+
+def configured_resend_from_email():
+    return os.environ.get("RESEND_FROM_EMAIL", "").strip()
 
 
 def human_readable_bytes(byte_count):
@@ -184,12 +264,32 @@ def human_readable_bytes(byte_count):
 
 
 app = Flask(__name__)
+PRODUCTION_SECURITY_ENABLED = not is_local_development()
 app.config.update(
     SECRET_KEY=configured_secret_key(),
     MAX_CONTENT_LENGTH=configured_max_upload_bytes(),
+    MAX_IMAGE_UPLOAD_BYTES=configured_max_image_upload_bytes(),
+    MAX_IMAGE_PIXELS=configured_max_image_pixels(),
+    MAX_BACKUP_UNCOMPRESSED_BYTES=configured_max_backup_uncompressed_bytes(),
+    MAX_BACKUP_MANIFEST_BYTES=configured_max_backup_manifest_bytes(),
+    MAX_BACKUP_FILE_COUNT=configured_max_backup_file_count(),
     CSRF_PROTECT=True,
     LOCAL_PASSWORD_RESET_LINKS=is_local_development(),
+    PASSWORD_RESET_EMAIL_ENABLED=bool(configured_resend_api_key() and configured_resend_from_email()),
+    RESEND_API_KEY=configured_resend_api_key(),
+    RESEND_FROM_EMAIL=configured_resend_from_email(),
+    PRODUCTION_SECURITY_HEADERS=PRODUCTION_SECURITY_ENABLED,
     RUN_JOBS_INLINE=False,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=PRODUCTION_SECURITY_ENABLED,
+)
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    storage_uri=os.environ.get("RATELIMIT_STORAGE_URI", "memory://"),
+    default_limits=[],
 )
 
 
@@ -204,6 +304,51 @@ def csrf_token():
 def csrf_field():
     token = html_escape(csrf_token())
     return Markup(f'<input type="hidden" name="csrf_token" value="{token}">')
+
+
+def wants_json_rate_limit_response():
+    return (
+        request.path.startswith("/api/")
+        or "/api/" in request.path
+        or request.path.endswith("/messages")
+        or request.accept_mimetypes.best == "application/json"
+    )
+
+
+@app.errorhandler(RateLimitExceeded)
+def handle_rate_limit_exceeded(error):
+    message = "Too many requests. Please wait and try again."
+    if wants_json_rate_limit_response():
+        return jsonify({"error": message}), 429
+
+    flash(message, "error")
+    if request.method in SAFE_METHODS:
+        return render_template("login.html"), 429
+    target = request.path if request.path.startswith("/") else url_for("index")
+    return redirect(target), 303
+
+
+@app.after_request
+def add_security_headers(response):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        (
+            "default-src 'self'; "
+            "base-uri 'self'; "
+            "object-src 'none'; "
+            "frame-ancestors 'none'; "
+            "img-src 'self' data:; "
+            "style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "connect-src 'self'"
+        ),
+    )
+    if app.config.get("PRODUCTION_SECURITY_HEADERS"):
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
 
 
 @app.errorhandler(RequestEntityTooLarge)
@@ -468,13 +613,13 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             );
 
-            CREATE TABLE IF NOT EXISTS timeline_stories (
+            CREATE TABLE IF NOT EXISTS legacy_notes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
-                title TEXT NOT NULL,
-                subtitle TEXT NOT NULL DEFAULT '',
-                source_mode TEXT NOT NULL DEFAULT 'search' CHECK (source_mode IN ('search', 'collections')),
-                filter_payload TEXT NOT NULL DEFAULT '{}',
+                target_type TEXT NOT NULL CHECK (target_type IN ('person', 'chapter', 'year', 'place')),
+                target_key TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                body TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
@@ -568,6 +713,16 @@ def init_db():
                 FOREIGN KEY (chapter_id) REFERENCES chapters (id) ON DELETE CASCADE,
                 FOREIGN KEY (inviter_id) REFERENCES users (id) ON DELETE CASCADE,
                 FOREIGN KEY (recipient_id) REFERENCES users (id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS chapter_share_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chapter_id INTEGER NOT NULL,
+                token TEXT NOT NULL UNIQUE,
+                expires_at TEXT NOT NULL,
+                revoked_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (chapter_id) REFERENCES chapters (id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS jobs (
@@ -682,8 +837,8 @@ def init_db():
         )
         db.execute(
             """
-            CREATE INDEX IF NOT EXISTS timeline_stories_user_updated
-            ON timeline_stories (user_id, updated_at, created_at)
+            CREATE INDEX IF NOT EXISTS legacy_notes_user_target_updated
+            ON legacy_notes (user_id, target_type, target_key, updated_at, created_at)
             """
         )
         db.execute(
@@ -696,6 +851,18 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS chapter_invites_chapter_status
             ON chapter_invites (chapter_id, status, recipient_id)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS chapter_share_links_chapter_created
+            ON chapter_share_links (chapter_id, created_at, id)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS chapter_share_links_token_active
+            ON chapter_share_links (token, revoked_at, expires_at)
             """
         )
         db.execute(
@@ -1148,6 +1315,14 @@ def normalize_photo_caption(value):
     return (value or "").strip()[:2000]
 
 
+def normalize_legacy_note_title(value):
+    return " ".join((value or "").strip().split())[:120]
+
+
+def normalize_legacy_note_body(value):
+    return (value or "").strip()[:4000]
+
+
 def photo_display_title(photo):
     return (photo["title"] or "").strip() or photo["original_filename"] or "Photo"
 
@@ -1246,6 +1421,29 @@ def photo_image_hash(image_data):
     return hashlib.sha256(image_data).hexdigest()
 
 
+def validate_image_upload_bytes(image_data):
+    max_bytes = app.config["MAX_IMAGE_UPLOAD_BYTES"]
+    if len(image_data) > max_bytes:
+        raise ValueError(f"Image exceeds the per-photo limit of {human_readable_bytes(max_bytes)}.")
+
+
+def validate_image_pixels(image):
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        raise ValueError("Image has invalid dimensions.")
+    max_pixels = app.config["MAX_IMAGE_PIXELS"]
+    if width * height > max_pixels:
+        raise ValueError(f"Image exceeds the pixel limit of {max_pixels:,} pixels.")
+
+
+def read_uploaded_image_data(image):
+    image_data = image.read()
+    if not image_data:
+        raise ValueError("Image is empty.")
+    validate_image_upload_bytes(image_data)
+    return image_data
+
+
 def storage_jpeg_from_image(
     image_data,
     quality=JPEG_STORAGE_QUALITY,
@@ -1254,7 +1452,9 @@ def storage_jpeg_from_image(
     progressive=True,
 ):
     try:
+        validate_image_upload_bytes(image_data)
         with Image.open(io.BytesIO(image_data)) as image:
+            validate_image_pixels(image)
             image = ImageOps.exif_transpose(image)
             if image.mode in ("RGBA", "LA") or "transparency" in image.info:
                 rgba_image = image.convert("RGBA")
@@ -1948,6 +2148,70 @@ def create_password_reset_token(db, user_id):
     return token
 
 
+def password_reset_email_configured():
+    return bool(
+        app.config.get("PASSWORD_RESET_EMAIL_ENABLED")
+        and app.config.get("RESEND_API_KEY")
+        and app.config.get("RESEND_FROM_EMAIL")
+    )
+
+
+def password_reset_email_payload(user, reset_url):
+    display_name = user_full_name(user) or user["username"]
+    escaped_name = html_escape(display_name)
+    escaped_url = html_escape(reset_url)
+    text = (
+        f"Hi {display_name},\n\n"
+        "Use this link to reset your EverTimeline password:\n"
+        f"{reset_url}\n\n"
+        "This link expires in 1 hour. If you did not request a password reset, you can ignore this email."
+    )
+    html = (
+        f"<p>Hi {escaped_name},</p>"
+        "<p>Use this link to reset your EverTimeline password:</p>"
+        f'<p><a href="{escaped_url}">Reset your password</a></p>'
+        "<p>This link expires in 1 hour. If you did not request a password reset, you can ignore this email.</p>"
+    )
+    return {
+        "from": app.config["RESEND_FROM_EMAIL"],
+        "to": [user["email"]],
+        "subject": "Reset your EverTimeline password",
+        "html": html,
+        "text": text,
+    }
+
+
+def send_password_reset_email(user, reset_url):
+    if not password_reset_email_configured() or not user["email"]:
+        raise ValueError("Password reset email delivery is not configured.")
+
+    resend.api_key = app.config["RESEND_API_KEY"]
+    return resend.Emails.send(password_reset_email_payload(user, reset_url))
+
+
+def prepare_password_reset_delivery(db, user):
+    if user is None:
+        return None
+
+    local_links_enabled = app.config.get("LOCAL_PASSWORD_RESET_LINKS", False)
+    email_delivery_enabled = password_reset_email_configured() and user["email"]
+    if not local_links_enabled and not email_delivery_enabled:
+        return None
+
+    token = create_password_reset_token(db, user["id"])
+    reset_url = url_for("reset_password", token=token, _external=True)
+
+    if local_links_enabled:
+        db.commit()
+        return reset_url
+
+    if email_delivery_enabled:
+        send_password_reset_email(user, reset_url)
+        db.commit()
+
+    return None
+
+
 def get_valid_password_reset(db, token):
     token_hash = hash_reset_token(token or "")
     reset_row = db.execute(
@@ -2474,6 +2738,10 @@ def format_timeline_date_label(year, month, display_date):
     if display_date:
         return display_date
     return f"{year:04d}-{month:02d}-??"
+
+
+def format_month_day(value):
+    return value.strftime("%B %d").replace(" 0", " ")
 
 
 def normalize_coordinate(value, label, minimum, maximum):
@@ -3276,6 +3544,72 @@ def get_year_counts(db, user_id=None, allowed_tags=None):
     return counts
 
 
+def get_year_photo_counts(db, user_id=None):
+    owner_id = user_id if user_id is not None else g.user["id"]
+    rows = db.execute(
+        """
+        SELECT year, COUNT(*) AS photo_count
+        FROM photos
+        WHERE user_id = ?
+        GROUP BY year
+        """,
+        (owner_id,),
+    ).fetchall()
+    return {row["year"]: row["photo_count"] for row in rows}
+
+
+def heat_map_square_color(count, max_count):
+    if count <= 0 or max_count <= 0:
+        return (29, 78, 216)
+    intensity = min(1.0, count / max_count)
+    blue = (29, 78, 216)
+    red = (220, 38, 38)
+    return tuple(
+        round(blue[index] + ((red[index] - blue[index]) * intensity))
+        for index in range(3)
+    )
+
+
+def render_timeline_heat_map(years, photo_counts):
+    years = list(years)
+    square_size = 72
+    gap = 8
+    padding = 24
+    columns = max(1, math.ceil(math.sqrt(len(years) or 1)))
+    rows = max(1, math.ceil((len(years) or 1) / columns))
+    width = padding * 2 + columns * square_size + (columns - 1) * gap
+    height = padding * 2 + rows * square_size + (rows - 1) * gap
+    max_count = max((photo_counts.get(year, 0) for year in years), default=0)
+
+    image = Image.new("RGB", (width, height), (247, 251, 250))
+    draw = ImageDraw.Draw(image)
+    for index, year in enumerate(years):
+        row = index // columns
+        column = index % columns
+        x = padding + column * (square_size + gap)
+        y = padding + row * (square_size + gap)
+        count = photo_counts.get(year, 0)
+        color = heat_map_square_color(count, max_count)
+        draw.rectangle(
+            (x, y, x + square_size - 1, y + square_size - 1),
+            fill=color,
+        )
+        text_color = (255, 255, 255)
+        year_text = str(year)
+        count_text = f"{count} photo" if count == 1 else f"{count} photos"
+        year_box = draw.textbbox((0, 0), year_text)
+        count_box = draw.textbbox((0, 0), count_text)
+        year_x = x + (square_size - (year_box[2] - year_box[0])) / 2
+        count_x = x + (square_size - (count_box[2] - count_box[0])) / 2
+        draw.text((year_x, y + 22), year_text, fill=text_color)
+        draw.text((count_x, y + 40), count_text, fill=text_color)
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 def get_month_counts(db, year, user_id=None, allowed_tags=None):
     owner_id = user_id if user_id is not None else g.user["id"]
     counts = {}
@@ -3462,6 +3796,65 @@ def random_public_photos(db, limit=48):
     return attach_reactions(db, photos)
 
 
+PHOTO_WALL_ITEM_LIMIT = 80
+PHOTO_WALL_RESERVED_INDEXES = {
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+}
+
+
+def photo_wall_placeholder(index, reserved=False):
+    return {
+        "id": f"{'reserved' if reserved else 'placeholder'}-{index + 1}",
+        "image_url": "",
+        "title": "Photo placeholder",
+        "placeholder": True,
+        "reserved": reserved,
+    }
+
+
+def public_photo_wall_items(db, limit=PHOTO_WALL_ITEM_LIMIT):
+    reserved_indexes = {index for index in PHOTO_WALL_RESERVED_INDEXES if index < limit}
+    public_photos = iter(random_public_photos(db, limit=limit - len(reserved_indexes)))
+    photos = []
+    for index in range(limit):
+        if index in reserved_indexes:
+            photos.append(photo_wall_placeholder(index, reserved=True))
+            continue
+
+        photo = next(public_photos, None)
+        if photo is None:
+            photos.append(photo_wall_placeholder(index))
+            continue
+
+        photos.append(
+            {
+                "id": photo["id"],
+                "image_url": photo["image_url"],
+                "title": photo["title"],
+                "placeholder": False,
+                "reserved": False,
+            }
+        )
+    return photos
+
+
 def no_date_photo_suggestion(photo):
     filename_date = filename_date_candidate(photo.get("original_filename"))
     if filename_date and filename_date.year in user_years():
@@ -3554,6 +3947,75 @@ def build_splash_photo_page(db, *, year=None, no_date_only=False):
             for photo in page_photos
         ],
     }
+
+
+def get_admin_full_splash_user(connection_id):
+    connected_user = get_connected_user(connection_id)
+    if not current_user_is_admin():
+        abort(404)
+    return connected_user
+
+
+def get_admin_full_splash_photo(connection_id, photo_id):
+    connected_user = get_admin_full_splash_user(connection_id)
+    photo = get_db().execute(
+        """
+        SELECT *
+        FROM photos
+        WHERE id = ? AND user_id = ?
+        """,
+        (photo_id, connected_user["id"]),
+    ).fetchone()
+    if photo is None:
+        abort(404)
+    return photo
+
+
+def build_admin_full_splash_photo_page(db, connection_id):
+    connected_user = get_admin_full_splash_user(connection_id)
+    page_size = request.args.get("page_size", default=80, type=int)
+    if page_size is None:
+        page_size = 80
+    page_size = max(1, min(page_size, 240))
+
+    page = request.args.get("page", default=0, type=int)
+    if page is None:
+        page = 0
+
+    seed = (request.args.get("seed") or "").strip()[:80] or secrets.token_hex(8)
+    rows = db.execute(
+        """
+        SELECT id, year, month, original_filename, title, caption, photo_date, created_at
+        FROM photos
+        WHERE user_id = ?
+        ORDER BY id ASC
+        """,
+        (connected_user["id"],),
+    ).fetchall()
+    photos = [dict(row) for row in rows]
+    random.Random(seed).shuffle(photos)
+    payloads = [
+        {
+            "id": photo["id"],
+            "year": photo["year"],
+            "month": photo["month"],
+            "title": photo_display_title(photo),
+            "caption": photo["caption"] or "",
+            "display_date": photo["photo_date"] or "",
+            "thumbnail_url": url_for(
+                "admin_full_splash_photo_thumbnail",
+                connection_id=connection_id,
+                photo_id=photo["id"],
+            ),
+            "full_url": url_for(
+                "admin_full_splash_photo_image",
+                connection_id=connection_id,
+                photo_id=photo["id"],
+            ),
+        }
+        for photo in photos
+    ]
+    return paginated_splash_payload(payloads, page, page_size, seed)
 
 
 def build_month_splash_photo_page(db, year, month):
@@ -3665,6 +4127,71 @@ def redirect_back(default_endpoint="timeline", **kwargs):
     if target and target.startswith("/") and not target.startswith("//"):
         return redirect(target)
     return redirect(url_for(default_endpoint, **kwargs))
+
+
+LEGACY_NOTE_TARGETS = ("person", "chapter", "year", "place")
+
+
+def legacy_note_target_key(target_type, target_key):
+    raw_key = str(target_key or "").strip()
+    if target_type in ("person", "chapter"):
+        try:
+            return str(int(raw_key))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Choose a valid note target.") from exc
+    if target_type == "year":
+        try:
+            year = int(raw_key)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Choose a valid year.") from exc
+        if year not in user_years():
+            raise ValueError("Choose a year in your timeline.")
+        return str(year)
+    if target_type == "place":
+        normalized_place = normalize_place_name(raw_key)
+        if not normalized_place:
+            raise ValueError("Choose a valid place.")
+        return place_group_key(normalized_place)
+    raise ValueError("Choose a valid note target.")
+
+
+def legacy_note_target_exists(db, target_type, target_key):
+    if target_type == "person":
+        get_timeline_person(db, int(target_key))
+        return True
+    if target_type == "chapter":
+        get_owned_chapter(int(target_key))
+        return True
+    if target_type == "year":
+        return int(target_key) in user_years()
+    if target_type == "place":
+        for item in build_timeline_map_items(db):
+            if place_group_key(item["location_name"]) == target_key:
+                return True
+        raise ValueError("Choose a place from your timeline.")
+    raise ValueError("Choose a valid note target.")
+
+
+def normalize_legacy_note_target(db, target_type, target_key):
+    normalized_type = (target_type or "").strip().lower()
+    if normalized_type not in LEGACY_NOTE_TARGETS:
+        raise ValueError("Choose a valid note target.")
+    normalized_key = legacy_note_target_key(normalized_type, target_key)
+    legacy_note_target_exists(db, normalized_type, normalized_key)
+    return normalized_type, normalized_key
+
+
+def load_legacy_notes(db, target_type, target_key):
+    normalized_key = legacy_note_target_key(target_type, target_key)
+    return db.execute(
+        """
+        SELECT id, target_type, target_key, title, body, created_at, updated_at
+        FROM legacy_notes
+        WHERE user_id = ? AND target_type = ? AND target_key = ?
+        ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
+        """,
+        (g.user["id"], target_type, normalized_key),
+    ).fetchall()
 
 
 def request_includes_messages():
@@ -4121,6 +4648,116 @@ def chapter_invites_for_chapter(db, chapter_id):
     ).fetchall()
 
 
+def chapter_share_link_duration(value):
+    allowed_days = {days for days, _label in CHAPTER_SHARE_LINK_DURATIONS}
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        return 30
+    return days if days in allowed_days else 30
+
+
+def parse_stored_datetime(value):
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def chapter_share_link_status(row):
+    if row["revoked_at"]:
+        return "revoked"
+    expires_at = parse_stored_datetime(row["expires_at"])
+    if expires_at is None or expires_at <= utc_now():
+        return "expired"
+    return "active"
+
+
+def chapter_share_link_url(token):
+    return url_for("public_chapter_share", token=token, _external=True)
+
+
+def chapter_share_links_for_chapter(db, chapter_id):
+    rows = db.execute(
+        """
+        SELECT *
+        FROM chapter_share_links
+        WHERE chapter_id = ?
+        ORDER BY created_at DESC, id DESC
+        """,
+        (chapter_id,),
+    ).fetchall()
+    links = []
+    for row in rows:
+        link = dict(row)
+        link["status"] = chapter_share_link_status(row)
+        link["share_url"] = chapter_share_link_url(row["token"]) if link["status"] == "active" else ""
+        links.append(link)
+    return links
+
+
+def create_chapter_share_link(db, chapter_id, days):
+    token = secrets.token_urlsafe(32)
+    expires_at = (utc_now() + timedelta(days=days)).isoformat()
+    db.execute(
+        """
+        INSERT INTO chapter_share_links (chapter_id, token, expires_at)
+        VALUES (?, ?, ?)
+        """,
+        (chapter_id, token, expires_at),
+    )
+    return token
+
+
+def get_valid_chapter_share_link(token):
+    row = get_db().execute(
+        """
+        SELECT
+            csl.*,
+            c.user_id,
+            c.title,
+            c.description,
+            c.visibility,
+            c.cover_item_kind,
+            c.cover_item_id,
+            u.username,
+            u.first_name,
+            u.last_name
+        FROM chapter_share_links csl
+        JOIN chapters c ON c.id = csl.chapter_id
+        JOIN users u ON u.id = c.user_id
+        WHERE csl.token = ?
+        """,
+        (token or "",),
+    ).fetchone()
+    if row is None or chapter_share_link_status(row) != "active":
+        abort(404)
+
+    chapter = dict(row)
+    chapter["id"] = row["chapter_id"]
+    chapter["owner_name"] = user_full_name(row) or row["username"]
+    return chapter
+
+
+def public_chapter_share_contains_item(db, token, item_kind, item_id):
+    if item_kind not in ("photo", "text"):
+        abort(404)
+    chapter = get_valid_chapter_share_link(token)
+    row = db.execute(
+        """
+        SELECT id
+        FROM chapter_items
+        WHERE chapter_id = ? AND item_kind = ? AND item_id = ?
+        """,
+        (chapter["id"], item_kind, item_id),
+    ).fetchone()
+    if row is None:
+        abort(404)
+    return chapter
+
+
 def invitable_chapter_connections(db, chapter_id):
     invited_ids = {
         row["recipient_id"]
@@ -4363,6 +5000,7 @@ def build_chapter_items(
     item_url_builder=None,
     reaction_url_builder=None,
     include_messages=True,
+    include_reactions=True,
 ):
     owner_id = owner_id if owner_id is not None else g.user["id"]
     refs = db.execute(
@@ -4485,8 +5123,9 @@ def build_chapter_items(
             if include_messages:
                 item["messages"] = load_messages_for_timeline_item(db, "text", entry["id"]) if message_url_builder else []
             items.append(item)
-    attach_reactions(db, items)
-    if reaction_url_builder:
+    if include_reactions:
+        attach_reactions(db, items)
+    if include_reactions and reaction_url_builder:
         for item in items:
             item["reactions"]["reaction_url"] = reaction_url_builder(item["kind"], item["id"])
     return items
@@ -5887,13 +6526,65 @@ def review_issue_stat(label, count, url):
     }
 
 
+def memory_completeness_score(total_memories, total_checks, missing_checks):
+    if total_memories == 0 or total_checks == 0:
+        percent = 0
+        label = "No memories yet"
+        summary = "Add memories to start building your score."
+    else:
+        completed_checks = max(total_checks - missing_checks, 0)
+        percent = round(completed_checks * 100 / total_checks)
+        if percent >= 90:
+            label = "Polished"
+            summary = "Most memories have the context they need."
+        elif percent >= 65:
+            label = "In progress"
+            summary = "Your timeline has a solid base, with a few gaps to fill."
+        else:
+            label = "Needs context"
+            summary = "Add captions, people, places, and chapters to make memories easier to browse."
+
+    return {
+        "percent": percent,
+        "label": label,
+        "summary": summary,
+        "completed_checks": max(total_checks - missing_checks, 0),
+        "total_checks": total_checks,
+        "missing_checks": missing_checks,
+    }
+
+
 def memory_review_context(row):
     display_date = row["photo_date"] if "photo_date" in row.keys() else row["entry_date"]
     return timeline_search_context(row, format_timeline_date_label(row["year"], row["month"], display_date))
 
 
+def review_time_capsule_prompts(kind, row, people):
+    prompts = guided_prompts_for_item(kind, row, people)
+    if kind == "photo":
+        missing_targets = set()
+        if not (row["caption"] or "").strip():
+            missing_targets.add("caption")
+        if not people:
+            missing_targets.add("people")
+        if not timeline_search_has_location(row):
+            missing_targets.add("location")
+        return [prompt for prompt in prompts if prompt["target"] in missing_targets]
+
+    missing_targets = set()
+    if len((row["body"] or "").strip()) < 140:
+        missing_targets.add("body")
+    if not people:
+        missing_targets.add("people")
+    if not timeline_search_has_location(row):
+        missing_targets.add("location")
+    return [prompt for prompt in prompts if prompt["target"] in missing_targets]
+
+
 def memory_review_item(kind, row, tags, people, chapter_membership=None):
     chapter_membership = chapter_membership or {}
+    guided_prompts = guided_prompts_for_item(kind, row, people)
+    review_prompts = review_time_capsule_prompts(kind, row, people)
     if kind == "photo":
         title = photo_display_title(row)
         preview = row["caption"] or "Photo needs a caption."
@@ -5931,6 +6622,8 @@ def memory_review_item(kind, row, tags, people, chapter_membership=None):
         "context": memory_review_context(row),
         "preview": short_preview(preview, 150),
         "meta": timeline_search_meta(row, tags, 0, chapter_membership, people),
+        "guided_prompts": guided_prompts,
+        "review_prompts": review_prompts,
         "image_url": image_url,
         "url": timeline_item_link(g.user["id"], row["year"], row["month"], kind, row["id"]),
         "api_url": api_url,
@@ -5970,6 +6663,16 @@ def build_memory_review_queue(db, sample_limit=4):
     text_chapters = load_timeline_search_chapter_memberships(db, "text", text_ids)
 
     issue_defs = {
+        "prompts": {
+            "key": "prompts",
+            "title": "Time capsule questions",
+            "description": "Answer small prompts to turn sparse memories into stories future readers can understand.",
+            "action_label": "Answer prompts",
+            "url": url_for("timeline_review") + "#time-capsule-questions",
+            "items": [],
+            "count": 0,
+            "priority": 1,
+        },
         "captions": {
             "key": "captions",
             "title": "Photos need captions",
@@ -5978,7 +6681,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "url": url_for("timeline_search", kind="photo", caption="without"),
             "items": [],
             "count": 0,
-            "priority": 1,
+            "priority": 2,
         },
         "places": {
             "key": "places",
@@ -5988,7 +6691,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "url": url_for("timeline_search", location="without"),
             "items": [],
             "count": 0,
-            "priority": 2,
+            "priority": 3,
         },
         "people": {
             "key": "people",
@@ -5998,7 +6701,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "url": url_for("timeline_people"),
             "items": [],
             "count": 0,
-            "priority": 3,
+            "priority": 4,
         },
         "chapters": {
             "key": "chapters",
@@ -6008,7 +6711,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "url": url_for("chapter_draft"),
             "items": [],
             "count": 0,
-            "priority": 4,
+            "priority": 5,
         },
         "public": {
             "key": "public",
@@ -6018,7 +6721,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "url": url_for("timeline_search", kind="photo", visibility="public", caption="without"),
             "items": [],
             "count": 0,
-            "priority": 5,
+            "priority": 6,
         },
     }
 
@@ -6033,6 +6736,8 @@ def build_memory_review_queue(db, sample_limit=4):
         people = photo_people.get(row["id"], [])
         chapter_membership = photo_chapters.get(row["id"], {})
         item = memory_review_item("photo", row, tags, people, chapter_membership)
+        if item["review_prompts"]:
+            add_issue("prompts", item)
         if not (row["caption"] or "").strip():
             add_issue("captions", item)
         if not timeline_search_has_location(row):
@@ -6049,6 +6754,8 @@ def build_memory_review_queue(db, sample_limit=4):
         people = text_people.get(row["id"], [])
         chapter_membership = text_chapters.get(row["id"], {})
         item = memory_review_item("text", row, tags, people, chapter_membership)
+        if item["review_prompts"]:
+            add_issue("prompts", item)
         if not timeline_search_has_location(row):
             add_issue("places", item)
         if not people:
@@ -6100,7 +6807,11 @@ def build_memory_review_queue(db, sample_limit=4):
     issues.sort(key=lambda issue: (issue["priority"], -issue["count"], issue["title"].casefold()))
     total_memories = len(photo_rows) + len(text_rows)
     total_issues = sum(issue["count"] for issue in issues)
+    core_issue_keys = ("captions", "places", "people", "chapters")
+    missing_checks = sum(issue_defs[key]["count"] for key in core_issue_keys)
+    total_checks = (len(photo_rows) * 4) + (len(text_rows) * 3)
     return {
+        "score": memory_completeness_score(total_memories, total_checks, missing_checks),
         "stats": [
             review_issue_stat("Review issues", total_issues, url_for("timeline_review")),
             review_issue_stat("Memories", total_memories, url_for("timeline")),
@@ -6123,64 +6834,6 @@ def build_memory_review_queue(db, sample_limit=4):
 
 
 COLLECTION_KIND_CHOICES = ("", "photo", "text")
-TIMELINE_STORY_SOURCE_CHOICES = ("search", "collections")
-
-
-def timeline_story_source_mode(source):
-    mode = (source.get("source_mode") or source.get("mode") or "search").strip().lower()
-    if mode not in TIMELINE_STORY_SOURCE_CHOICES:
-        return "search"
-    return mode
-
-
-def normalize_story_filter_payload(source):
-    if source is None:
-        return {}
-    if isinstance(source, str):
-        try:
-            return json.loads(source)
-        except (TypeError, json.JSONDecodeError):
-            return {}
-    if isinstance(source, dict):
-        return source
-    if hasattr(source, "to_dict"):
-        return source.to_dict(flat=True)
-    try:
-        return dict(source)
-    except (TypeError, ValueError):
-        return {}
-
-
-def timeline_story_filters(source):
-    source = normalize_story_filter_payload(source)
-    mode = timeline_story_source_mode(source)
-    return mode, parse_story_filters(source, mode)
-
-
-def parse_story_filters(payload, mode):
-    payload = normalize_story_filter_payload(payload)
-    if mode == "collections":
-        return collection_filters_from_source(payload)
-    filters = timeline_search_filters(payload)
-    if filters["kind"] == "message":
-        filters["kind"] = "all"
-    return filters
-
-
-def timeline_story_has_filters(mode, filters):
-    if mode == "collections":
-        return collection_filters_have_values(filters)
-    return timeline_search_has_active_filters(filters)
-
-
-def timeline_story_filter_values(mode, filters):
-    if mode == "collections":
-        return collection_query_values(filters)
-    values = {}
-    for key, value in filters.items():
-        if value not in (None, "", "all"):
-            values[key] = value
-    return values
 
 
 def normalize_collection_date(value):
@@ -6276,60 +6929,6 @@ def load_saved_collection_views(db):
         (g.user["id"],),
     ).fetchall()
     return [collection_view_payload(row) for row in rows]
-
-
-def build_timeline_stories_query(db, mode, filters):
-    if mode == "collections":
-        results = search_collection_items(db, filters)
-        return [dict(item, kind_key=item["kind"]) for item in results]
-    normalized_filters = dict(filters)
-    items = search_timeline_content(
-        db,
-        normalized_filters,
-        include_messages=False,
-        include_chapters=False,
-        item_limit=240,
-    )
-    return [item for item in items if item.get("kind_key") in ("photo", "text")]
-
-
-def load_timeline_stories(db):
-    rows = db.execute(
-        """
-        SELECT *
-        FROM timeline_stories
-        WHERE user_id = ?
-        ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
-        """,
-        (g.user["id"],),
-    ).fetchall()
-    return [
-        {
-            "id": row["id"],
-            "title": row["title"],
-            "subtitle": row["subtitle"],
-            "source_mode": row["source_mode"],
-            "filter_payload": normalize_story_filter_payload(row["filter_payload"]),
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-            "url": url_for("timeline_story", story_id=row["id"]),
-        }
-        for row in rows
-    ]
-
-
-def get_timeline_story(db, story_id):
-    row = db.execute(
-        """
-        SELECT *
-        FROM timeline_stories
-        WHERE id = ? AND user_id = ?
-        """,
-        (story_id, g.user["id"]),
-    ).fetchone()
-    if row is None:
-        abort(404)
-    return row
 
 
 def collection_item_date_expr(table_alias, date_column):
@@ -7053,6 +7652,216 @@ def build_timeline_api_items(
     return items
 
 
+def anniversary_today():
+    configured_today = app.config.get("ANNIVERSARY_TODAY")
+    if isinstance(configured_today, date):
+        return configured_today
+    if configured_today:
+        try:
+            return date.fromisoformat(str(configured_today))
+        except ValueError:
+            pass
+    return date.today()
+
+
+def next_anniversary_date(month, day, today):
+    for year in (today.year, today.year + 1):
+        try:
+            anniversary_date = date(year, month, day)
+        except ValueError:
+            continue
+        if anniversary_date >= today:
+            return anniversary_date
+    return None
+
+
+def anniversary_day_label(days_away):
+    if days_away == 0:
+        return "Today"
+    if days_away == 1:
+        return "Tomorrow"
+    return f"In {days_away} days"
+
+
+def anniversary_age_label(years):
+    if years == 1:
+        return "1 year ago"
+    return f"{years} years ago"
+
+
+def anniversary_group_label(days_away):
+    if days_away == 0:
+        return "On this day"
+    if days_away == 1:
+        return "Tomorrow"
+    return "Coming this week"
+
+
+def anniversary_item_from_row(kind, row, tags, people, today, window_days):
+    date_value = row["photo_date"] if kind == "photo" else row["entry_date"]
+    if not date_value:
+        return None
+    try:
+        original_date = date.fromisoformat(date_value)
+    except ValueError:
+        return None
+
+    anniversary_date = next_anniversary_date(original_date.month, original_date.day, today)
+    if anniversary_date is None:
+        return None
+    days_away = (anniversary_date - today).days
+    years = anniversary_date.year - original_date.year
+    if days_away < 0 or days_away > window_days or years <= 0:
+        return None
+
+    if kind == "photo":
+        title = photo_display_title(row)
+        preview = row["caption"] or "Photo memory"
+        image_url = url_for("photo_image", photo_id=row["id"])
+    else:
+        title = "Text entry"
+        preview = row["body"]
+        image_url = ""
+
+    meta = [
+        anniversary_day_label(days_away),
+        anniversary_age_label(years),
+        *timeline_search_meta(row, tags, 0, None, people),
+    ]
+    return {
+        "kind": "Photo" if kind == "photo" else "Text entry",
+        "kind_key": kind,
+        "id": row["id"],
+        "title": title,
+        "context": format_timeline_date_label(row["year"], row["month"], date_value),
+        "preview": short_preview(preview, 150),
+        "meta": meta,
+        "image_url": image_url,
+        "url": timeline_item_link(g.user["id"], row["year"], row["month"], kind, row["id"]),
+        "days_away": days_away,
+        "years": years,
+        "anniversary_date": anniversary_date,
+        "sort_key": (days_away, -original_date.year, kind, row["id"]),
+    }
+
+
+def anniversary_birthday_item(today, window_days):
+    if not g.user["birthday"]:
+        return None
+    try:
+        birthday = date.fromisoformat(g.user["birthday"])
+    except ValueError:
+        return None
+
+    birthday_date = next_anniversary_date(birthday.month, birthday.day, today)
+    if birthday_date is None:
+        return None
+    days_away = (birthday_date - today).days
+    age = birthday_date.year - birthday.year
+    if days_away < 0 or days_away > window_days or age <= 0:
+        return None
+
+    return {
+        "kind": "Milestone",
+        "kind_key": "birthday",
+        "id": "birthday",
+        "title": "Your birthday",
+        "context": format_month_day(birthday_date),
+        "preview": f"You turn {age}.",
+        "meta": [anniversary_day_label(days_away), f"Age {age}"],
+        "image_url": "",
+        "url": url_for("birthday"),
+        "days_away": days_away,
+        "years": age,
+        "anniversary_date": birthday_date,
+        "sort_key": (days_away, -9999, "birthday", 0),
+    }
+
+
+def build_anniversary_mode(db, today=None, window_days=7, sample_limit=48):
+    today = today or anniversary_today()
+    photo_rows = db.execute(
+        """
+        SELECT id, year, month, original_filename, title, caption, photo_date,
+               location_name, latitude, longitude, created_at
+        FROM photos
+        WHERE user_id = ? AND photo_date IS NOT NULL
+        ORDER BY photo_date DESC, id DESC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    text_rows = db.execute(
+        """
+        SELECT id, year, month, body, entry_date, location_name, latitude, longitude,
+               created_at, updated_at
+        FROM text_entries
+        WHERE user_id = ? AND entry_date IS NOT NULL
+        ORDER BY entry_date DESC, id DESC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+
+    photo_tags = load_tags_for_items(db, "photo", [row["id"] for row in photo_rows])
+    text_tags = load_tags_for_items(db, "text", [row["id"] for row in text_rows])
+    photo_people = load_people_for_items(db, "photo", [row["id"] for row in photo_rows])
+    text_people = load_people_for_items(db, "text", [row["id"] for row in text_rows])
+
+    items = []
+    birthday_item = anniversary_birthday_item(today, window_days)
+    if birthday_item:
+        items.append(birthday_item)
+
+    for row in photo_rows:
+        item = anniversary_item_from_row(
+            "photo",
+            row,
+            photo_tags.get(row["id"], [DEFAULT_TAG]),
+            photo_people.get(row["id"], []),
+            today,
+            window_days,
+        )
+        if item:
+            items.append(item)
+
+    for row in text_rows:
+        item = anniversary_item_from_row(
+            "text",
+            row,
+            text_tags.get(row["id"], [DEFAULT_TAG]),
+            text_people.get(row["id"], []),
+            today,
+            window_days,
+        )
+        if item:
+            items.append(item)
+
+    items.sort(key=lambda item: item["sort_key"])
+    items = items[:sample_limit]
+    groups = []
+    for days_away in sorted({item["days_away"] for item in items}):
+        group_items = [item for item in items if item["days_away"] == days_away]
+        groups.append(
+            {
+                "label": anniversary_group_label(days_away),
+                "date_label": format_month_day(today + timedelta(days=days_away)),
+                "days_away": days_away,
+                "items": group_items,
+            }
+        )
+
+    return {
+        "today": today,
+        "today_label": format_month_day(today),
+        "window_days": window_days,
+        "groups": groups,
+        "items": items,
+        "today_count": sum(1 for item in items if item["days_away"] == 0),
+        "upcoming_count": sum(1 for item in items if item["days_away"] > 0),
+        "memory_count": sum(1 for item in items if item["kind_key"] in ("photo", "text")),
+        "milestone_count": sum(1 for item in items if item["kind_key"] == "birthday"),
+    }
+
+
 def build_pdf_export_items(db, owner_id, year, month=None):
     photo_query = """
         SELECT id, year, month, original_filename, title, caption, mime_type, image_data, photo_date, created_at
@@ -7128,6 +7937,123 @@ def build_pdf_export_items(db, owner_id, year, month=None):
 
     items.sort(key=timeline_item_sort_key)
     return items
+
+
+def build_chapter_pdf_export_items(db, chapter_id, owner_id):
+    refs = db.execute(
+        """
+        SELECT id, item_kind, item_id, position
+        FROM chapter_items
+        WHERE chapter_id = ?
+        ORDER BY position ASC, id ASC
+        """,
+        (chapter_id,),
+    ).fetchall()
+    if not refs:
+        return []
+
+    photo_ids = [row["item_id"] for row in refs if row["item_kind"] == "photo"]
+    text_ids = [row["item_id"] for row in refs if row["item_kind"] == "text"]
+
+    photo_map = {}
+    if photo_ids:
+        placeholders = ",".join(["?"] * len(photo_ids))
+        photo_rows = db.execute(
+            f"""
+            SELECT id, year, month, original_filename, title, caption, mime_type, image_data, photo_date, created_at
+            FROM photos
+            WHERE user_id = ? AND id IN ({placeholders})
+            """,
+            (owner_id, *photo_ids),
+        ).fetchall()
+        photo_map = {row["id"]: row for row in photo_rows}
+
+    text_map = {}
+    if text_ids:
+        placeholders = ",".join(["?"] * len(text_ids))
+        text_rows = db.execute(
+            f"""
+            SELECT id, year, month, body, entry_date, created_at, updated_at
+            FROM text_entries
+            WHERE user_id = ? AND id IN ({placeholders})
+            """,
+            (owner_id, *text_ids),
+        ).fetchall()
+        text_map = {row["id"]: row for row in text_rows}
+
+    photo_tags = load_tags_for_items(db, "photo", photo_ids, owner_id)
+    text_tags = load_tags_for_items(db, "text", text_ids, owner_id)
+    photo_people = load_people_for_items(db, "photo", photo_ids, owner_id)
+    text_people = load_people_for_items(db, "text", text_ids, owner_id)
+
+    items = []
+    for ref in refs:
+        if ref["item_kind"] == "photo":
+            photo = photo_map.get(ref["item_id"])
+            if photo is None:
+                continue
+            tags = photo_tags.get(photo["id"], [])
+            people = photo_people.get(photo["id"], [])
+            items.append(
+                {
+                    "kind": "photo",
+                    "id": photo["id"],
+                    "year": photo["year"],
+                    "month": photo["month"],
+                    "title": photo_display_title(photo),
+                    "caption": photo["caption"] or "",
+                    "display_date": photo["photo_date"],
+                    "date_label": format_timeline_date_label(photo["year"], photo["month"], photo["photo_date"]),
+                    "created_at": photo["created_at"],
+                    "mime_type": photo["mime_type"],
+                    "image_data": photo["image_data"],
+                    "messages": load_messages_for_timeline_item(db, "photo", photo["id"]),
+                    "tags": tags,
+                    "tags_text": tags_to_text(tags),
+                    **people_payload(people),
+                    **privacy_payload_for_tags(tags),
+                    "guided_prompts": guided_prompts_for_item("photo", photo, people),
+                }
+            )
+        else:
+            entry = text_map.get(ref["item_id"])
+            if entry is None:
+                continue
+            tags = text_tags.get(entry["id"], [])
+            people = text_people.get(entry["id"], [])
+            items.append(
+                {
+                    "kind": "text",
+                    "id": entry["id"],
+                    "year": entry["year"],
+                    "month": entry["month"],
+                    "title": "Text entry",
+                    "display_date": entry["entry_date"],
+                    "date_label": format_timeline_date_label(entry["year"], entry["month"], entry["entry_date"]),
+                    "created_at": entry["created_at"],
+                    "body": entry["body"],
+                    "messages": load_messages_for_timeline_item(db, "text", entry["id"]),
+                    "tags": tags,
+                    "tags_text": tags_to_text(tags),
+                    **people_payload(people),
+                    **privacy_payload_for_tags(tags),
+                    "guided_prompts": guided_prompts_for_item("text", entry, people),
+                }
+            )
+    return items
+
+
+def chapter_pdf_subtitle(chapter, owner_name):
+    exported_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    parts = [f"Owner: {owner_name}", f"Exported: {exported_at}"]
+    if chapter.get("description"):
+        parts.append(chapter["description"])
+    return " | ".join(parts)
+
+
+def chapter_pdf_filename(chapter):
+    slug = secure_filename(chapter["title"]) or f"chapter-{chapter['id']}"
+    return f"evertimeline-chapter-{slug}.pdf"
 
 
 def pdf_paragraph(text):
@@ -7621,6 +8547,20 @@ def backup_created_at(value):
     return text or utc_now().isoformat()
 
 
+def backup_upload_stream(backup_file):
+    stream = getattr(backup_file, "stream", backup_file)
+    try:
+        stream.seek(0, os.SEEK_END)
+        if stream.tell() == 0:
+            raise ValueError("Choose a backup zip to import.")
+        stream.seek(0)
+    except ValueError:
+        raise
+    except (AttributeError, OSError):
+        pass
+    return stream
+
+
 def read_backup_manifest(archive):
     try:
         manifest_data = archive.read(BACKUP_MANIFEST_NAME)
@@ -7639,6 +8579,34 @@ def read_backup_manifest(archive):
     if manifest.get("format_version") != BACKUP_FORMAT_VERSION:
         raise ValueError("This backup format is not supported by this version of EverTimeline.")
     return manifest
+
+
+def validate_backup_archive(archive):
+    entries = archive.infolist()
+    max_files = app.config["MAX_BACKUP_FILE_COUNT"]
+    if len(entries) > max_files:
+        raise ValueError(f"Backup contains too many files. The limit is {max_files:,} files.")
+
+    max_uncompressed = app.config["MAX_BACKUP_UNCOMPRESSED_BYTES"]
+    total_uncompressed = 0
+    seen_names = set()
+    manifest_info = None
+    for info in entries:
+        if info.filename in seen_names:
+            raise ValueError("Backup contains duplicate file entries.")
+        seen_names.add(info.filename)
+        if info.filename == BACKUP_MANIFEST_NAME:
+            manifest_info = info
+        total_uncompressed += info.file_size
+        if total_uncompressed > max_uncompressed:
+            raise ValueError("Backup is too large to import.")
+    if manifest_info is None:
+        raise ValueError("Choose an EverTimeline backup zip.")
+    max_manifest_bytes = app.config["MAX_BACKUP_MANIFEST_BYTES"]
+    if manifest_info.file_size > max_manifest_bytes:
+        raise ValueError(
+            f"Backup manifest is too large. The limit is {human_readable_bytes(max_manifest_bytes)}."
+        )
 
 
 def restore_backup_birthday(db, manifest):
@@ -7674,10 +8642,11 @@ def import_photo_from_backup(db, archive, photo):
     except KeyError as exc:
         raise ValueError("Backup photo image is missing from the zip.") from exc
 
-    if info.file_size > app.config["MAX_CONTENT_LENGTH"]:
+    if info.file_size > app.config["MAX_IMAGE_UPLOAD_BYTES"]:
         raise ValueError("Backup contains a photo that is too large.")
 
     original_image_data = archive.read(info)
+    validate_image_upload_bytes(original_image_data)
     mime_type = backup_text(photo.get("mime_type"), "image/png", 64)
     if mime_type not in ALLOWED_IMAGE_MIMES:
         raise ValueError("Backup contains an unsupported photo type.")
@@ -7886,12 +8855,9 @@ def import_chapters_from_backup(db, chapters, photo_id_map, text_id_map):
 
 
 def import_account_backup(backup_file):
-    data = backup_file.read()
-    if not data:
-        raise ValueError("Choose a backup zip to import.")
-
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        with zipfile.ZipFile(backup_upload_stream(backup_file)) as archive:
+            validate_backup_archive(archive)
             manifest = read_backup_manifest(archive)
             db = get_db()
             restore_backup_birthday(db, manifest)
@@ -7972,7 +8938,13 @@ def index():
 @app.route("/home")
 @birthday_required
 def home():
-    return render_template("home.html", photos=random_public_photos(get_db()))
+    return render_template("home.html", photos=public_photo_wall_items(get_db()))
+
+
+@app.route("/api/home/public-photos")
+@birthday_required
+def home_public_photos():
+    return jsonify({"photos": public_photo_wall_items(get_db())})
 
 
 @app.route("/splash")
@@ -8010,6 +8982,7 @@ def splash_photo_thumbnail(photo_id):
 
 
 @app.route("/register", methods=("GET", "POST"))
+@limiter.limit(REGISTER_RATE_LIMIT, methods=["POST"])
 def register():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
@@ -8206,7 +9179,85 @@ def admin_job_status(job_id):
     return jsonify(job_row_to_dict(job))
 
 
+@app.route("/admin/connections/<int:connection_id>/full-splash")
+@admin_required
+def admin_connection_full_splash(connection_id):
+    connected_user = get_admin_full_splash_user(connection_id)
+    return render_template(
+        "admin_full_splash.html",
+        connection=public_user_payload(connected_user),
+        seed=secrets.token_hex(8),
+    )
+
+
+@app.route("/admin/connections/<int:connection_id>/bulk-delete")
+@admin_required
+def admin_connection_bulk_delete(connection_id):
+    connected_user = get_admin_full_splash_user(connection_id)
+    return render_template(
+        "admin_bulk_delete.html",
+        connection=public_user_payload(connected_user),
+    )
+
+
+@app.route("/admin/connections/<int:connection_id>/api/full-splash-photos")
+@admin_required
+def admin_full_splash_photos(connection_id):
+    return jsonify(build_admin_full_splash_photo_page(get_db(), connection_id))
+
+
+@app.route("/admin/connections/<int:connection_id>/api/photos/delete", methods=("POST",))
+@admin_required
+def api_admin_bulk_delete_photos(connection_id):
+    connected_user = get_admin_full_splash_user(connection_id)
+    payload = request.get_json(silent=True) or request.form
+    photo_ids = parse_chapter_bulk_photo_ids(payload.get("photo_ids") or payload.get("selected_photo_ids"))
+    if not photo_ids:
+        return jsonify({"error": "Choose at least one photo to delete."}), 400
+
+    db = get_db()
+    deleted_ids = delete_owned_photos(db, photo_ids, connected_user["id"])
+    if not deleted_ids:
+        return jsonify({"error": "No matching photos were found."}), 404
+
+    db.commit()
+    deleted_count = len(deleted_ids)
+    return jsonify(
+        {
+            "status": "deleted",
+            "deleted_photo_ids": deleted_ids,
+            "deleted_count": deleted_count,
+            "message": f"Deleted {deleted_count} photo{'s' if deleted_count != 1 else ''}.",
+        }
+    )
+
+
+@app.route("/admin/connections/<int:connection_id>/photo/<int:photo_id>/image")
+@admin_required
+def admin_full_splash_photo_image(connection_id, photo_id):
+    photo = get_admin_full_splash_photo(connection_id, photo_id)
+    return Response(photo["image_data"], mimetype=photo["mime_type"])
+
+
+@app.route("/admin/connections/<int:connection_id>/photo/<int:photo_id>/thumbnail")
+@admin_required
+def admin_full_splash_photo_thumbnail(connection_id, photo_id):
+    photo = get_admin_full_splash_photo(connection_id, photo_id)
+    try:
+        thumbnail_data = storage_jpeg_from_image(
+            photo["image_data"],
+            quality=46,
+            max_edge=260,
+        )
+    except ValueError:
+        abort(404)
+    response = Response(thumbnail_data, mimetype=JPEG_STORAGE_MIME)
+    response.headers["Cache-Control"] = "private, max-age=86400"
+    return response
+
+
 @app.route("/login", methods=("GET", "POST"))
+@limiter.limit(LOGIN_RATE_LIMIT, methods=["POST"])
 def login():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
@@ -8228,6 +9279,7 @@ def login():
 
 
 @app.route("/forgot-password", methods=("GET", "POST"))
+@limiter.limit(PASSWORD_RESET_REQUEST_RATE_LIMIT, methods=["POST"])
 def forgot_password():
     reset_url = None
     identifier = ""
@@ -8244,10 +9296,11 @@ def forgot_password():
 
         db = get_db()
         user = find_user_for_password_reset(db, identifier)
-        if user is not None and app.config.get("LOCAL_PASSWORD_RESET_LINKS", False):
-            token = create_password_reset_token(db, user["id"])
-            db.commit()
-            reset_url = url_for("reset_password", token=token, _external=True)
+        try:
+            reset_url = prepare_password_reset_delivery(db, user)
+        except Exception:
+            db.rollback()
+            app.logger.exception("Password reset email delivery failed.")
 
         flash(
             "If an account matches that information and reset delivery is configured, reset instructions will be available.",
@@ -8262,6 +9315,7 @@ def forgot_password():
 
 
 @app.route("/reset-password/<token>", methods=("GET", "POST"))
+@limiter.limit(PASSWORD_RESET_SUBMIT_RATE_LIMIT, methods=["POST"])
 def reset_password(token):
     db = get_db()
     reset_row = get_valid_password_reset(db, token)
@@ -8385,7 +9439,41 @@ def timeline():
     preview = current_privacy_preview()
     years = list(user_years())
     year_counts = get_year_counts(db, allowed_tags=privacy_preview_allowed_tags(preview))
-    return render_template("timeline.html", years=years, year_counts=year_counts)
+    review_queue = build_memory_review_queue(db, sample_limit=0) if preview is None else None
+    return render_template(
+        "timeline.html",
+        years=years,
+        year_counts=year_counts,
+        review_queue=review_queue,
+    )
+
+
+@app.route("/timeline/heat-map.png")
+@birthday_required
+def timeline_heat_map_image():
+    db = get_db()
+    image_data = render_timeline_heat_map(
+        user_years(),
+        get_year_photo_counts(db),
+    )
+    response = Response(image_data, mimetype="image/png")
+    response.headers["Cache-Control"] = "private, max-age=300"
+    return response
+
+
+@app.route("/timeline/heat-map")
+@birthday_required
+def timeline_heat_map():
+    return render_template("timeline_heat_map.html")
+
+
+@app.route("/timeline/anniversaries")
+@birthday_required
+def timeline_anniversaries():
+    return render_template(
+        "timeline_anniversaries.html",
+        anniversaries=build_anniversary_mode(get_db()),
+    )
 
 
 @app.route("/timeline/review")
@@ -8476,8 +9564,9 @@ def timeline_import():
                 skipped_count += 1
                 continue
 
-            original_image_data = image.read()
-            if not original_image_data:
+            try:
+                original_image_data = read_uploaded_image_data(image)
+            except ValueError:
                 skipped_count += 1
                 continue
 
@@ -8830,108 +9919,6 @@ def delete_timeline_collection(view_id):
     return redirect(url_for("timeline_collections"))
 
 
-@app.route("/timeline/stories", methods=("GET", "POST"))
-@birthday_required
-def timeline_stories():
-    db = get_db()
-
-    if request.method == "POST":
-        title = " ".join((request.form.get("title") or "").strip().split())[:120]
-        if not title:
-            flash("Give your story a title.", "error")
-            return redirect(request.url)
-
-        try:
-            source_mode, story_filters = timeline_story_filters(request.form)
-        except ValueError as exc:
-            flash(str(exc), "error")
-            return redirect(request.url)
-        if not timeline_story_has_filters(source_mode, story_filters):
-            flash("Pick at least one filter before saving a story.", "error")
-            return redirect(
-                url_for(
-                    "timeline_stories",
-                    source_mode=source_mode,
-                    **timeline_story_filter_values(source_mode, story_filters),
-                )
-            )
-
-        subtitle = (request.form.get("subtitle") or "").strip()[:240]
-        db.execute(
-            """
-            INSERT INTO timeline_stories (
-                user_id, title, subtitle, source_mode, filter_payload
-            )
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                g.user["id"],
-                title,
-                subtitle,
-                source_mode,
-                json.dumps(story_filters),
-            ),
-        )
-        story_id = db.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
-        db.commit()
-        flash("Saved memory story.", "success")
-        return redirect(url_for("timeline_story", story_id=story_id))
-
-    try:
-        source_mode, filters = timeline_story_filters(request.args)
-    except ValueError as exc:
-        flash(str(exc), "error")
-        return redirect(url_for("timeline_stories"))
-    has_filters = timeline_story_has_filters(source_mode, filters)
-    items = build_timeline_stories_query(db, source_mode, filters) if has_filters else []
-    return render_template(
-        "timeline_stories.html",
-        stories=load_timeline_stories(db),
-        source_mode=source_mode,
-        filters=filters,
-        filter_values=timeline_story_filter_values(source_mode, filters),
-        has_filters=has_filters,
-        items=items,
-    )
-
-
-@app.route("/timeline/stories/<int:story_id>")
-@birthday_required
-def timeline_story(story_id):
-    db = get_db()
-    story = get_timeline_story(db, story_id)
-    source_mode = story["source_mode"]
-    story_filters = parse_story_filters(story["filter_payload"], source_mode)
-    has_filters = timeline_story_has_filters(source_mode, story_filters)
-    items = build_timeline_stories_query(db, source_mode, story_filters) if has_filters else []
-    source_label = "Timeline search" if source_mode == "search" else "Saved collection filters"
-    return render_template(
-        "timeline_story.html",
-        story=story,
-        source_label=source_label,
-        filters=story_filters,
-        items=items,
-        has_filters=has_filters,
-    )
-
-
-@app.route("/timeline/stories/<int:story_id>/delete", methods=("POST",))
-@birthday_required
-def delete_timeline_story(story_id):
-    db = get_db()
-    get_timeline_story(db, story_id)
-    db.execute(
-        """
-        DELETE FROM timeline_stories
-        WHERE id = ? AND user_id = ?
-        """,
-        (story_id, g.user["id"]),
-    )
-    db.commit()
-    flash("Deleted memory story.", "success")
-    return redirect(url_for("timeline_stories"))
-
-
 @app.route("/timeline/people")
 @birthday_required
 def timeline_people():
@@ -8954,6 +9941,9 @@ def timeline_person(person_id):
         person=person,
         items=items,
         hub=build_person_hub(db, person, items),
+        legacy_notes=load_legacy_notes(db, "person", person_id),
+        legacy_note_target={"type": "person", "key": person_id},
+        legacy_note_prompt=f"What I want you to know about {person['name']}",
     )
 
 @app.route("/timeline/map")
@@ -9014,6 +10004,9 @@ def timeline_place():
         mapped_items=[item for item in items if item["has_coordinates"]],
         year_label=build_place_summaries(items)[0]["year_label"],
         hub=build_place_hub(db, normalize_place_name(items[0]["location_name"]), items),
+        legacy_notes=load_legacy_notes(db, "place", normalize_place_name(items[0]["location_name"])),
+        legacy_note_target={"type": "place", "key": normalize_place_name(items[0]["location_name"])},
+        legacy_note_prompt=f"Why {normalize_place_name(items[0]['location_name'])} mattered",
     )
 
 
@@ -9035,6 +10028,9 @@ def year_view(year):
             year,
             allowed_tags=privacy_preview_allowed_tags(preview),
         ),
+        legacy_notes=[] if preview else load_legacy_notes(db, "year", year),
+        legacy_note_target={"type": "year", "key": year},
+        legacy_note_prompt=f"What {year} meant",
     )
 
 
@@ -9336,8 +10332,9 @@ def month_view(year, month):
                 skipped_count += 1
                 continue
 
-            original_image_data = image.read()
-            if not original_image_data:
+            try:
+                original_image_data = read_uploaded_image_data(image)
+            except ValueError:
                 skipped_count += 1
                 continue
 
@@ -9642,6 +10639,62 @@ def timeline_items():
     )
 
 
+@app.route("/legacy-notes", methods=("POST",))
+@birthday_required
+def create_legacy_note():
+    db = get_db()
+    try:
+        target_type, target_key = normalize_legacy_note_target(
+            db,
+            request.form.get("target_type", ""),
+            request.form.get("target_key", ""),
+        )
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect_back()
+
+    title = normalize_legacy_note_title(request.form.get("title", ""))
+    body = normalize_legacy_note_body(request.form.get("body", ""))
+    if not body:
+        flash("Legacy note cannot be empty.", "error")
+        return redirect_back()
+
+    db.execute(
+        """
+        INSERT INTO legacy_notes (user_id, target_type, target_key, title, body)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (g.user["id"], target_type, target_key, title, body),
+    )
+    db.commit()
+    flash("Legacy note saved.", "success")
+    return redirect_back()
+
+
+@app.route("/legacy-notes/<int:note_id>/delete", methods=("POST",))
+@birthday_required
+def delete_legacy_note(note_id):
+    db = get_db()
+    note = db.execute(
+        """
+        SELECT id
+        FROM legacy_notes
+        WHERE id = ? AND user_id = ?
+        """,
+        (note_id, g.user["id"]),
+    ).fetchone()
+    if note is None:
+        abort(404)
+
+    db.execute(
+        "DELETE FROM legacy_notes WHERE id = ? AND user_id = ?",
+        (note_id, g.user["id"]),
+    )
+    db.commit()
+    flash("Legacy note deleted.", "success")
+    return redirect_back()
+
+
 from routes.chapters import register_chapter_routes
 
 
@@ -9795,6 +10848,7 @@ def connection_photo_messages(connection_id, photo_id):
 
 
 @app.route("/connections/<int:connection_id>/api/timeline-item/<item_kind>/<int:item_id>/messages", methods=("GET", "POST"))
+@limiter.limit(MESSAGE_RATE_LIMIT, methods=["POST"])
 @login_required
 def connection_timeline_item_messages(connection_id, item_kind, item_id):
     get_connection_timeline_item(connection_id, item_kind, item_id)
@@ -10053,6 +11107,7 @@ def public_photo_image(photo_id):
 
 
 @app.route("/public/photo/<int:photo_id>/messages", methods=("GET", "POST"))
+@limiter.limit(MESSAGE_RATE_LIMIT, methods=["POST"])
 @birthday_required
 def public_photo_messages(photo_id):
     get_public_photo(photo_id)
@@ -10306,6 +11361,7 @@ def text_entry(entry_id):
 
 
 @app.route("/api/timeline-item/<item_kind>/<int:item_id>/messages", methods=("GET", "POST"))
+@limiter.limit(MESSAGE_RATE_LIMIT, methods=["POST"])
 @birthday_required
 def timeline_item_messages(item_kind, item_id):
     get_owned_timeline_item(item_kind, item_id)
@@ -10366,6 +11422,7 @@ def timeline_item_reaction_response(db, item_kind, item_id):
 
 
 @app.route("/api/photo/<int:photo_id>/messages", methods=("GET", "POST"))
+@limiter.limit(MESSAGE_RATE_LIMIT, methods=["POST"])
 @birthday_required
 def photo_messages(photo_id):
     get_owned_photo(photo_id)

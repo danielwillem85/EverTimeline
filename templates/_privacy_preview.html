@@ -1,21 +1,27 @@
 {% if g.user %}
-<section class="privacy-preview-panel" aria-label="Privacy preview">
-    <div>
-        <strong>Privacy preview</strong>
-        {% if privacy_preview %}
-            <span>{{ privacy_preview["label"] }} view: {{ privacy_preview["description"] }}</span>
-        {% else %}
-            <span>Your owner view shows every item.</span>
-        {% endif %}
+<details class="privacy-preview-panel" aria-label="Privacy preview controls">
+    <summary class="button secondary privacy-preview-toggle">
+        <span>Privacy preview</span>
+        <small>{% if privacy_preview %}{{ privacy_preview["label"] }} view{% else %}Owner view{% endif %}</small>
+    </summary>
+    <div class="privacy-preview-body">
+        <div class="privacy-preview-copy">
+            <strong>Privacy preview</strong>
+            {% if privacy_preview %}
+                <span>{{ privacy_preview["label"] }} view: {{ privacy_preview["description"] }}</span>
+            {% else %}
+                <span>Your owner view shows every item.</span>
+            {% endif %}
+        </div>
+        <nav class="privacy-preview-actions" aria-label="Privacy preview modes">
+            <a class="button small {{ 'primary' if not privacy_preview else 'secondary' }}" href="{{ preview_mode_url() }}">Only me</a>
+            {% for mode, option in privacy_preview_options.items() %}
+                <a
+                    class="button small {{ 'primary' if privacy_preview and privacy_preview['mode'] == mode else 'secondary' }}"
+                    href="{{ preview_mode_url(mode) }}"
+                >{{ option["label"] }}</a>
+            {% endfor %}
+        </nav>
     </div>
-    <nav class="privacy-preview-actions" aria-label="Privacy preview modes">
-        <a class="button small {{ 'primary' if not privacy_preview else 'secondary' }}" href="{{ preview_mode_url() }}">Only me</a>
-        {% for mode, option in privacy_preview_options.items() %}
-            <a
-                class="button small {{ 'primary' if privacy_preview and privacy_preview['mode'] == mode else 'secondary' }}"
-                href="{{ preview_mode_url(mode) }}"
-            >{{ option["label"] }}</a>
-        {% endfor %}
-    </nav>
-</section>
+</details>
 {% endif %}

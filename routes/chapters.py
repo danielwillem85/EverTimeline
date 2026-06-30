@@ -12,6 +12,7 @@ from flask import Response, abort, flash, g, jsonify, redirect, render_template,
 def register_chapter_routes(app, core):
     CHAPTER_SHARE_LINK_DURATIONS = core.CHAPTER_SHARE_LINK_DURATIONS
     DEFAULT_TAG = core.DEFAULT_TAG
+    MESSAGE_RATE_LIMIT = core.MESSAGE_RATE_LIMIT
     accepted_connection_between = core.accepted_connection_between
     birthday_required = core.birthday_required
     build_chapter_draft = core.build_chapter_draft
@@ -41,6 +42,7 @@ def register_chapter_routes(app, core):
     get_shared_chapter_item_access = core.get_shared_chapter_item_access
     get_shared_chapters = core.get_shared_chapters
     invitable_chapter_connections = core.invitable_chapter_connections
+    limiter = core.limiter
     load_messages_for_timeline_item = core.load_messages_for_timeline_item
     load_legacy_notes = core.load_legacy_notes
     move_chapter_item = core.move_chapter_item
@@ -1035,8 +1037,9 @@ def register_chapter_routes(app, core):
             )
         )
     
-    
+
     @app.route("/shared/chapters/<int:chapter_id>/api/timeline-item/<item_kind>/<int:item_id>/messages", methods=("GET", "POST"))
+    @limiter.limit(MESSAGE_RATE_LIMIT, methods=["POST"])
     @birthday_required
     def shared_chapter_item_messages(chapter_id, item_kind, item_id):
         get_shared_chapter_item_access(chapter_id, item_kind, item_id)

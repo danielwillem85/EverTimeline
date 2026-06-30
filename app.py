@@ -17,6 +17,7 @@ import traceback
 import zipfile
 from xml.sax.saxutils import escape
 
+import resend
 from flask import (
     Flask,
     Response,
@@ -31,6 +32,9 @@ from flask import (
     url_for,
 )
 from markupsafe import Markup, escape as html_escape
+from flask_limiter import Limiter
+from flask_limiter.errors import RateLimitExceeded
+from flask_limiter.util import get_remote_address
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
@@ -123,6 +127,11 @@ DEFAULT_MAX_IMAGE_PIXELS = 50_000_000
 DEFAULT_MAX_BACKUP_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 DEFAULT_MAX_BACKUP_MANIFEST_BYTES = 10 * 1024 * 1024
 DEFAULT_MAX_BACKUP_FILE_COUNT = 5_000
+LOGIN_RATE_LIMIT = "10 per minute"
+REGISTER_RATE_LIMIT = "5 per hour"
+PASSWORD_RESET_REQUEST_RATE_LIMIT = "5 per hour"
+PASSWORD_RESET_SUBMIT_RATE_LIMIT = "10 per hour"
+MESSAGE_RATE_LIMIT = "30 per minute"
 ADMIN_USERNAME = "Daniel"
 SQLITE_BUSY_TIMEOUT_MS = 30000
 IMAGE_CONVERSION_COMMIT_INTERVAL = 5
@@ -235,6 +244,14 @@ def configured_max_backup_file_count():
     return file_count
 
 
+def configured_resend_api_key():
+    return os.environ.get("RESEND_API_KEY", "").strip()
+
+
+def configured_resend_from_email():
+    return os.environ.get("RESEND_FROM_EMAIL", "").strip()
+
+
 def human_readable_bytes(byte_count):
     if byte_count >= 1024 * 1024 * 1024:
         return f"{byte_count / (1024 * 1024 * 1024):g} GB"
@@ -257,11 +274,21 @@ app.config.update(
     MAX_BACKUP_FILE_COUNT=configured_max_backup_file_count(),
     CSRF_PROTECT=True,
     LOCAL_PASSWORD_RESET_LINKS=is_local_development(),
+    PASSWORD_RESET_EMAIL_ENABLED=bool(configured_resend_api_key() and configured_resend_from_email()),
+    RESEND_API_KEY=configured_resend_api_key(),
+    RESEND_FROM_EMAIL=configured_resend_from_email(),
     PRODUCTION_SECURITY_HEADERS=PRODUCTION_SECURITY_ENABLED,
     RUN_JOBS_INLINE=False,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=PRODUCTION_SECURITY_ENABLED,
+)
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    storage_uri=os.environ.get("RATELIMIT_STORAGE_URI", "memory://"),
+    default_limits=[],
 )
 
 
@@ -276,6 +303,28 @@ def csrf_token():
 def csrf_field():
     token = html_escape(csrf_token())
     return Markup(f'<input type="hidden" name="csrf_token" value="{token}">')
+
+
+def wants_json_rate_limit_response():
+    return (
+        request.path.startswith("/api/")
+        or "/api/" in request.path
+        or request.path.endswith("/messages")
+        or request.accept_mimetypes.best == "application/json"
+    )
+
+
+@app.errorhandler(RateLimitExceeded)
+def handle_rate_limit_exceeded(error):
+    message = "Too many requests. Please wait and try again."
+    if wants_json_rate_limit_response():
+        return jsonify({"error": message}), 429
+
+    flash(message, "error")
+    if request.method in SAFE_METHODS:
+        return render_template("login.html"), 429
+    target = request.path if request.path.startswith("/") else url_for("index")
+    return redirect(target), 303
 
 
 @app.after_request
@@ -2114,6 +2163,70 @@ def create_password_reset_token(db, user_id):
         (user_id, hash_reset_token(token), expires_at),
     )
     return token
+
+
+def password_reset_email_configured():
+    return bool(
+        app.config.get("PASSWORD_RESET_EMAIL_ENABLED")
+        and app.config.get("RESEND_API_KEY")
+        and app.config.get("RESEND_FROM_EMAIL")
+    )
+
+
+def password_reset_email_payload(user, reset_url):
+    display_name = user_full_name(user) or user["username"]
+    escaped_name = html_escape(display_name)
+    escaped_url = html_escape(reset_url)
+    text = (
+        f"Hi {display_name},\n\n"
+        "Use this link to reset your EverTimeline password:\n"
+        f"{reset_url}\n\n"
+        "This link expires in 1 hour. If you did not request a password reset, you can ignore this email."
+    )
+    html = (
+        f"<p>Hi {escaped_name},</p>"
+        "<p>Use this link to reset your EverTimeline password:</p>"
+        f'<p><a href="{escaped_url}">Reset your password</a></p>'
+        "<p>This link expires in 1 hour. If you did not request a password reset, you can ignore this email.</p>"
+    )
+    return {
+        "from": app.config["RESEND_FROM_EMAIL"],
+        "to": [user["email"]],
+        "subject": "Reset your EverTimeline password",
+        "html": html,
+        "text": text,
+    }
+
+
+def send_password_reset_email(user, reset_url):
+    if not password_reset_email_configured() or not user["email"]:
+        raise ValueError("Password reset email delivery is not configured.")
+
+    resend.api_key = app.config["RESEND_API_KEY"]
+    return resend.Emails.send(password_reset_email_payload(user, reset_url))
+
+
+def prepare_password_reset_delivery(db, user):
+    if user is None:
+        return None
+
+    local_links_enabled = app.config.get("LOCAL_PASSWORD_RESET_LINKS", False)
+    email_delivery_enabled = password_reset_email_configured() and user["email"]
+    if not local_links_enabled and not email_delivery_enabled:
+        return None
+
+    token = create_password_reset_token(db, user["id"])
+    reset_url = url_for("reset_password", token=token, _external=True)
+
+    if local_links_enabled:
+        db.commit()
+        return reset_url
+
+    if email_delivery_enabled:
+        send_password_reset_email(user, reset_url)
+        db.commit()
+
+    return None
 
 
 def get_valid_password_reset(db, token):
@@ -8766,6 +8879,7 @@ def splash_photo_thumbnail(photo_id):
 
 
 @app.route("/register", methods=("GET", "POST"))
+@limiter.limit(REGISTER_RATE_LIMIT, methods=["POST"])
 def register():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
@@ -8963,6 +9077,7 @@ def admin_job_status(job_id):
 
 
 @app.route("/login", methods=("GET", "POST"))
+@limiter.limit(LOGIN_RATE_LIMIT, methods=["POST"])
 def login():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
@@ -8984,6 +9099,7 @@ def login():
 
 
 @app.route("/forgot-password", methods=("GET", "POST"))
+@limiter.limit(PASSWORD_RESET_REQUEST_RATE_LIMIT, methods=["POST"])
 def forgot_password():
     reset_url = None
     identifier = ""
@@ -9000,10 +9116,11 @@ def forgot_password():
 
         db = get_db()
         user = find_user_for_password_reset(db, identifier)
-        if user is not None and app.config.get("LOCAL_PASSWORD_RESET_LINKS", False):
-            token = create_password_reset_token(db, user["id"])
-            db.commit()
-            reset_url = url_for("reset_password", token=token, _external=True)
+        try:
+            reset_url = prepare_password_reset_delivery(db, user)
+        except Exception:
+            db.rollback()
+            app.logger.exception("Password reset email delivery failed.")
 
         flash(
             "If an account matches that information and reset delivery is configured, reset instructions will be available.",
@@ -9018,6 +9135,7 @@ def forgot_password():
 
 
 @app.route("/reset-password/<token>", methods=("GET", "POST"))
+@limiter.limit(PASSWORD_RESET_SUBMIT_RATE_LIMIT, methods=["POST"])
 def reset_password(token):
     db = get_db()
     reset_row = get_valid_password_reset(db, token)
@@ -10627,6 +10745,7 @@ def connection_photo_messages(connection_id, photo_id):
 
 
 @app.route("/connections/<int:connection_id>/api/timeline-item/<item_kind>/<int:item_id>/messages", methods=("GET", "POST"))
+@limiter.limit(MESSAGE_RATE_LIMIT, methods=["POST"])
 @login_required
 def connection_timeline_item_messages(connection_id, item_kind, item_id):
     get_connection_timeline_item(connection_id, item_kind, item_id)
@@ -10885,6 +11004,7 @@ def public_photo_image(photo_id):
 
 
 @app.route("/public/photo/<int:photo_id>/messages", methods=("GET", "POST"))
+@limiter.limit(MESSAGE_RATE_LIMIT, methods=["POST"])
 @birthday_required
 def public_photo_messages(photo_id):
     get_public_photo(photo_id)
@@ -11138,6 +11258,7 @@ def text_entry(entry_id):
 
 
 @app.route("/api/timeline-item/<item_kind>/<int:item_id>/messages", methods=("GET", "POST"))
+@limiter.limit(MESSAGE_RATE_LIMIT, methods=["POST"])
 @birthday_required
 def timeline_item_messages(item_kind, item_id):
     get_owned_timeline_item(item_kind, item_id)
@@ -11198,6 +11319,7 @@ def timeline_item_reaction_response(db, item_kind, item_id):
 
 
 @app.route("/api/photo/<int:photo_id>/messages", methods=("GET", "POST"))
+@limiter.limit(MESSAGE_RATE_LIMIT, methods=["POST"])
 @birthday_required
 def photo_messages(photo_id):
     get_owned_photo(photo_id)

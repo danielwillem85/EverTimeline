@@ -868,6 +868,63 @@ textarea {
     gap: 10px;
 }
 
+.timeline-page-heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.timeline-page-heading h1 {
+    flex: 0 0 auto;
+    width: 100%;
+}
+
+.timeline-page-actions {
+    align-items: center;
+    flex-wrap: nowrap;
+    gap: 6px;
+    justify-content: flex-start;
+    min-width: 0;
+}
+
+.timeline-page-actions > .button,
+.timeline-page-actions .privacy-preview-toggle {
+    min-height: 34px;
+    padding: 0 9px;
+    font-size: 0.78rem;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.timeline-page-actions .privacy-preview-panel {
+    position: relative;
+    flex: 0 0 auto;
+    margin-bottom: 0;
+}
+
+.timeline-page-actions .privacy-preview-toggle {
+    width: auto;
+    gap: 6px;
+}
+
+.timeline-page-actions .privacy-preview-toggle::after {
+    width: 14px;
+    height: 14px;
+    font-size: 0.72rem;
+}
+
+.timeline-page-actions .privacy-preview-toggle small {
+    font-size: 0.66rem;
+}
+
+.timeline-page-actions .privacy-preview-body {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: 60;
+    width: min(520px, calc(100vw - 32px));
+}
+
 .back-link {
     display: inline-block;
     margin-bottom: 8px;
@@ -5429,6 +5486,15 @@ details.privacy-toggle-panel {
 
     .page-actions {
         justify-content: flex-start;
+    }
+
+    .timeline-page-actions {
+        flex-wrap: wrap;
+    }
+
+    .timeline-page-actions .privacy-preview-body {
+        left: 0;
+        right: auto;
     }
 
     .progress-card-row {

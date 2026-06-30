@@ -3,22 +3,21 @@
 {% block title %}Timeline - EverTimeline{% endblock %}
 
 {% block content %}
-<section class="page-heading">
+<section class="page-heading timeline-page-heading">
     <h1>Timeline</h1>
-    <div class="page-actions">
+    <div class="page-actions timeline-page-actions">
         <a class="button primary" href="{{ url_for('timeline_anniversaries') }}">Anniversaries</a>
         <a class="button primary" href="{{ url_for('timeline_review') }}">Review queue</a>
         <a class="button primary" href="{{ url_for('timeline_import') }}">Import photos</a>
         <a class="button primary" href="{{ url_for('timeline_people') }}">People tags</a>
         <a class="button primary" href="{{ url_for('timeline_search') }}">Search timeline</a>
-        <a class="button secondary" href="{{ url_for('timeline_collections') }}">Collections</a>
-        <a class="button secondary" href="{{ url_for('timeline_map') }}">Map</a>
-        <a class="button secondary" href="{{ url_for('timeline_heat_map') }}">Heat map</a>
+        <a class="button primary" href="{{ url_for('timeline_collections') }}">Collections</a>
+        <a class="button primary" href="{{ url_for('timeline_map') }}">Map</a>
+        <a class="button primary" href="{{ url_for('timeline_heat_map') }}">Heat map</a>
         <a class="button secondary" href="{{ url_for('birthday') }}">Edit birthday</a>
+        {% include "_privacy_preview.html" %}
     </div>
 </section>
-
-{% include "_privacy_preview.html" %}
 
 {% set timeline_progress = namespace(years_with_items=0, item_count=0, max_count=0) %}
 {% for year in years %}

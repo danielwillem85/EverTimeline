@@ -111,7 +111,10 @@ MONTH_NAMES = [
 BACKUP_FORMAT = "evertimeline.account_backup"
 BACKUP_FORMAT_VERSION = 1
 BACKUP_MANIFEST_NAME = "evertimeline-backup.json"
-DEFAULT_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
+DEFAULT_MAX_UPLOAD_BYTES = 256 * 1024 * 1024
+DEFAULT_MAX_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024
+DEFAULT_MAX_IMAGE_PIXELS = 50_000_000
+DEFAULT_MAX_BACKUP_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 ADMIN_USERNAME = "Daniel"
 SQLITE_BUSY_TIMEOUT_MS = 30000
 IMAGE_CONVERSION_COMMIT_INTERVAL = 5
@@ -161,16 +164,47 @@ def run_debug_enabled():
 
 
 def configured_max_upload_bytes():
-    value = os.environ.get("EVERTIMELINE_MAX_UPLOAD_MB")
+    return configured_megabyte_limit("EVERTIMELINE_MAX_UPLOAD_MB", DEFAULT_MAX_UPLOAD_BYTES)
+
+
+def configured_max_image_upload_bytes():
+    return configured_megabyte_limit(
+        "EVERTIMELINE_MAX_IMAGE_MB",
+        DEFAULT_MAX_IMAGE_UPLOAD_BYTES,
+    )
+
+
+def configured_max_backup_uncompressed_bytes():
+    return configured_megabyte_limit(
+        "EVERTIMELINE_MAX_BACKUP_UNCOMPRESSED_MB",
+        DEFAULT_MAX_BACKUP_UNCOMPRESSED_BYTES,
+    )
+
+
+def configured_megabyte_limit(env_name, default_bytes):
+    value = os.environ.get(env_name)
     if not value:
-        return DEFAULT_MAX_UPLOAD_BYTES
+        return default_bytes
     try:
         megabytes = int(value)
     except ValueError:
-        return DEFAULT_MAX_UPLOAD_BYTES
+        return default_bytes
     if megabytes <= 0:
-        return DEFAULT_MAX_UPLOAD_BYTES
+        return default_bytes
     return megabytes * 1024 * 1024
+
+
+def configured_max_image_pixels():
+    value = os.environ.get("EVERTIMELINE_MAX_IMAGE_PIXELS")
+    if not value:
+        return DEFAULT_MAX_IMAGE_PIXELS
+    try:
+        pixels = int(value)
+    except ValueError:
+        return DEFAULT_MAX_IMAGE_PIXELS
+    if pixels <= 0:
+        return DEFAULT_MAX_IMAGE_PIXELS
+    return pixels
 
 
 def human_readable_bytes(byte_count):
@@ -184,12 +218,20 @@ def human_readable_bytes(byte_count):
 
 
 app = Flask(__name__)
+PRODUCTION_SECURITY_ENABLED = not is_local_development()
 app.config.update(
     SECRET_KEY=configured_secret_key(),
     MAX_CONTENT_LENGTH=configured_max_upload_bytes(),
+    MAX_IMAGE_UPLOAD_BYTES=configured_max_image_upload_bytes(),
+    MAX_IMAGE_PIXELS=configured_max_image_pixels(),
+    MAX_BACKUP_UNCOMPRESSED_BYTES=configured_max_backup_uncompressed_bytes(),
     CSRF_PROTECT=True,
     LOCAL_PASSWORD_RESET_LINKS=is_local_development(),
+    PRODUCTION_SECURITY_HEADERS=PRODUCTION_SECURITY_ENABLED,
     RUN_JOBS_INLINE=False,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=PRODUCTION_SECURITY_ENABLED,
 )
 
 
@@ -204,6 +246,29 @@ def csrf_token():
 def csrf_field():
     token = html_escape(csrf_token())
     return Markup(f'<input type="hidden" name="csrf_token" value="{token}">')
+
+
+@app.after_request
+def add_security_headers(response):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        (
+            "default-src 'self'; "
+            "base-uri 'self'; "
+            "object-src 'none'; "
+            "frame-ancestors 'none'; "
+            "img-src 'self' data:; "
+            "style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "connect-src 'self'"
+        ),
+    )
+    if app.config.get("PRODUCTION_SECURITY_HEADERS"):
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
 
 
 @app.errorhandler(RequestEntityTooLarge)
@@ -1246,6 +1311,29 @@ def photo_image_hash(image_data):
     return hashlib.sha256(image_data).hexdigest()
 
 
+def validate_image_upload_bytes(image_data):
+    max_bytes = app.config["MAX_IMAGE_UPLOAD_BYTES"]
+    if len(image_data) > max_bytes:
+        raise ValueError(f"Image exceeds the per-photo limit of {human_readable_bytes(max_bytes)}.")
+
+
+def validate_image_pixels(image):
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        raise ValueError("Image has invalid dimensions.")
+    max_pixels = app.config["MAX_IMAGE_PIXELS"]
+    if width * height > max_pixels:
+        raise ValueError(f"Image exceeds the pixel limit of {max_pixels:,} pixels.")
+
+
+def read_uploaded_image_data(image):
+    image_data = image.read()
+    if not image_data:
+        raise ValueError("Image is empty.")
+    validate_image_upload_bytes(image_data)
+    return image_data
+
+
 def storage_jpeg_from_image(
     image_data,
     quality=JPEG_STORAGE_QUALITY,
@@ -1254,7 +1342,9 @@ def storage_jpeg_from_image(
     progressive=True,
 ):
     try:
+        validate_image_upload_bytes(image_data)
         with Image.open(io.BytesIO(image_data)) as image:
+            validate_image_pixels(image)
             image = ImageOps.exif_transpose(image)
             if image.mode in ("RGBA", "LA") or "transparency" in image.info:
                 rgba_image = image.convert("RGBA")
@@ -7895,6 +7985,15 @@ def read_backup_manifest(archive):
     return manifest
 
 
+def validate_backup_archive_size(archive):
+    max_uncompressed = app.config["MAX_BACKUP_UNCOMPRESSED_BYTES"]
+    total_uncompressed = 0
+    for info in archive.infolist():
+        total_uncompressed += info.file_size
+        if total_uncompressed > max_uncompressed:
+            raise ValueError("Backup is too large to import.")
+
+
 def restore_backup_birthday(db, manifest):
     user = manifest.get("user") or {}
     if not isinstance(user, dict):
@@ -7928,10 +8027,11 @@ def import_photo_from_backup(db, archive, photo):
     except KeyError as exc:
         raise ValueError("Backup photo image is missing from the zip.") from exc
 
-    if info.file_size > app.config["MAX_CONTENT_LENGTH"]:
+    if info.file_size > app.config["MAX_IMAGE_UPLOAD_BYTES"]:
         raise ValueError("Backup contains a photo that is too large.")
 
     original_image_data = archive.read(info)
+    validate_image_upload_bytes(original_image_data)
     mime_type = backup_text(photo.get("mime_type"), "image/png", 64)
     if mime_type not in ALLOWED_IMAGE_MIMES:
         raise ValueError("Backup contains an unsupported photo type.")
@@ -8146,6 +8246,7 @@ def import_account_backup(backup_file):
 
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            validate_backup_archive_size(archive)
             manifest = read_backup_manifest(archive)
             db = get_db()
             restore_backup_birthday(db, manifest)
@@ -8739,8 +8840,9 @@ def timeline_import():
                 skipped_count += 1
                 continue
 
-            original_image_data = image.read()
-            if not original_image_data:
+            try:
+                original_image_data = read_uploaded_image_data(image)
+            except ValueError:
                 skipped_count += 1
                 continue
 
@@ -9599,8 +9701,9 @@ def month_view(year, month):
                 skipped_count += 1
                 continue
 
-            original_image_data = image.read()
-            if not original_image_data:
+            try:
+                original_image_data = read_uploaded_image_data(image)
+            except ValueError:
                 skipped_count += 1
                 continue
 

@@ -2476,6 +2476,10 @@ def format_timeline_date_label(year, month, display_date):
     return f"{year:04d}-{month:02d}-??"
 
 
+def format_month_day(value):
+    return value.strftime("%B %d").replace(" 0", " ")
+
+
 def normalize_coordinate(value, label, minimum, maximum):
     raw_value = str(value or "").strip()
     if not raw_value:
@@ -7093,6 +7097,216 @@ def build_timeline_api_items(
     return items
 
 
+def anniversary_today():
+    configured_today = app.config.get("ANNIVERSARY_TODAY")
+    if isinstance(configured_today, date):
+        return configured_today
+    if configured_today:
+        try:
+            return date.fromisoformat(str(configured_today))
+        except ValueError:
+            pass
+    return date.today()
+
+
+def next_anniversary_date(month, day, today):
+    for year in (today.year, today.year + 1):
+        try:
+            anniversary_date = date(year, month, day)
+        except ValueError:
+            continue
+        if anniversary_date >= today:
+            return anniversary_date
+    return None
+
+
+def anniversary_day_label(days_away):
+    if days_away == 0:
+        return "Today"
+    if days_away == 1:
+        return "Tomorrow"
+    return f"In {days_away} days"
+
+
+def anniversary_age_label(years):
+    if years == 1:
+        return "1 year ago"
+    return f"{years} years ago"
+
+
+def anniversary_group_label(days_away):
+    if days_away == 0:
+        return "On this day"
+    if days_away == 1:
+        return "Tomorrow"
+    return "Coming this week"
+
+
+def anniversary_item_from_row(kind, row, tags, people, today, window_days):
+    date_value = row["photo_date"] if kind == "photo" else row["entry_date"]
+    if not date_value:
+        return None
+    try:
+        original_date = date.fromisoformat(date_value)
+    except ValueError:
+        return None
+
+    anniversary_date = next_anniversary_date(original_date.month, original_date.day, today)
+    if anniversary_date is None:
+        return None
+    days_away = (anniversary_date - today).days
+    years = anniversary_date.year - original_date.year
+    if days_away < 0 or days_away > window_days or years <= 0:
+        return None
+
+    if kind == "photo":
+        title = photo_display_title(row)
+        preview = row["caption"] or "Photo memory"
+        image_url = url_for("photo_image", photo_id=row["id"])
+    else:
+        title = "Text entry"
+        preview = row["body"]
+        image_url = ""
+
+    meta = [
+        anniversary_day_label(days_away),
+        anniversary_age_label(years),
+        *timeline_search_meta(row, tags, 0, None, people),
+    ]
+    return {
+        "kind": "Photo" if kind == "photo" else "Text entry",
+        "kind_key": kind,
+        "id": row["id"],
+        "title": title,
+        "context": format_timeline_date_label(row["year"], row["month"], date_value),
+        "preview": short_preview(preview, 150),
+        "meta": meta,
+        "image_url": image_url,
+        "url": timeline_item_link(g.user["id"], row["year"], row["month"], kind, row["id"]),
+        "days_away": days_away,
+        "years": years,
+        "anniversary_date": anniversary_date,
+        "sort_key": (days_away, -original_date.year, kind, row["id"]),
+    }
+
+
+def anniversary_birthday_item(today, window_days):
+    if not g.user["birthday"]:
+        return None
+    try:
+        birthday = date.fromisoformat(g.user["birthday"])
+    except ValueError:
+        return None
+
+    birthday_date = next_anniversary_date(birthday.month, birthday.day, today)
+    if birthday_date is None:
+        return None
+    days_away = (birthday_date - today).days
+    age = birthday_date.year - birthday.year
+    if days_away < 0 or days_away > window_days or age <= 0:
+        return None
+
+    return {
+        "kind": "Milestone",
+        "kind_key": "birthday",
+        "id": "birthday",
+        "title": "Your birthday",
+        "context": format_month_day(birthday_date),
+        "preview": f"You turn {age}.",
+        "meta": [anniversary_day_label(days_away), f"Age {age}"],
+        "image_url": "",
+        "url": url_for("birthday"),
+        "days_away": days_away,
+        "years": age,
+        "anniversary_date": birthday_date,
+        "sort_key": (days_away, -9999, "birthday", 0),
+    }
+
+
+def build_anniversary_mode(db, today=None, window_days=7, sample_limit=48):
+    today = today or anniversary_today()
+    photo_rows = db.execute(
+        """
+        SELECT id, year, month, original_filename, title, caption, photo_date,
+               location_name, latitude, longitude, created_at
+        FROM photos
+        WHERE user_id = ? AND photo_date IS NOT NULL
+        ORDER BY photo_date DESC, id DESC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    text_rows = db.execute(
+        """
+        SELECT id, year, month, body, entry_date, location_name, latitude, longitude,
+               created_at, updated_at
+        FROM text_entries
+        WHERE user_id = ? AND entry_date IS NOT NULL
+        ORDER BY entry_date DESC, id DESC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+
+    photo_tags = load_tags_for_items(db, "photo", [row["id"] for row in photo_rows])
+    text_tags = load_tags_for_items(db, "text", [row["id"] for row in text_rows])
+    photo_people = load_people_for_items(db, "photo", [row["id"] for row in photo_rows])
+    text_people = load_people_for_items(db, "text", [row["id"] for row in text_rows])
+
+    items = []
+    birthday_item = anniversary_birthday_item(today, window_days)
+    if birthday_item:
+        items.append(birthday_item)
+
+    for row in photo_rows:
+        item = anniversary_item_from_row(
+            "photo",
+            row,
+            photo_tags.get(row["id"], [DEFAULT_TAG]),
+            photo_people.get(row["id"], []),
+            today,
+            window_days,
+        )
+        if item:
+            items.append(item)
+
+    for row in text_rows:
+        item = anniversary_item_from_row(
+            "text",
+            row,
+            text_tags.get(row["id"], [DEFAULT_TAG]),
+            text_people.get(row["id"], []),
+            today,
+            window_days,
+        )
+        if item:
+            items.append(item)
+
+    items.sort(key=lambda item: item["sort_key"])
+    items = items[:sample_limit]
+    groups = []
+    for days_away in sorted({item["days_away"] for item in items}):
+        group_items = [item for item in items if item["days_away"] == days_away]
+        groups.append(
+            {
+                "label": anniversary_group_label(days_away),
+                "date_label": format_month_day(today + timedelta(days=days_away)),
+                "days_away": days_away,
+                "items": group_items,
+            }
+        )
+
+    return {
+        "today": today,
+        "today_label": format_month_day(today),
+        "window_days": window_days,
+        "groups": groups,
+        "items": items,
+        "today_count": sum(1 for item in items if item["days_away"] == 0),
+        "upcoming_count": sum(1 for item in items if item["days_away"] > 0),
+        "memory_count": sum(1 for item in items if item["kind_key"] in ("photo", "text")),
+        "milestone_count": sum(1 for item in items if item["kind_key"] == "birthday"),
+    }
+
+
 def build_pdf_export_items(db, owner_id, year, month=None):
     photo_query = """
         SELECT id, year, month, original_filename, title, caption, mime_type, image_data, photo_date, created_at
@@ -8426,6 +8640,15 @@ def timeline():
     years = list(user_years())
     year_counts = get_year_counts(db, allowed_tags=privacy_preview_allowed_tags(preview))
     return render_template("timeline.html", years=years, year_counts=year_counts)
+
+
+@app.route("/timeline/anniversaries")
+@birthday_required
+def timeline_anniversaries():
+    return render_template(
+        "timeline_anniversaries.html",
+        anniversaries=build_anniversary_mode(get_db()),
+    )
 
 
 @app.route("/timeline/review")

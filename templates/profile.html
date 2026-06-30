@@ -19,7 +19,10 @@
     </section>
 
     <section class="auth-panel profile-panel">
-        <h1>Profile</h1>
+        <div class="progress-card-row">
+            <h1>Profile</h1>
+            <a class="button secondary" href="{{ url_for('birthday') }}">Edit birthday</a>
+        </div>
         <form method="post" class="form-stack">
             {{ csrf_field() }}
             <label>

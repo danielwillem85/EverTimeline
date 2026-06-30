@@ -254,6 +254,294 @@ def test_uploads_text_entries_and_pdf_exports(client, helpers):
     assert month_pdf.data.startswith(b"%PDF")
 
 
+def test_photo_date_detection_uses_exif_and_filename_fallbacks(client, helpers):
+    helpers.create_user(client, "owner")
+
+    detected_filenames = {
+        "IMG_20210709_153012.jpg": "2021-07-09",
+        "vacation 9 July 2021.png": "2021-07-09",
+        "scan-31.07.2021.webp": "2021-07-31",
+        "memory_07-30-2021.jpeg": "2021-07-30",
+    }
+    for filename, expected in detected_filenames.items():
+        assert helpers.app_module.filename_date_candidate(filename).isoformat() == expected
+
+    exif_buffer = io.BytesIO()
+    exif_image = Image.new("RGB", (12, 12), color=(88, 104, 132))
+    exif = exif_image.getexif()
+    exif[36867] = "2021-07-08 13:45:12"
+    exif_image.save(exif_buffer, format="JPEG", exif=exif)
+
+    exif_response = client.post(
+        "/year/2021/7",
+        data={
+            **helpers.csrf_form_data(client, "/year/2021/7"),
+            "photo": (io.BytesIO(exif_buffer.getvalue()), "camera-no-date-name.jpg", "image/jpeg"),
+            "tags": "private",
+        },
+        content_type="multipart/form-data",
+    )
+    assert exif_response.status_code == 302
+    exif_photo = helpers.row(
+        "SELECT photo_date FROM photos WHERE original_filename = ?",
+        ("camera-no-date-name.jpg",),
+    )
+    assert exif_photo["photo_date"] == "2021-07-08"
+
+    fallback_png = io.BytesIO()
+    Image.new("RGB", (12, 12), color=(144, 61, 55)).save(fallback_png, format="PNG")
+    fallback_response = client.post(
+        "/year/2021/7",
+        data={
+            **helpers.csrf_form_data(client, "/year/2021/7"),
+            "photo": (io.BytesIO(fallback_png.getvalue()), "PXL_20210710_153012.png", "image/png"),
+            "tags": "private",
+        },
+        content_type="multipart/form-data",
+    )
+    assert fallback_response.status_code == 302
+    fallback_photo = helpers.row(
+        "SELECT photo_date FROM photos WHERE original_filename = ?",
+        ("PXL_20210710_153012.png",),
+    )
+    assert fallback_photo["photo_date"] == "2021-07-10"
+
+
+def test_bulk_upload_can_leave_photos_without_dates(client, helpers):
+    helpers.create_user(client, "owner")
+
+    files = []
+    for filename, color in (
+        ("loose-memory-a.png", (31, 77, 126)),
+        ("loose-memory-b.png", (126, 77, 31)),
+    ):
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (12, 12), color=color).save(image_buffer, format="PNG")
+        image_buffer.seek(0)
+        files.append((image_buffer, filename, "image/png"))
+
+    response = client.post(
+        "/year/2022/3",
+        data={
+            **helpers.csrf_form_data(client, "/year/2022/3"),
+            "photo": files,
+            "tags": "private",
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 302
+
+    rows = helpers.rows(
+        "SELECT original_filename, photo_date FROM photos ORDER BY original_filename"
+    )
+    assert [row["original_filename"] for row in rows] == [
+        "loose-memory-a.png",
+        "loose-memory-b.png",
+    ]
+    assert [row["photo_date"] for row in rows] == [None, None]
+
+    year_page = client.get("/year/2022")
+    assert year_page.status_code == 200
+    assert b"No date" in year_page.data
+    assert b"/year/2022/no-date" in year_page.data
+
+    no_date_page = client.get("/year/2022/no-date")
+    assert no_date_page.status_code == 200
+    assert b"data-splash-selectable" in no_date_page.data
+    assert b"/year/2022/no-date/photos" in no_date_page.data
+    assert b"/year/2022/no-date/accept-suggestions" in no_date_page.data
+
+    no_date_photos = client.get("/year/2022/no-date/photos?seed=test-seed&page=0&page_size=10")
+    assert no_date_photos.status_code == 200
+    payload = no_date_photos.get_json()
+    assert payload["total"] == 2
+    assert {photo["title"] for photo in payload["photos"]} == {
+        "loose-memory-a.png",
+        "loose-memory-b.png",
+    }
+    assert {photo["suggestion"]["label"] for photo in payload["photos"]} == {"March 2022"}
+
+    month_page = client.get("/year/2022/3")
+    assert month_page.status_code == 200
+    assert b"loose-memory-a.png" not in month_page.data
+    assert b"loose-memory-b.png" not in month_page.data
+
+    assign_response = client.post(
+        "/year/2022/no-date/assign",
+        json={
+            "photo_ids": [photo["id"] for photo in payload["photos"]],
+            "month": 6,
+            "year": 2023,
+        },
+        headers=helpers.csrf_headers(client, "/year/2022/no-date"),
+    )
+    assert assign_response.status_code == 200
+    assert assign_response.get_json()["moved_count"] == 2
+
+    moved_rows = helpers.rows(
+        "SELECT year, month, photo_date FROM photos ORDER BY original_filename"
+    )
+    assert [(row["year"], row["month"], row["photo_date"]) for row in moved_rows] == [
+        (2023, 6, "2023-06-01"),
+        (2023, 6, "2023-06-01"),
+    ]
+
+    no_date_after_assign = client.get("/year/2022/no-date/photos?seed=test-seed&page=0&page_size=10")
+    assert no_date_after_assign.get_json()["total"] == 0
+
+    target_month_page = client.get("/year/2023/6")
+    assert target_month_page.status_code == 200
+    assert b"loose-memory-a.png" in target_month_page.data
+    assert b"loose-memory-b.png" in target_month_page.data
+
+
+def test_no_date_photo_suggestions_can_be_accepted(client, helpers):
+    helpers.create_user(client, "owner")
+
+    uploads = [
+        ("PXL_20210710_153012.png", (144, 61, 55), "/year/2022/3"),
+        ("loose-scan.png", (31, 126, 77), "/year/2022/4"),
+    ]
+    for filename, color, path in uploads:
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (12, 12), color=color).save(image_buffer, format="PNG")
+        image_buffer.seek(0)
+        response = client.post(
+            path,
+            data={
+                **helpers.csrf_form_data(client, path),
+                "photo": (image_buffer, filename, "image/png"),
+                "tags": "private",
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+    no_date_photos = client.get("/year/2022/no-date/photos?seed=test-seed&page=0&page_size=10")
+    assert no_date_photos.status_code == 200
+    photos = {photo["title"]: photo for photo in no_date_photos.get_json()["photos"]}
+    assert photos["PXL_20210710_153012.png"]["suggestion"] == {
+        "year": 2021,
+        "month": 7,
+        "label": "July 2021",
+        "source": "filename",
+        "source_label": "Filename",
+    }
+    assert photos["loose-scan.png"]["suggestion"] == {
+        "year": 2022,
+        "month": 4,
+        "label": "April 2022",
+        "source": "upload_bucket",
+        "source_label": "Upload month",
+    }
+
+    response = client.post(
+        "/year/2022/no-date/accept-suggestions",
+        json={"photo_ids": [photo["id"] for photo in photos.values()]},
+        headers=helpers.csrf_headers(client, "/year/2022/no-date"),
+    )
+    assert response.status_code == 200
+    assert response.get_json() == {"moved_count": 2, "skipped_count": 0}
+
+    moved_rows = helpers.rows(
+        """
+        SELECT original_filename, year, month, photo_date
+        FROM photos
+        ORDER BY original_filename
+        """
+    )
+    assert [dict(row) for row in moved_rows] == [
+        {
+            "original_filename": "PXL_20210710_153012.png",
+            "year": 2021,
+            "month": 7,
+            "photo_date": "2021-07-01",
+        },
+        {
+            "original_filename": "loose-scan.png",
+            "year": 2022,
+            "month": 4,
+            "photo_date": "2022-04-01",
+        },
+    ]
+    assert client.get("/year/2022/no-date/photos?seed=test-seed&page=0&page_size=10").get_json()["total"] == 0
+
+
+def test_no_date_photo_quick_edit_sets_single_photo_date(client, helpers):
+    helpers.create_user(client, "owner")
+
+    for filename, color in (
+        ("quick-loose-a.png", (44, 88, 132)),
+        ("quick-loose-b.png", (132, 88, 44)),
+    ):
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (12, 12), color=color).save(image_buffer, format="PNG")
+        image_buffer.seek(0)
+        response = client.post(
+            "/year/2022/3",
+            data={
+                **helpers.csrf_form_data(client, "/year/2022/3"),
+                "photo": (image_buffer, filename, "image/png"),
+                "tags": "private",
+            },
+            content_type="multipart/form-data",
+        )
+        assert response.status_code == 302
+
+    no_date_page = client.get("/year/2022/no-date")
+    assert no_date_page.status_code == 200
+    assert b"/year/2022/no-date/update-date" in no_date_page.data
+
+    photos_payload = client.get("/year/2022/no-date/photos?seed=test-seed&page=0&page_size=10").get_json()
+    photos = {photo["title"]: photo for photo in photos_payload["photos"]}
+
+    exact_response = client.post(
+        "/year/2022/no-date/update-date",
+        json={
+            "photo_id": photos["quick-loose-a.png"]["id"],
+            "photo_date": "2021-08-14",
+        },
+        headers=helpers.csrf_headers(client, "/year/2022/no-date"),
+    )
+    assert exact_response.status_code == 200
+    assert exact_response.get_json()["moved_count"] == 1
+
+    month_response = client.post(
+        "/year/2022/no-date/update-date",
+        json={
+            "photo_id": photos["quick-loose-b.png"]["id"],
+            "year": 2023,
+            "month": 6,
+        },
+        headers=helpers.csrf_headers(client, "/year/2022/no-date"),
+    )
+    assert month_response.status_code == 200
+    assert month_response.get_json()["moved_count"] == 1
+
+    moved_rows = helpers.rows(
+        """
+        SELECT original_filename, year, month, photo_date
+        FROM photos
+        ORDER BY original_filename
+        """
+    )
+    assert [dict(row) for row in moved_rows] == [
+        {
+            "original_filename": "quick-loose-a.png",
+            "year": 2021,
+            "month": 8,
+            "photo_date": "2021-08-14",
+        },
+        {
+            "original_filename": "quick-loose-b.png",
+            "year": 2023,
+            "month": 6,
+            "photo_date": "2023-06-01",
+        },
+    ]
+    assert client.get("/year/2022/no-date/photos?seed=test-seed&page=0&page_size=10").get_json()["total"] == 0
+
+
 def test_photo_delete_removes_related_data_and_month_card(app, client, helpers):
     user_id = helpers.create_user(client, "owner")
     photo_id = helpers.upload_photo(
@@ -1866,6 +2154,156 @@ def test_timeline_search_finds_owned_content_types_and_excludes_other_users(app,
     assert b"No timeline matches." in response.data
 
 
+def test_memory_review_queue_prioritizes_incomplete_memories(client, helpers):
+    helpers.create_user(client, "owner")
+    helpers.upload_photo(
+        client,
+        filename="public-uncaptioned.png",
+        photo_date="2020-05-04",
+        tag="public",
+        location_name="Harbor",
+    )
+    helpers.create_text(
+        client,
+        "A short memory without tags or place",
+        entry_date="2020-05-05",
+        tag="private",
+    )
+
+    timeline_response = client.get("/timeline")
+    assert timeline_response.status_code == 200
+    assert b"Review queue" in timeline_response.data
+
+    response = client.get("/timeline/review")
+    assert response.status_code == 200
+    assert b"Review queue" in response.data
+    assert b"Start here" in response.data
+    assert b"Photos need captions" in response.data
+    assert b"Memories need places" in response.data
+    assert b"Memories need people" in response.data
+    assert b"Memories not in chapters" in response.data
+    assert b"Public photos need polish" in response.data
+    assert b"public-uncaptioned.png" in response.data
+    assert b"A short memory without tags or place" in response.data
+    assert b'data-review-action="caption"' in response.data
+    assert b'data-review-action="people"' in response.data
+    assert b'data-review-action="location"' in response.data
+    assert b"/timeline/search?kind=photo&amp;caption=without" in response.data
+    assert b"/timeline/search?location=without" in response.data
+    assert b"/chapters/draft" in response.data
+    assert b"/timeline/people" in response.data
+
+
+def test_memory_review_queue_empty_and_complete_states(client, helpers):
+    helpers.create_user(client, "owner")
+
+    empty_response = client.get("/timeline/review")
+    assert empty_response.status_code == 200
+    assert b"Add memories to start building your review queue." in empty_response.data
+
+    photo_id = helpers.upload_photo(
+        client,
+        filename="complete-photo.png",
+        photo_date="2020-05-04",
+        caption="A complete caption",
+        tag="private",
+        people="Alice Example",
+        location_name="Lisbon",
+    )
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Complete story",
+            "description": "A polished memory",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Complete story",))["id"]
+    assert client.post(
+        "/chapters/items",
+        data={
+            **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+            "chapter_id": chapter_id,
+            "item_kind": "photo",
+            "item_id": photo_id,
+        },
+    ).status_code == 302
+
+    complete_response = client.get("/timeline/review")
+    assert complete_response.status_code == 200
+    assert b"Your timeline has no review issues right now." in complete_response.data
+
+
+def test_memory_review_inline_actions_complete_photo(client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="inline-review.png",
+        photo_date="2020-05-04",
+        tag="private",
+    )
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Inline fixes",
+            "description": "",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Inline fixes",))["id"]
+
+    review_response = client.get("/timeline/review")
+    assert review_response.status_code == 200
+    assert b"inline-review.png" in review_response.data
+    assert b"Save caption" in review_response.data
+    assert b"Save people" in review_response.data
+    assert b"Save place" in review_response.data
+    assert b"Choose chapter" in review_response.data
+
+    headers = helpers.csrf_headers(client, "/timeline/review")
+    caption_response = client.patch(
+        f"/api/photo/{photo_id}",
+        headers=headers,
+        json={"title": "", "caption": "Fixed from the review queue"},
+    )
+    assert caption_response.status_code == 200
+    people_response = client.patch(
+        f"/api/photo/{photo_id}/people",
+        headers=headers,
+        json={"people": "Alice Review"},
+    )
+    assert people_response.status_code == 200
+    location_response = client.patch(
+        f"/api/photo/{photo_id}/location",
+        headers=headers,
+        json={"location_name": "Review Harbor", "latitude": "", "longitude": ""},
+    )
+    assert location_response.status_code == 200
+    chapter_item_response = client.post(
+        f"/api/timeline-review/photo/{photo_id}/chapter",
+        headers=headers,
+        json={"chapter_id": chapter_id},
+    )
+    assert chapter_item_response.status_code == 200
+    assert chapter_item_response.get_json()["chapter_title"] == "Inline fixes"
+
+    assert helpers.row(
+        """
+        SELECT id
+        FROM chapter_items
+        WHERE chapter_id = ? AND item_kind = 'photo' AND item_id = ?
+        """,
+        (chapter_id, photo_id),
+    )
+    fixed_response = client.get("/timeline/review")
+    assert fixed_response.status_code == 200
+    assert b"Your timeline has no review issues right now." in fixed_response.data
+
+
 def test_saved_timeline_collections_filter_save_and_delete(app, client, helpers):
     helpers.create_user(client, "owner")
     helpers.create_text(
@@ -2448,3 +2886,4 @@ def test_activity_history_shows_uploads_chapters_connections_comments_and_reacti
     ]
     for expected in expectations:
         assert expected in activity.data
+

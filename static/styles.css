@@ -1773,6 +1773,7 @@ details.privacy-toggle-panel {
 }
 
 .splash-thumb {
+    position: relative;
     display: block;
     min-width: 0;
     min-height: 0;
@@ -1782,6 +1783,21 @@ details.privacy-toggle-panel {
     overflow: hidden;
     background: #101412;
     cursor: zoom-in;
+}
+
+.splash-thumb.is-selected::after {
+    content: "";
+    position: absolute;
+    inset: 5px;
+    border: 3px solid #fff;
+    border-radius: 5px;
+    box-shadow: 0 0 0 3px var(--primary);
+    pointer-events: none;
+}
+
+.splash-thumb[aria-pressed="true"] {
+    outline: 3px solid var(--primary);
+    outline-offset: -3px;
 }
 
 .splash-thumb:focus-visible {
@@ -2148,6 +2164,104 @@ details.privacy-toggle-panel {
 .chapter-new-form textarea {
     min-height: 120px;
     resize: vertical;
+}
+
+.no-date-organizer {
+    display: grid;
+    gap: 12px;
+}
+
+.no-date-splash-toolbar {
+    display: grid;
+    grid-template-columns: minmax(150px, 190px) minmax(120px, 160px) auto auto minmax(90px, 1fr);
+    align-items: end;
+    gap: 10px;
+}
+
+.no-date-splash-toolbar label {
+    margin-bottom: 0;
+}
+
+.no-date-selected-count {
+    align-self: center;
+    color: var(--muted);
+    font-size: 0.86rem;
+    font-weight: 900;
+}
+
+.no-date-splash-page {
+    height: min(720px, calc(100dvh - 220px));
+    min-height: 360px;
+    border-radius: 8px;
+}
+
+.no-date-splash-page .splash-thumb {
+    cursor: pointer;
+}
+
+.splash-thumb-wrap {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.splash-thumb-wrap .splash-thumb {
+    width: 100%;
+    height: 100%;
+}
+
+.no-date-photo-edit-button {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    z-index: 3;
+    min-height: 28px;
+    border: 1px solid rgba(255, 255, 255, 0.42);
+    border-radius: 999px;
+    padding: 0 9px;
+    background: rgba(16, 20, 18, 0.76);
+    color: #fff;
+    cursor: pointer;
+    font-size: 0.72rem;
+    font-weight: 900;
+}
+
+.no-date-photo-edit-button:hover,
+.no-date-photo-edit-button:focus-visible {
+    background: var(--primary);
+}
+
+.splash-suggestion-chip {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    left: 6px;
+    z-index: 2;
+    overflow: hidden;
+    border-radius: 999px;
+    padding: 5px 8px;
+    background: rgba(16, 20, 18, 0.78);
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 900;
+    line-height: 1;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.no-date-edit-panel {
+    max-width: 460px;
+}
+
+.no-date-edit-form {
+    display: grid;
+    gap: 12px;
+}
+
+.no-date-edit-exact-date {
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
 }
 
 .reaction-bar {
@@ -4291,6 +4405,15 @@ details.privacy-toggle-panel {
     white-space: nowrap;
 }
 
+.timeline-search-main h3 {
+    overflow: hidden;
+    margin-bottom: 0;
+    color: var(--ink);
+    font-size: 1rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .timeline-search-main span:not(.status-badge) {
     overflow: hidden;
     color: var(--muted);
@@ -4322,6 +4445,141 @@ details.privacy-toggle-panel {
     color: var(--muted);
     font-size: 0.76rem;
     font-weight: 900;
+}
+
+.review-stat-link {
+    color: inherit;
+    text-decoration: none;
+}
+
+.review-stat-link:hover {
+    border-color: rgba(22, 109, 103, 0.42);
+}
+
+.review-focus-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 18px;
+    border: 1px solid rgba(22, 109, 103, 0.28);
+    border-radius: 8px;
+    padding: 18px;
+    background: #f7fbfa;
+}
+
+.review-focus-panel h2,
+.review-issue-header h2 {
+    margin: 6px 0 4px;
+    color: var(--ink);
+    font-size: 1.12rem;
+}
+
+.review-focus-panel p,
+.review-issue-header p {
+    margin-bottom: 0;
+    color: var(--muted);
+    line-height: 1.45;
+}
+
+.review-queue-list {
+    display: grid;
+    gap: 14px;
+}
+
+.review-issue-card {
+    display: grid;
+    gap: 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.review-issue-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+}
+
+.review-sample-list {
+    display: grid;
+    gap: 10px;
+}
+
+.review-sample-card {
+    align-items: stretch;
+    box-shadow: none;
+}
+
+.review-card-actions {
+    display: grid;
+    align-content: center;
+    gap: 8px;
+    min-width: min(100%, 340px);
+}
+
+.review-inline-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 8px;
+}
+
+.review-place-form {
+    grid-template-columns: minmax(150px, 1fr) minmax(72px, 88px) minmax(72px, 88px) auto;
+}
+
+.review-inline-form label {
+    display: grid;
+    gap: 4px;
+}
+
+.review-inline-form span {
+    color: var(--muted);
+    font-size: 0.76rem;
+    font-weight: 900;
+}
+
+.review-inline-form input,
+.review-inline-form select,
+.review-inline-form textarea {
+    width: 100%;
+    min-height: 36px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0 10px;
+    background: #fff;
+    color: var(--ink);
+    font: inherit;
+    font-size: 0.86rem;
+    font-weight: 800;
+}
+
+.review-inline-form textarea {
+    min-height: 68px;
+    padding: 8px 10px;
+    line-height: 1.35;
+    resize: vertical;
+}
+
+.review-duplicate-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.review-action-status {
+    min-height: 18px;
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 900;
+}
+
+.review-action-status.is-error {
+    color: var(--danger);
 }
 
 .timeline-map-panel {
@@ -4751,6 +5009,20 @@ details.privacy-toggle-panel {
         padding-top: 188px;
     }
 
+    .no-date-splash-toolbar {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .no-date-splash-toolbar .button,
+    .no-date-selected-count {
+        width: 100%;
+    }
+
+    .no-date-splash-page {
+        height: min(620px, calc(100dvh - 260px));
+        min-height: 320px;
+    }
+
     .splash-grid {
         gap: 2px;
         padding: 2px;
@@ -4854,6 +5126,8 @@ details.privacy-toggle-panel {
     .import-upload-form,
     .text-entry-form,
     .search-form,
+    .review-inline-form,
+    .review-place-form,
     .collection-filter-form,
     .tags-form,
     .location-form,
@@ -4898,6 +5172,8 @@ details.privacy-toggle-panel {
     .request-card,
     .activity-card,
     .timeline-search-card,
+    .review-focus-panel,
+    .review-issue-header,
     .map-place-card,
     .collections-layout,
     .saved-view-card,
@@ -4911,6 +5187,11 @@ details.privacy-toggle-panel {
     .request-card .button,
     .activity-card .button,
     .timeline-search-card .button,
+    .review-focus-panel .button,
+    .review-issue-header .button,
+    .review-card-actions,
+    .review-inline-form .button,
+    .review-duplicate-actions .button,
     .map-place-card .button,
     .saved-view-card .button,
     .collection-result-card .button,
@@ -4920,6 +5201,7 @@ details.privacy-toggle-panel {
     }
 
     .timeline-search-main h2,
+    .timeline-search-main h3,
     .timeline-search-main span:not(.status-badge),
     .saved-view-card strong,
     .saved-view-card span,

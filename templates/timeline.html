@@ -6,13 +6,14 @@
 <section class="page-heading">
     <h1>Timeline</h1>
     <div class="page-actions">
+        <a class="button primary" href="{{ url_for('timeline_review') }}">Review queue</a>
         <a class="button secondary" href="{{ url_for('timeline_import') }}">Import photos</a>
         <a class="button secondary" href="{{ url_for('timeline_people') }}">People tags</a>
         <a class="button secondary" href="{{ url_for('timeline_search') }}">Search timeline</a>
         <a class="button secondary" href="{{ url_for('timeline_collections') }}">Collections</a>
         <a class="button secondary" href="{{ url_for('timeline_stories') }}">Stories</a>
         <a class="button secondary" href="{{ url_for('timeline_map') }}">Map</a>
-        <a class="button primary" href="{{ url_for('chapters') }}">Chapters</a>
+        <a class="button secondary" href="{{ url_for('chapters') }}">Chapters</a>
         <a class="button secondary" href="{{ url_for('birthday') }}">Edit birthday</a>
     </div>
 </section>

@@ -202,6 +202,33 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    const reviewRefresh = () => {
+        window.setTimeout(() => {
+            window.location.reload();
+        }, 550);
+    };
+
+    const reviewCardPayload = (card) => ({
+        title: card.dataset.title || "",
+        caption: card.dataset.caption || "",
+        body: card.dataset.body || "",
+        entry_date: card.dataset.entryDate || "",
+        tags: card.dataset.tags || "private",
+        people: card.dataset.people || "",
+        location_name: card.dataset.locationName || "",
+        latitude: card.dataset.latitude || "",
+        longitude: card.dataset.longitude || "",
+    });
+
+    const setReviewStatus = (card, message, isError = false) => {
+        const status = card.querySelector("[data-review-status]");
+        if (!status) {
+            return;
+        }
+        status.textContent = message;
+        status.classList.toggle("is-error", isError);
+    };
+
     const chapterCardNewModal = document.getElementById("chapter-card-new-modal");
     const chapterCardNewForm = document.querySelector("[data-chapter-card-new-form]");
     const chapterCardNewContext = document.querySelector("[data-chapter-card-new-context]");
@@ -216,6 +243,97 @@ document.addEventListener("DOMContentLoaded", () => {
         status.textContent = message;
         status.classList.toggle("is-error", isError);
     };
+
+    const reviewJsonFetch = async (url, payload, method = "PATCH") => {
+        const response = await csrfFetch(url, {
+            method,
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+            let message = "Could not save this change.";
+            try {
+                const errorPayload = await response.json();
+                message = errorPayload.error || message;
+            } catch (error) {
+                message = response.statusText || message;
+            }
+            throw new Error(message);
+        }
+        if (response.status === 204) {
+            return {};
+        }
+        return response.json();
+    };
+
+    document.querySelectorAll("[data-review-card]").forEach((card) => {
+        card.querySelectorAll("[data-review-action]").forEach((form) => {
+            form.addEventListener("submit", async (event) => {
+                event.preventDefault();
+                const action = form.dataset.reviewAction;
+                const submitButton = form.querySelector("button[type='submit']");
+                const payload = reviewCardPayload(card);
+                let url = card.dataset.apiUrl;
+                let method = "PATCH";
+
+                if (action === "caption") {
+                    payload.caption = form.elements.caption.value;
+                } else if (action === "people") {
+                    payload.people = form.elements.people.value;
+                    url = card.dataset.peopleUrl;
+                } else if (action === "location") {
+                    payload.location_name = form.elements.location_name.value;
+                    payload.latitude = form.elements.latitude.value;
+                    payload.longitude = form.elements.longitude.value;
+                    url = card.dataset.locationUrl;
+                } else if (action === "chapter") {
+                    payload.chapter_id = form.elements.chapter_id.value;
+                    url = card.dataset.chapterUrl;
+                    method = "POST";
+                }
+
+                if (submitButton) {
+                    submitButton.disabled = true;
+                }
+                setReviewStatus(card, "Saving...");
+                try {
+                    await reviewJsonFetch(url, payload, method);
+                    setReviewStatus(card, "Saved. Updating queue...");
+                    reviewRefresh();
+                } catch (error) {
+                    setReviewStatus(card, error.message, true);
+                    if (submitButton) {
+                        submitButton.disabled = false;
+                    }
+                }
+            });
+        });
+
+        const deleteButton = card.querySelector("[data-review-delete]");
+        if (deleteButton) {
+            deleteButton.addEventListener("click", async () => {
+                const confirmed = await requestConfirmation({
+                    title: deleteButton.dataset.confirmTitle || "Delete photo?",
+                    message: deleteButton.dataset.confirmMessage || "This permanently removes this photo.",
+                    confirmLabel: "Delete",
+                    danger: true,
+                });
+                if (!confirmed) {
+                    return;
+                }
+                deleteButton.disabled = true;
+                setReviewStatus(card, "Deleting...");
+                try {
+                    await reviewJsonFetch(card.dataset.apiUrl, {}, "DELETE");
+                    setReviewStatus(card, "Deleted. Updating queue...");
+                    reviewRefresh();
+                } catch (error) {
+                    setReviewStatus(card, error.message, true);
+                    deleteButton.disabled = false;
+                }
+            });
+        }
+    });
 
     const addChapterCardOption = (chapter) => {
         if (!chapter || !chapter.id) {
@@ -977,14 +1095,28 @@ document.addEventListener("DOMContentLoaded", () => {
         const splashChapterStatus = document.querySelector("[data-splash-chapter-status]");
         const splashSeed = splashPage.dataset.splashSeed || String(Date.now());
         const splashUrl = splashPage.dataset.splashUrl || "/api/splash-photos";
+        const splashSelectable = splashPage.hasAttribute("data-splash-selectable");
+        const splashAssignUrl = splashPage.dataset.splashAssignUrl || "";
+        const splashAcceptSuggestionsUrl = splashPage.dataset.splashAcceptSuggestionsUrl || "";
+        const splashQuickEditUrl = splashPage.dataset.splashQuickEditUrl || "";
+        const noDateAssignForm = document.querySelector("[data-no-date-assign-form]");
+        const noDateAssignButton = document.querySelector("[data-no-date-assign-button]");
+        const noDateAcceptSuggestionsButton = document.querySelector("[data-no-date-accept-suggestions-button]");
+        const noDateSelectedCount = document.querySelector("[data-no-date-selected-count]");
         const defaultTileSize = 82;
         const configuredTileSize = Number.parseInt(splashPage.dataset.splashTileSize || "", 10);
         const baseTileSize = Number.isFinite(configuredTileSize) && configuredTileSize > 0 ? configuredTileSize : defaultTileSize;
         let minTileSize = baseTileSize;
+        const noDateEditModal = document.getElementById("no-date-edit-modal");
+        const noDateQuickEditForm = document.querySelector("[data-no-date-quick-edit-form]");
+        const noDateEditTitle = document.getElementById("no-date-edit-title");
+        const noDateEditSuggestion = document.querySelector("[data-no-date-edit-suggestion]");
         let splashPageIndex = 0;
         let splashPageSize = 0;
         let splashTotalPages = 0;
         let splashResizeTimer = null;
+        const selectedSplashPhotoIds = new Set();
+        const splashSuggestions = new Map();
 
         const setSplashStatus = (message) => {
             if (!splashStatus) {
@@ -1006,6 +1138,31 @@ document.addEventListener("DOMContentLoaded", () => {
                 splashCount.hidden = splashTotalPages <= 0;
                 splashCount.textContent = splashTotalPages > 0 ? `${splashPageIndex + 1} of ${splashTotalPages}` : "";
             }
+        };
+
+        const updateSplashSelectionState = () => {
+            if (!splashSelectable) {
+                return;
+            }
+            const selectedCount = selectedSplashPhotoIds.size;
+            if (noDateSelectedCount) {
+                noDateSelectedCount.textContent = `${selectedCount} selected`;
+            }
+            if (noDateAssignButton) {
+                noDateAssignButton.disabled = selectedCount === 0;
+            }
+            const selectedSuggestionCount = Array.from(selectedSplashPhotoIds)
+                .filter((photoId) => splashSuggestions.has(photoId))
+                .length;
+            if (noDateAcceptSuggestionsButton) {
+                noDateAcceptSuggestionsButton.disabled = selectedSuggestionCount === 0;
+            }
+            splashGrid.querySelectorAll(".splash-thumb").forEach((button) => {
+                const photoId = Number(button.dataset.photoId);
+                const selected = selectedSplashPhotoIds.has(photoId);
+                button.classList.toggle("is-selected", selected);
+                button.setAttribute("aria-pressed", selected ? "true" : "false");
+            });
         };
 
         const splashGridSize = () => {
@@ -1073,14 +1230,70 @@ document.addEventListener("DOMContentLoaded", () => {
             syncModalOpenState();
         };
 
+        const closeNoDateQuickEdit = () => {
+            if (!noDateEditModal) {
+                return;
+            }
+            noDateEditModal.hidden = true;
+            syncModalOpenState();
+        };
+
+        const setSelectValue = (select, value) => {
+            if (!select) {
+                return;
+            }
+            select.value = String(value);
+        };
+
+        const openNoDateQuickEdit = (photo) => {
+            if (!noDateEditModal || !noDateQuickEditForm) {
+                return;
+            }
+            const suggestion = photo.suggestion || null;
+            const monthSelect = noDateQuickEditForm.elements.month;
+            const yearSelect = noDateQuickEditForm.elements.year;
+            const exactDateInput = noDateQuickEditForm.elements.photo_date;
+            noDateQuickEditForm.elements.photo_id.value = String(photo.id);
+            if (noDateEditTitle) {
+                noDateEditTitle.textContent = photo.title || "Set date";
+            }
+            if (noDateEditSuggestion) {
+                noDateEditSuggestion.textContent = suggestion
+                    ? `Suggested ${suggestion.label} from ${suggestion.source_label || "date clues"}.`
+                    : "No suggestion available.";
+            }
+            setSelectValue(monthSelect, suggestion ? suggestion.month : photo.month);
+            setSelectValue(yearSelect, suggestion ? suggestion.year : photo.year);
+            if (exactDateInput) {
+                exactDateInput.value = "";
+            }
+            noDateEditModal.hidden = false;
+            syncModalOpenState();
+            if (monthSelect && typeof monthSelect.focus === "function") {
+                monthSelect.focus({preventScroll: true});
+            }
+        };
+
         const renderSplashPhotos = (photos) => {
             splashGrid.innerHTML = "";
             photos.forEach((photo) => {
+                if (photo.suggestion) {
+                    splashSuggestions.set(Number(photo.id), photo.suggestion);
+                }
+                const tile = splashSelectable ? document.createElement("div") : null;
+                if (tile) {
+                    tile.className = "splash-thumb-wrap";
+                }
                 const button = document.createElement("button");
                 button.className = "splash-thumb";
                 button.type = "button";
-                button.title = photo.display_date ? `${photo.title} - ${photo.display_date}` : photo.title;
-                button.setAttribute("aria-label", `Open ${photo.title || "photo"}`);
+                button.dataset.photoId = String(photo.id);
+                const suggestionLabel = photo.suggestion ? `Suggested: ${photo.suggestion.label}` : "";
+                button.title = suggestionLabel || (photo.display_date ? `${photo.title} - ${photo.display_date}` : photo.title);
+                button.setAttribute("aria-label", splashSelectable ? `Select ${photo.title || "photo"}` : `Open ${photo.title || "photo"}`);
+                if (splashSelectable) {
+                    button.setAttribute("aria-pressed", selectedSplashPhotoIds.has(Number(photo.id)) ? "true" : "false");
+                }
 
                 const image = document.createElement("img");
                 image.src = photo.thumbnail_url;
@@ -1089,9 +1302,44 @@ document.addEventListener("DOMContentLoaded", () => {
                 image.decoding = "async";
 
                 button.appendChild(image);
-                button.addEventListener("click", () => openSplashPhotoModal(photo));
-                splashGrid.appendChild(button);
+                if (photo.suggestion) {
+                    const suggestion = document.createElement("span");
+                    suggestion.className = "splash-suggestion-chip";
+                    suggestion.textContent = photo.suggestion.label;
+                    suggestion.title = `Suggested from ${photo.suggestion.source_label || "date clues"}`;
+                    button.appendChild(suggestion);
+                }
+                button.addEventListener("click", () => {
+                    if (splashSelectable) {
+                        const photoId = Number(photo.id);
+                        if (selectedSplashPhotoIds.has(photoId)) {
+                            selectedSplashPhotoIds.delete(photoId);
+                        } else {
+                            selectedSplashPhotoIds.add(photoId);
+                        }
+                        updateSplashSelectionState();
+                        return;
+                    }
+                    openSplashPhotoModal(photo);
+                });
+                if (tile) {
+                    const editButton = document.createElement("button");
+                    editButton.className = "no-date-photo-edit-button";
+                    editButton.type = "button";
+                    editButton.textContent = "Edit";
+                    editButton.setAttribute("aria-label", `Edit date for ${photo.title || "photo"}`);
+                    editButton.addEventListener("click", (event) => {
+                        event.stopPropagation();
+                        openNoDateQuickEdit(photo);
+                    });
+                    tile.appendChild(button);
+                    tile.appendChild(editButton);
+                    splashGrid.appendChild(tile);
+                } else {
+                    splashGrid.appendChild(button);
+                }
             });
+            updateSplashSelectionState();
         };
 
         const loadSplashPage = async (page) => {
@@ -1111,6 +1359,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 const payload = await response.json();
                 splashPageIndex = payload.page || 0;
                 splashTotalPages = payload.total_pages || 0;
+                if (splashSelectable) {
+                    selectedSplashPhotoIds.forEach((photoId) => {
+                        const stillExists = (payload.photos || []).some((photo) => Number(photo.id) === photoId);
+                        if (!stillExists && payload.total === 0) {
+                            selectedSplashPhotoIds.delete(photoId);
+                        }
+                    });
+                }
                 renderSplashPhotos(payload.photos || []);
                 setSplashStatus(payload.total ? "" : "No photos yet.");
                 updateSplashControls();
@@ -1153,6 +1409,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 loadSplashPage(0);
             });
         });
+        updateSplashSizeButtons("1");
 
         if (splashChapterForm && splashChapterSelect && splashChapterPhotoInput) {
             splashChapterSelect.addEventListener("change", async () => {
@@ -1196,6 +1453,137 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         }
 
+        if (noDateAssignForm && splashSelectable) {
+            noDateAssignForm.addEventListener("submit", async (event) => {
+                event.preventDefault();
+                if (!selectedSplashPhotoIds.size || !splashAssignUrl) {
+                    return;
+                }
+                const formData = new FormData(noDateAssignForm);
+                if (noDateAssignButton) {
+                    noDateAssignButton.disabled = true;
+                }
+                setSplashStatus("Saving selected photos...");
+                try {
+                    const response = await csrfFetch(splashAssignUrl, {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({
+                            photo_ids: Array.from(selectedSplashPhotoIds),
+                            month: formData.get("month"),
+                            year: formData.get("year"),
+                        }),
+                    });
+                    const payload = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        throw new Error(payload.error || "Selected photos could not be saved.");
+                    }
+                    selectedSplashPhotoIds.clear();
+                    setSplashStatus(`Moved ${payload.moved_count || 0} photos.`);
+                    await loadSplashPage(splashPageIndex);
+                } catch (error) {
+                    setSplashStatus(error.message || "Selected photos could not be saved.");
+                    updateSplashSelectionState();
+                } finally {
+                    updateSplashSelectionState();
+                }
+            });
+        }
+
+        if (noDateAcceptSuggestionsButton && splashSelectable) {
+            noDateAcceptSuggestionsButton.addEventListener("click", async () => {
+                const suggestedPhotoIds = Array.from(selectedSplashPhotoIds)
+                    .filter((photoId) => splashSuggestions.has(photoId));
+                if (!suggestedPhotoIds.length || !splashAcceptSuggestionsUrl) {
+                    return;
+                }
+                noDateAcceptSuggestionsButton.disabled = true;
+                if (noDateAssignButton) {
+                    noDateAssignButton.disabled = true;
+                }
+                setSplashStatus("Accepting suggestions...");
+                try {
+                    const response = await csrfFetch(splashAcceptSuggestionsUrl, {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({photo_ids: suggestedPhotoIds}),
+                    });
+                    const payload = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        throw new Error(payload.error || "Suggestions could not be accepted.");
+                    }
+                    suggestedPhotoIds.forEach((photoId) => {
+                        selectedSplashPhotoIds.delete(photoId);
+                        splashSuggestions.delete(photoId);
+                    });
+                    setSplashStatus(`Moved ${payload.moved_count || 0} photos.`);
+                    await loadSplashPage(splashPageIndex);
+                } catch (error) {
+                    setSplashStatus(error.message || "Suggestions could not be accepted.");
+                    updateSplashSelectionState();
+                }
+            });
+        }
+
+        if (noDateQuickEditForm && splashSelectable) {
+            const exactDateInput = noDateQuickEditForm.elements.photo_date;
+            if (exactDateInput) {
+                exactDateInput.addEventListener("change", () => {
+                    if (!exactDateInput.value) {
+                        return;
+                    }
+                    const [yearValue, monthValue] = exactDateInput.value.split("-");
+                    setSelectValue(noDateQuickEditForm.elements.year, yearValue);
+                    setSelectValue(noDateQuickEditForm.elements.month, Number(monthValue));
+                });
+            }
+
+            noDateQuickEditForm.addEventListener("submit", async (event) => {
+                event.preventDefault();
+                if (!splashQuickEditUrl) {
+                    return;
+                }
+                const formData = new FormData(noDateQuickEditForm);
+                const photoId = Number(formData.get("photo_id"));
+                setSplashStatus("Saving photo date...");
+                try {
+                    const response = await csrfFetch(splashQuickEditUrl, {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({
+                            photo_id: photoId,
+                            month: formData.get("month"),
+                            year: formData.get("year"),
+                            photo_date: formData.get("photo_date") || "",
+                        }),
+                    });
+                    const payload = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        throw new Error(payload.error || "Photo date could not be saved.");
+                    }
+                    selectedSplashPhotoIds.delete(photoId);
+                    splashSuggestions.delete(photoId);
+                    closeNoDateQuickEdit();
+                    setSplashStatus("Moved 1 photo.");
+                    await loadSplashPage(splashPageIndex);
+                } catch (error) {
+                    setSplashStatus(error.message || "Photo date could not be saved.");
+                    updateSplashSelectionState();
+                }
+            });
+
+            if (noDateEditModal) {
+                noDateEditModal.querySelectorAll("[data-close-no-date-edit-modal]").forEach((button) => {
+                    button.addEventListener("click", closeNoDateQuickEdit);
+                });
+                document.addEventListener("keydown", (event) => {
+                    if (event.key === "Escape" && !noDateEditModal.hidden) {
+                        closeNoDateQuickEdit();
+                    }
+                });
+            }
+        }
+
         if (splashPhotoModal) {
             splashPhotoModal.querySelectorAll("[data-close-splash-photo-modal]").forEach((button) => {
                 button.addEventListener("click", closeSplashPhotoModal);
@@ -1203,6 +1591,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         document.addEventListener("keydown", (event) => {
+            if (splashSelectable) {
+                return;
+            }
             if (splashPhotoModal && !splashPhotoModal.hidden && event.key === "Escape") {
                 closeSplashPhotoModal();
                 return;
@@ -4048,3 +4439,4 @@ document.addEventListener("DOMContentLoaded", () => {
 
     focusEntryFromUrl();
 });
+

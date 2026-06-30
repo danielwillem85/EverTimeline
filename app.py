@@ -1799,33 +1799,70 @@ def run_vacuum_job(db, job_id):
 
 def filename_date_candidate(filename):
     normalized = Path(filename or "").stem
-    patterns = (
-        r"(?<!\d)((?:19|20)\d{2})[-_. ]?([01]\d)[-_. ]?([0-3]\d)(?!\d)",
-        r"(?<!\d)([01]\d)[-_. ]?([0-3]\d)[-_. ]?((?:19|20)\d{2})(?!\d)",
+    normalized = re.sub(r"[_+.]+", " ", normalized)
+    month_names = {
+        name.lower(): index
+        for index, name in enumerate(calendar.month_name)
+        if name
+    }
+    month_names.update(
+        {
+            name.lower(): index
+            for index, name in enumerate(calendar.month_abbr)
+            if name
+        }
     )
-    for pattern in patterns:
+
+    numeric_patterns = (
+        r"(?<!\d)((?:19|20)\d{2})[-/ .]?([01]\d)[-/ .]?([0-3]\d)(?!\d)",
+        r"(?<!\d)([0-3]?\d)[-/ .]([01]?\d)[-/ .]((?:19|20)\d{2})(?!\d)",
+        r"(?<!\d)([01]?\d)[-/ .]([0-3]?\d)[-/ .]((?:19|20)\d{2})(?!\d)",
+    )
+    for pattern in numeric_patterns:
         match = re.search(pattern, normalized)
         if not match:
             continue
         if len(match.group(1)) == 4:
             year, month, day = match.groups()
+        elif int(match.group(1)) > 12:
+            day, month, year = match.groups()
         else:
             month, day, year = match.groups()
         try:
             return date(int(year), int(month), int(day))
         except ValueError:
             continue
+
+    month_first_pattern = (
+        r"\b("
+        + "|".join(re.escape(name) for name in sorted(month_names, key=len, reverse=True))
+        + r")\s+([0-3]?\d)(?:st|nd|rd|th)?(?:,)?\s+((?:19|20)\d{2})\b"
+    )
+    day_first_pattern = (
+        r"\b([0-3]?\d)(?:st|nd|rd|th)?\s+("
+        + "|".join(re.escape(name) for name in sorted(month_names, key=len, reverse=True))
+        + r")(?:,)?\s+((?:19|20)\d{2})\b"
+    )
+    for pattern in (month_first_pattern, day_first_pattern):
+        match = re.search(pattern, normalized, flags=re.IGNORECASE)
+        if not match:
+            continue
+        if match.group(1).lower() in month_names:
+            month_name, day, year = match.groups()
+        else:
+            day, month_name, year = match.groups()
+        try:
+            return date(int(year), month_names[month_name.lower()], int(day))
+        except ValueError:
+            continue
+
     return None
 
 
 def detect_import_photo_date(image_data, filename):
-    detected_date = detect_photo_taken_date(image_data)
+    detected_date, detected_source = best_photo_date_candidate(image_data, filename)
     if detected_date:
-        return detected_date.isoformat(), "metadata"
-
-    detected_date = filename_date_candidate(filename)
-    if detected_date:
-        return detected_date.isoformat(), "filename"
+        return detected_date.isoformat(), detected_source
 
     return None, ""
 
@@ -1950,7 +1987,7 @@ def parse_exif_date_value(value):
     if isinstance(value, bytes):
         value = value.decode("utf-8", errors="ignore")
     normalized_value = str(value or "").strip()
-    match = re.match(r"^(\d{4}):(\d{2}):(\d{2})", normalized_value)
+    match = re.match(r"^(\d{4})[:/-](\d{2})[:/-](\d{2})", normalized_value)
     if not match:
         return None
 
@@ -1981,16 +2018,28 @@ def detect_photo_taken_date(image_data):
     return None
 
 
-def photo_date_from_upload(image_data, year, month, manual_date=None):
+def best_photo_date_candidate(image_data, filename=None):
+    detected_date = detect_photo_taken_date(image_data)
+    if detected_date:
+        return detected_date, "metadata"
+
+    detected_date = filename_date_candidate(filename)
+    if detected_date:
+        return detected_date, "filename"
+
+    return None, ""
+
+
+def photo_date_from_upload(image_data, year, month, manual_date=None, filename=None):
     if manual_date:
         return manual_date, False, False
 
-    detected_date = detect_photo_taken_date(image_data)
+    detected_date, detected_source = best_photo_date_candidate(image_data, filename)
     if detected_date is None:
         return None, False, False
     if detected_date.year == year and detected_date.month == month:
         return detected_date.isoformat(), True, False
-    return None, False, True
+    return None, False, bool(detected_source)
 
 
 def uploaded_photo_files():
@@ -3235,7 +3284,7 @@ def get_month_counts(db, year, user_id=None, allowed_tags=None):
             """
             SELECT id, month
             FROM photos
-            WHERE user_id = ? AND year = ?
+            WHERE user_id = ? AND year = ? AND photo_date IS NOT NULL
             """,
             (owner_id, year),
         ).fetchall()
@@ -3258,19 +3307,59 @@ def get_month_counts(db, year, user_id=None, allowed_tags=None):
                 counts[row["month"]] = counts.get(row["month"], 0) + 1
         return counts
 
-    for table in ("photos", "text_entries"):
-        rows = db.execute(
-            f"""
-            SELECT month, COUNT(*) AS item_count
-            FROM {table}
-            WHERE user_id = ? AND year = ?
-            GROUP BY month
+    photo_rows = db.execute(
+        """
+        SELECT month, COUNT(*) AS item_count
+        FROM photos
+        WHERE user_id = ? AND year = ? AND photo_date IS NOT NULL
+        GROUP BY month
+        """,
+        (owner_id, year),
+    ).fetchall()
+    for row in photo_rows:
+        counts[row["month"]] = counts.get(row["month"], 0) + row["item_count"]
+
+    text_rows = db.execute(
+        """
+        SELECT month, COUNT(*) AS item_count
+        FROM text_entries
+        WHERE user_id = ? AND year = ?
+        GROUP BY month
+        """,
+        (owner_id, year),
+    ).fetchall()
+    for row in text_rows:
+        counts[row["month"]] = counts.get(row["month"], 0) + row["item_count"]
+    return counts
+
+
+def get_no_date_photo_count(db, year, user_id=None, allowed_tags=None):
+    owner_id = user_id if user_id is not None else g.user["id"]
+    if allowed_tags is not None:
+        photo_rows = db.execute(
+            """
+            SELECT id
+            FROM photos
+            WHERE user_id = ? AND year = ? AND photo_date IS NULL
             """,
             (owner_id, year),
         ).fetchall()
-        for row in rows:
-            counts[row["month"]] = counts.get(row["month"], 0) + row["item_count"]
-    return counts
+        photo_tags = load_tags_for_items(db, "photo", [row["id"] for row in photo_rows], owner_id)
+        return sum(
+            1
+            for row in photo_rows
+            if tags_visible_to_connection(photo_tags.get(row["id"], []), allowed_tags)
+        )
+
+    row = db.execute(
+        """
+        SELECT COUNT(*) AS item_count
+        FROM photos
+        WHERE user_id = ? AND year = ? AND photo_date IS NULL
+        """,
+        (owner_id, year),
+    ).fetchone()
+    return row["item_count"] if row else 0
 
 
 def user_full_name(user):
@@ -3373,7 +3462,48 @@ def random_public_photos(db, limit=48):
     return attach_reactions(db, photos)
 
 
-def build_splash_photo_page(db):
+def no_date_photo_suggestion(photo):
+    filename_date = filename_date_candidate(photo.get("original_filename"))
+    if filename_date and filename_date.year in user_years():
+        return {
+            "year": filename_date.year,
+            "month": filename_date.month,
+            "label": f"{MONTH_NAMES[filename_date.month - 1]} {filename_date.year}",
+            "source": "filename",
+            "source_label": "Filename",
+        }
+
+    photo_year = photo.get("year")
+    photo_month = photo.get("month")
+    if photo_year in user_years() and 1 <= photo_month <= 12:
+        return {
+            "year": photo_year,
+            "month": photo_month,
+            "label": f"{MONTH_NAMES[photo_month - 1]} {photo_year}",
+            "source": "upload_bucket",
+            "source_label": "Upload month",
+        }
+
+    return None
+
+
+def splash_photo_payload(photo, *, include_suggestion=False):
+    payload = {
+        "id": photo["id"],
+        "year": photo["year"],
+        "month": photo["month"],
+        "title": photo_display_title(photo),
+        "caption": photo["caption"] or "",
+        "display_date": photo["photo_date"] or "",
+        "thumbnail_url": url_for("splash_photo_thumbnail", photo_id=photo["id"]),
+        "full_url": url_for("photo_image", photo_id=photo["id"]),
+    }
+    if include_suggestion:
+        payload["suggestion"] = no_date_photo_suggestion(photo)
+    return payload
+
+
+def build_splash_photo_page(db, *, year=None, no_date_only=False):
     page_size = request.args.get("page_size", default=80, type=int)
     if page_size is None:
         page_size = 80
@@ -3384,14 +3514,22 @@ def build_splash_photo_page(db):
         page = 0
 
     seed = (request.args.get("seed") or "").strip()[:80] or secrets.token_hex(8)
+    conditions = ["user_id = ?"]
+    params = [g.user["id"]]
+    if year is not None:
+        conditions.append("year = ?")
+        params.append(year)
+    if no_date_only:
+        conditions.append("photo_date IS NULL")
+
     rows = db.execute(
-        """
-        SELECT id, original_filename, title, caption, photo_date, created_at
+        f"""
+        SELECT id, year, month, original_filename, title, caption, photo_date, created_at
         FROM photos
-        WHERE user_id = ?
+        WHERE {" AND ".join(conditions)}
         ORDER BY id ASC
         """,
-        (g.user["id"],),
+        tuple(params),
     ).fetchall()
     photos = [dict(row) for row in rows]
     random.Random(seed).shuffle(photos)
@@ -3412,14 +3550,7 @@ def build_splash_photo_page(db):
         "total": total,
         "total_pages": total_pages,
         "photos": [
-            {
-                "id": photo["id"],
-                "title": photo_display_title(photo),
-                "caption": photo["caption"] or "",
-                "display_date": photo["photo_date"] or "",
-                "thumbnail_url": url_for("splash_photo_thumbnail", photo_id=photo["id"]),
-                "full_url": url_for("photo_image", photo_id=photo["id"]),
-            }
+            splash_photo_payload(photo, include_suggestion=no_date_only)
             for photo in page_photos
         ],
     }
@@ -5748,6 +5879,249 @@ def search_timeline_content(
     return results[:item_limit]
 
 
+def review_issue_stat(label, count, url):
+    return {
+        "label": label,
+        "count": count,
+        "url": url,
+    }
+
+
+def memory_review_context(row):
+    display_date = row["photo_date"] if "photo_date" in row.keys() else row["entry_date"]
+    return timeline_search_context(row, format_timeline_date_label(row["year"], row["month"], display_date))
+
+
+def memory_review_item(kind, row, tags, people, chapter_membership=None):
+    chapter_membership = chapter_membership or {}
+    if kind == "photo":
+        title = photo_display_title(row)
+        preview = row["caption"] or "Photo needs a caption."
+        image_url = url_for("photo_image", photo_id=row["id"])
+        api_url = url_for("delete_photo", photo_id=row["id"])
+        people_url = url_for("photo_people", photo_id=row["id"])
+        location_url = url_for("photo_location", photo_id=row["id"])
+        title_value = row["title"] or ""
+        caption = row["caption"] or ""
+        entry_date = ""
+        body = ""
+    else:
+        title = "Text entry"
+        preview = row["body"]
+        image_url = ""
+        api_url = url_for("text_entry", entry_id=row["id"])
+        people_url = api_url
+        location_url = api_url
+        title_value = ""
+        caption = ""
+        entry_date = row["entry_date"] or ""
+        body = row["body"]
+    return {
+        "kind": "Photo" if kind == "photo" else "Text entry",
+        "kind_key": kind,
+        "id": row["id"],
+        "title": title,
+        "title_value": title_value,
+        "caption": caption,
+        "body": body,
+        "entry_date": entry_date,
+        "tags_text": tags_to_text(tags),
+        "people_text": people_to_text(people),
+        **timeline_location_payload(row),
+        "context": memory_review_context(row),
+        "preview": short_preview(preview, 150),
+        "meta": timeline_search_meta(row, tags, 0, chapter_membership, people),
+        "image_url": image_url,
+        "url": timeline_item_link(g.user["id"], row["year"], row["month"], kind, row["id"]),
+        "api_url": api_url,
+        "people_url": people_url,
+        "location_url": location_url,
+        "chapter_url": url_for("review_item_chapter", item_kind=kind, item_id=row["id"]),
+    }
+
+
+def build_memory_review_queue(db, sample_limit=4):
+    photo_rows = db.execute(
+        """
+        SELECT id, year, month, original_filename, title, caption, photo_date,
+               location_name, latitude, longitude, image_hash, created_at
+        FROM photos
+        WHERE user_id = ?
+        ORDER BY COALESCE(photo_date, created_at) DESC, id DESC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    text_rows = db.execute(
+        """
+        SELECT id, year, month, body, entry_date, location_name, latitude, longitude, created_at
+        FROM text_entries
+        WHERE user_id = ?
+        ORDER BY COALESCE(entry_date, created_at) DESC, id DESC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    photo_ids = [row["id"] for row in photo_rows]
+    text_ids = [row["id"] for row in text_rows]
+    photo_tags = load_tags_for_items(db, "photo", photo_ids)
+    text_tags = load_tags_for_items(db, "text", text_ids)
+    photo_people = load_people_for_items(db, "photo", photo_ids)
+    text_people = load_people_for_items(db, "text", text_ids)
+    photo_chapters = load_timeline_search_chapter_memberships(db, "photo", photo_ids)
+    text_chapters = load_timeline_search_chapter_memberships(db, "text", text_ids)
+
+    issue_defs = {
+        "captions": {
+            "key": "captions",
+            "title": "Photos need captions",
+            "description": "Captionless photos are harder to browse, export, and turn into chapters.",
+            "action_label": "Caption photos",
+            "url": url_for("timeline_search", kind="photo", caption="without"),
+            "items": [],
+            "count": 0,
+            "priority": 1,
+        },
+        "places": {
+            "key": "places",
+            "title": "Memories need places",
+            "description": "Adding places makes maps, place hubs, and family browsing more useful.",
+            "action_label": "Add places",
+            "url": url_for("timeline_search", location="without"),
+            "items": [],
+            "count": 0,
+            "priority": 2,
+        },
+        "people": {
+            "key": "people",
+            "title": "Memories need people",
+            "description": "People tags connect scattered photos and notes into personal timelines.",
+            "action_label": "Tag people",
+            "url": url_for("timeline_people"),
+            "items": [],
+            "count": 0,
+            "priority": 3,
+        },
+        "chapters": {
+            "key": "chapters",
+            "title": "Memories not in chapters",
+            "description": "These memories are ready to become stories instead of staying loose.",
+            "action_label": "Draft chapter",
+            "url": url_for("chapter_draft"),
+            "items": [],
+            "count": 0,
+            "priority": 4,
+        },
+        "public": {
+            "key": "public",
+            "title": "Public photos need polish",
+            "description": "Public memories without captions are visible but may lack useful context.",
+            "action_label": "Review public photos",
+            "url": url_for("timeline_search", kind="photo", visibility="public", caption="without"),
+            "items": [],
+            "count": 0,
+            "priority": 5,
+        },
+    }
+
+    def add_issue(key, item):
+        issue = issue_defs[key]
+        issue["count"] += 1
+        if len(issue["items"]) < sample_limit:
+            issue["items"].append(item)
+
+    for row in photo_rows:
+        tags = photo_tags.get(row["id"], [DEFAULT_TAG])
+        people = photo_people.get(row["id"], [])
+        chapter_membership = photo_chapters.get(row["id"], {})
+        item = memory_review_item("photo", row, tags, people, chapter_membership)
+        if not (row["caption"] or "").strip():
+            add_issue("captions", item)
+        if not timeline_search_has_location(row):
+            add_issue("places", item)
+        if not people:
+            add_issue("people", item)
+        if not chapter_membership.get("count"):
+            add_issue("chapters", item)
+        if tags_to_text(tags) == "public" and not (row["caption"] or "").strip():
+            add_issue("public", item)
+
+    for row in text_rows:
+        tags = text_tags.get(row["id"], [DEFAULT_TAG])
+        people = text_people.get(row["id"], [])
+        chapter_membership = text_chapters.get(row["id"], {})
+        item = memory_review_item("text", row, tags, people, chapter_membership)
+        if not timeline_search_has_location(row):
+            add_issue("places", item)
+        if not people:
+            add_issue("people", item)
+        if not chapter_membership.get("count"):
+            add_issue("chapters", item)
+
+    duplicate_groups = db.execute(
+        """
+        SELECT image_hash, COUNT(*) AS count, MIN(id) AS keep_id, MAX(id) AS duplicate_id
+        FROM photos
+        WHERE user_id = ? AND COALESCE(image_hash, '') <> ''
+        GROUP BY image_hash
+        HAVING COUNT(*) > 1
+        ORDER BY count DESC, keep_id ASC
+        """,
+        (g.user["id"],),
+    ).fetchall()
+    duplicate_issue = {
+        "key": "duplicates",
+        "title": "Possible duplicate photos",
+        "description": "These image matches may be accidental repeats from older uploads or imports.",
+        "action_label": "Review duplicates",
+        "url": url_for("timeline_search", kind="photo"),
+        "items": [],
+        "count": sum(row["count"] for row in duplicate_groups),
+        "priority": 0,
+    }
+    for group in duplicate_groups[:sample_limit]:
+        row = db.execute(
+            """
+            SELECT id, year, month, original_filename, title, caption, photo_date,
+                   location_name, latitude, longitude, image_hash, created_at
+            FROM photos
+            WHERE id = ? AND user_id = ?
+            """,
+            (group["duplicate_id"], g.user["id"]),
+        ).fetchone()
+        if row is not None:
+            tags = photo_tags.get(row["id"], get_tags_for_item(db, "photo", row["id"]))
+            people = photo_people.get(row["id"], get_people_for_item(db, "photo", row["id"]))
+            item = memory_review_item("photo", row, tags, people, photo_chapters.get(row["id"], {}))
+            item["meta"] = [*item["meta"], f"{group['count']} matching copies"]
+            item["duplicate_keep_url"] = timeline_item_link(g.user["id"], row["year"], row["month"], "photo", group["keep_id"])
+            duplicate_issue["items"].append(item)
+
+    issues = [duplicate_issue, *issue_defs.values()]
+    issues = [issue for issue in issues if issue["count"]]
+    issues.sort(key=lambda issue: (issue["priority"], -issue["count"], issue["title"].casefold()))
+    total_memories = len(photo_rows) + len(text_rows)
+    total_issues = sum(issue["count"] for issue in issues)
+    return {
+        "stats": [
+            review_issue_stat("Review issues", total_issues, url_for("timeline_review")),
+            review_issue_stat("Memories", total_memories, url_for("timeline")),
+            review_issue_stat("Photos", len(photo_rows), url_for("timeline_search", kind="photo")),
+            review_issue_stat("Text entries", len(text_rows), url_for("timeline_search", kind="text")),
+        ],
+        "issues": issues,
+        "chapter_options": [
+            {
+                "id": chapter["id"],
+                "title": chapter["title"],
+                "item_count": chapter["item_count"],
+            }
+            for chapter in get_chapters_with_counts(db)
+        ],
+        "complete": total_memories > 0 and not issues,
+        "empty": total_memories == 0,
+        "top_issue": issues[0] if issues else None,
+    }
+
+
 COLLECTION_KIND_CHOICES = ("", "photo", "text")
 TIMELINE_STORY_SOURCE_CHOICES = ("search", "collections")
 
@@ -6422,7 +6796,7 @@ def build_month_items(db, owner_id, year, month, image_url_builder, allowed_tags
         SELECT id, original_filename, title, caption, photo_date,
                location_name, latitude, longitude, created_at
         FROM photos
-        WHERE user_id = ? AND year = ? AND month = ?
+        WHERE user_id = ? AND year = ? AND month = ? AND photo_date IS NOT NULL
         ORDER BY COALESCE(photo_date, created_at) DESC, id DESC
         """,
         (owner_id, year, month),
@@ -6490,6 +6864,49 @@ def build_month_items(db, owner_id, year, month, image_url_builder, allowed_tags
             }
         )
     items.sort(key=timeline_item_sort_key)
+    return attach_reactions(db, items)
+
+
+def build_no_date_photo_items(db, owner_id, year, image_url_builder, allowed_tags=None):
+    photo_rows = db.execute(
+        """
+        SELECT id, year, month, original_filename, title, caption, photo_date,
+               location_name, latitude, longitude, created_at
+        FROM photos
+        WHERE user_id = ? AND year = ? AND photo_date IS NULL
+        ORDER BY created_at DESC, id DESC
+        """,
+        (owner_id, year),
+    ).fetchall()
+    photo_tags = load_tags_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
+    photo_people = load_people_for_items(db, "photo", [photo["id"] for photo in photo_rows], owner_id)
+    items = []
+    for photo in photo_rows:
+        tags = photo_tags.get(photo["id"], [])
+        people = photo_people.get(photo["id"], [])
+        if not tags_visible_to_connection(tags, allowed_tags):
+            continue
+        items.append(
+            {
+                "kind": "photo",
+                "id": photo["id"],
+                "year": photo["year"],
+                "month": photo["month"],
+                "original_filename": photo["original_filename"],
+                "title": photo["title"] or "",
+                "display_title": photo_display_title(photo),
+                "caption": photo["caption"] or "",
+                "display_date": None,
+                **timeline_location_payload(photo),
+                "created_at": photo["created_at"],
+                "image_url": image_url_builder(photo["id"]),
+                "tags": tags,
+                "tags_text": tags_to_text(tags),
+                **people_payload(people),
+                **privacy_payload_for_tags(tags),
+                "guided_prompts": guided_prompts_for_item("photo", photo, people),
+            }
+        )
     return attach_reactions(db, items)
 
 
@@ -7971,6 +8388,66 @@ def timeline():
     return render_template("timeline.html", years=years, year_counts=year_counts)
 
 
+@app.route("/timeline/review")
+@birthday_required
+def timeline_review():
+    return render_template(
+        "timeline_review.html",
+        queue=build_memory_review_queue(get_db()),
+    )
+
+
+@app.route("/api/timeline-review/<item_kind>/<int:item_id>/chapter", methods=("POST",))
+@birthday_required
+def review_item_chapter(item_kind, item_id):
+    if item_kind not in ("photo", "text"):
+        abort(404)
+    db = get_db()
+    payload = request.get_json(silent=True) or request.form
+    try:
+        chapter_id = int(payload.get("chapter_id") or 0)
+    except (TypeError, ValueError):
+        chapter_id = None
+    if chapter_id == 0:
+        chapter_id = None
+    if chapter_id is None:
+        return jsonify({"error": "Choose a chapter."}), 400
+
+    chapter = get_owned_chapter(chapter_id)
+    item = get_owned_timeline_item(item_kind, item_id)
+    existing = db.execute(
+        """
+        SELECT id
+        FROM chapter_items
+        WHERE chapter_id = ? AND item_kind = ? AND item_id = ?
+        """,
+        (chapter_id, item_kind, item["id"]),
+    ).fetchone()
+    if existing is not None:
+        return jsonify({"error": "That item is already in this chapter."}), 409
+
+    db.execute(
+        """
+        INSERT INTO chapter_items (chapter_id, item_kind, item_id, position)
+        VALUES (?, ?, ?, ?)
+        """,
+        (chapter_id, item_kind, item["id"], next_chapter_position(db, chapter_id)),
+    )
+    db.execute(
+        "UPDATE chapters SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (chapter_id,),
+    )
+    db.commit()
+    return jsonify(
+        {
+            "chapter_id": chapter_id,
+            "chapter_title": chapter["title"],
+            "item_kind": item_kind,
+            "item_id": item_id,
+        }
+    )
+
+
 @app.route("/timeline/import", methods=("GET", "POST"))
 @birthday_required
 def timeline_import():
@@ -8553,6 +9030,224 @@ def year_view(year):
         year=year,
         months=months,
         month_counts=month_counts,
+        no_date_count=get_no_date_photo_count(
+            db,
+            year,
+            allowed_tags=privacy_preview_allowed_tags(preview),
+        ),
+    )
+
+
+@app.route("/year/<int:year>/no-date")
+@birthday_required
+def year_no_date_view(year):
+    validate_year_month(year, 1)
+    db = get_db()
+    preview = current_privacy_preview()
+    items = build_no_date_photo_items(
+        db,
+        g.user["id"],
+        year,
+        lambda photo_id: url_for("photo_image", photo_id=photo_id),
+        privacy_preview_allowed_tags(preview),
+    )
+    return render_template(
+        "no_date.html",
+        year=year,
+        items=items,
+        years=list(user_years()),
+        months=[(index + 1, month) for index, month in enumerate(MONTH_NAMES)],
+        splash_seed=secrets.token_hex(8),
+        messages_url_builder=lambda photo_id: url_for("photo_messages", photo_id=photo_id),
+    )
+
+
+@app.route("/year/<int:year>/no-date/photos")
+@birthday_required
+def year_no_date_photos(year):
+    validate_year_month(year, 1)
+    return jsonify(build_splash_photo_page(get_db(), year=year, no_date_only=True))
+
+
+@app.route("/year/<int:year>/no-date/assign", methods=("POST",))
+@birthday_required
+def assign_no_date_photos(year):
+    validate_year_month(year, 1)
+    payload = request.get_json(silent=True) or {}
+    photo_ids = payload.get("photo_ids") or []
+    target_year = payload.get("year")
+    target_month = payload.get("month")
+
+    if not isinstance(photo_ids, list) or not photo_ids:
+        return jsonify({"error": "Select at least one photo."}), 400
+
+    try:
+        normalized_ids = sorted({int(photo_id) for photo_id in photo_ids})
+        target_year = int(target_year)
+        target_month = int(target_month)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Choose a valid year and month."}), 400
+
+    validate_year_month(target_year, target_month)
+    target_date = date(target_year, target_month, 1).isoformat()
+    placeholders = ",".join(["?"] * len(normalized_ids))
+    db = get_db()
+    rows = db.execute(
+        f"""
+        SELECT id
+        FROM photos
+        WHERE user_id = ?
+          AND year = ?
+          AND photo_date IS NULL
+          AND id IN ({placeholders})
+        """,
+        (g.user["id"], year, *normalized_ids),
+    ).fetchall()
+    found_ids = [row["id"] for row in rows]
+    if not found_ids:
+        return jsonify({"error": "No selected undated photos were found."}), 404
+
+    update_placeholders = ",".join(["?"] * len(found_ids))
+    db.execute(
+        f"""
+        UPDATE photos
+        SET year = ?, month = ?, photo_date = ?
+        WHERE user_id = ? AND id IN ({update_placeholders})
+        """,
+        (target_year, target_month, target_date, g.user["id"], *found_ids),
+    )
+    db.commit()
+    return jsonify(
+        {
+            "moved_count": len(found_ids),
+            "target_url": url_for("month_view", year=target_year, month=target_month),
+        }
+    )
+
+
+@app.route("/year/<int:year>/no-date/accept-suggestions", methods=("POST",))
+@birthday_required
+def accept_no_date_photo_suggestions(year):
+    validate_year_month(year, 1)
+    payload = request.get_json(silent=True) or {}
+    photo_ids = payload.get("photo_ids") or []
+
+    if not isinstance(photo_ids, list) or not photo_ids:
+        return jsonify({"error": "Select at least one photo."}), 400
+
+    try:
+        normalized_ids = sorted({int(photo_id) for photo_id in photo_ids})
+    except (TypeError, ValueError):
+        return jsonify({"error": "Select valid photos."}), 400
+
+    placeholders = ",".join(["?"] * len(normalized_ids))
+    db = get_db()
+    rows = db.execute(
+        f"""
+        SELECT id, year, month, original_filename, title, caption, photo_date, created_at
+        FROM photos
+        WHERE user_id = ?
+          AND year = ?
+          AND photo_date IS NULL
+          AND id IN ({placeholders})
+        """,
+        (g.user["id"], year, *normalized_ids),
+    ).fetchall()
+    if not rows:
+        return jsonify({"error": "No selected undated photos were found."}), 404
+
+    moved_count = 0
+    skipped_count = 0
+    for row in rows:
+        photo = dict(row)
+        suggestion = no_date_photo_suggestion(photo)
+        if not suggestion:
+            skipped_count += 1
+            continue
+        target_year = suggestion["year"]
+        target_month = suggestion["month"]
+        db.execute(
+            """
+            UPDATE photos
+            SET year = ?, month = ?, photo_date = ?
+            WHERE user_id = ? AND id = ?
+            """,
+            (
+                target_year,
+                target_month,
+                date(target_year, target_month, 1).isoformat(),
+                g.user["id"],
+                photo["id"],
+            ),
+        )
+        moved_count += 1
+
+    if moved_count == 0:
+        db.rollback()
+        return jsonify({"error": "No selected photos had usable suggestions."}), 400
+
+    db.commit()
+    return jsonify({"moved_count": moved_count, "skipped_count": skipped_count})
+
+
+@app.route("/year/<int:year>/no-date/update-date", methods=("POST",))
+@birthday_required
+def update_no_date_photo_date(year):
+    validate_year_month(year, 1)
+    payload = request.get_json(silent=True) or {}
+
+    try:
+        photo_id = int(payload.get("photo_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Choose a valid photo."}), 400
+
+    exact_date = (payload.get("photo_date") or "").strip()
+    if exact_date:
+        try:
+            parsed_date = normalize_import_photo_date(exact_date)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        target_year = parsed_date.year
+        target_month = parsed_date.month
+        target_date = parsed_date.isoformat()
+    else:
+        try:
+            target_year = int(payload.get("year"))
+            target_month = int(payload.get("month"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Choose a valid year and month."}), 400
+        validate_year_month(target_year, target_month)
+        target_date = date(target_year, target_month, 1).isoformat()
+
+    db = get_db()
+    row = db.execute(
+        """
+        SELECT id
+        FROM photos
+        WHERE user_id = ?
+          AND year = ?
+          AND photo_date IS NULL
+          AND id = ?
+        """,
+        (g.user["id"], year, photo_id),
+    ).fetchone()
+    if row is None:
+        return jsonify({"error": "Selected undated photo was not found."}), 404
+
+    db.execute(
+        """
+        UPDATE photos
+        SET year = ?, month = ?, photo_date = ?
+        WHERE user_id = ? AND id = ?
+        """,
+        (target_year, target_month, target_date, g.user["id"], photo_id),
+    )
+    db.commit()
+    return jsonify(
+        {
+            "moved_count": 1,
+            "target_url": url_for("month_view", year=target_year, month=target_month),
+        }
     )
 
 
@@ -8662,6 +9357,7 @@ def month_view(year, month):
                 year,
                 month,
                 manual_photo_date,
+                image.filename,
             )
             insert_uploaded_photo(
                 db,
@@ -8983,6 +9679,38 @@ def connection_year_view(connection_id, year):
         year=year,
         months=months,
         month_counts=month_counts,
+        no_date_count=get_no_date_photo_count(db, year, connected_user["id"], allowed_tags),
+    )
+
+
+@app.route("/connections/<int:connection_id>/year/<int:year>/no-date")
+@login_required
+def connection_year_no_date_view(connection_id, year):
+    db = get_db()
+    connected_user = get_connected_user(connection_id)
+    allowed_tags = visible_tags_for_connection(connected_user)
+    validate_year_month_for_user(connected_user, year, 1)
+    items = build_no_date_photo_items(
+        db,
+        connected_user["id"],
+        year,
+        lambda photo_id: url_for(
+            "connection_photo_image",
+            connection_id=connected_user["id"],
+            photo_id=photo_id,
+        ),
+        allowed_tags,
+    )
+    return render_template(
+        "no_date.html",
+        connection=public_user_payload(connected_user),
+        year=year,
+        items=items,
+        messages_url_builder=lambda photo_id: url_for(
+            "connection_photo_messages",
+            connection_id=connected_user["id"],
+            photo_id=photo_id,
+        ),
     )
 
 

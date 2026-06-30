@@ -3261,16 +3261,18 @@ document.addEventListener("DOMContentLoaded", () => {
             document.body.classList.remove("modal-open");
         };
 
-        document.querySelectorAll(".connect-open-button").forEach((button) => {
-            button.addEventListener("click", () => {
-                connectionRecipientInput.value = button.dataset.recipientId || "";
-                connectionTarget.textContent = button.dataset.recipientName || "";
-                connectionRelationInputs.forEach((input) => {
-                    input.checked = input.value === "friend";
-                });
-                connectionModal.hidden = false;
-                document.body.classList.add("modal-open");
+        document.addEventListener("click", (event) => {
+            const button = event.target instanceof Element ? event.target.closest(".connect-open-button") : null;
+            if (!button) {
+                return;
+            }
+            connectionRecipientInput.value = button.dataset.recipientId || "";
+            connectionTarget.textContent = button.dataset.recipientName || "";
+            connectionRelationInputs.forEach((input) => {
+                input.checked = input.value === "friend";
             });
+            connectionModal.hidden = false;
+            document.body.classList.add("modal-open");
         });
 
         connectionModal.querySelectorAll("[data-close-connection-modal]").forEach((button) => {
@@ -3305,30 +3307,33 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     };
 
-    document.querySelectorAll("[data-reaction-button]").forEach((button) => {
-        button.addEventListener("click", async (event) => {
-            event.preventDefault();
-            event.stopPropagation();
+    document.addEventListener("click", async (event) => {
+        const button = event.target instanceof Element ? event.target.closest("[data-reaction-button]") : null;
+        if (!button) {
+            return;
+        }
 
-            const bar = button.closest("[data-reaction-bar]");
-            if (!bar || !bar.dataset.reactionUrl) {
-                return;
-            }
+        event.preventDefault();
+        event.stopPropagation();
 
-            const reactionValue = button.dataset.reactionValue;
-            const alreadySelected = bar.dataset.userReaction === reactionValue;
-            const response = await csrfFetch(bar.dataset.reactionUrl, {
-                method: alreadySelected ? "DELETE" : "PUT",
-                headers: {"Content-Type": "application/json"},
-                body: alreadySelected ? null : JSON.stringify({reaction: reactionValue}),
-            });
-            if (!response.ok) {
-                return;
-            }
+        const bar = button.closest("[data-reaction-bar]");
+        if (!bar || !bar.dataset.reactionUrl) {
+            return;
+        }
 
-            const payload = await response.json();
-            updateReactionBars(bar.dataset.reactionKind, bar.dataset.reactionId, payload);
+        const reactionValue = button.dataset.reactionValue;
+        const alreadySelected = bar.dataset.userReaction === reactionValue;
+        const response = await csrfFetch(bar.dataset.reactionUrl, {
+            method: alreadySelected ? "DELETE" : "PUT",
+            headers: {"Content-Type": "application/json"},
+            body: alreadySelected ? null : JSON.stringify({reaction: reactionValue}),
         });
+        if (!response.ok) {
+            return;
+        }
+
+        const payload = await response.json();
+        updateReactionBars(bar.dataset.reactionKind, bar.dataset.reactionId, payload);
     });
 
     document.querySelectorAll("[data-chapter-sequence]").forEach((sequence) => {
@@ -3438,6 +3443,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const homePhotoModal = document.getElementById("home-photo-modal");
     if (homePhotoModal) {
+        const homePhotoSection = document.querySelector("[data-home-refresh-url]");
+        const homePhotoGrid = homePhotoSection ? homePhotoSection.querySelector("[data-home-photo-grid]") : null;
+        const homeEmptyState = homePhotoSection ? homePhotoSection.querySelector("[data-home-empty-state]") : null;
         const homePhotoImage = document.getElementById("home-photo-modal-image");
         const homePhotoTitle = document.getElementById("home-photo-modal-title");
         const homePhotoOwner = document.getElementById("home-photo-modal-owner");
@@ -3448,6 +3456,151 @@ document.addEventListener("DOMContentLoaded", () => {
         const homePhotoMessageInput = homePhotoMessageForm ? homePhotoMessageForm.querySelector("textarea") : null;
         let activeHomePhotoId = null;
         let activeHomePhotoMessagesUrl = "";
+        let homeRefreshTimer = null;
+
+        const homeText = (value) => value == null ? "" : String(value);
+
+        const buildHomeReactionBar = (photo) => {
+            const reactions = photo.reactions || {};
+            const bar = document.createElement("div");
+            bar.className = "reaction-bar ";
+            bar.dataset.reactionBar = "true";
+            bar.dataset.reactionKind = photo.kind || "photo";
+            bar.dataset.reactionId = String(photo.id);
+            bar.dataset.reactionUrl = reactions.reaction_url || "";
+            bar.dataset.userReaction = reactions.user_reaction || "";
+
+            ["like", "love"].forEach((reaction) => {
+                const button = document.createElement("button");
+                const isActive = reactions.user_reaction === reaction;
+                button.className = `reaction-button${isActive ? " is-active" : ""}`;
+                button.type = "button";
+                button.dataset.reactionButton = "true";
+                button.dataset.reactionValue = reaction;
+                button.title = reaction === "like" ? "Like" : "Love";
+                button.setAttribute("aria-label", button.title);
+                button.setAttribute("aria-pressed", isActive ? "true" : "false");
+
+                const icon = document.createElement("span");
+                icon.className = "reaction-icon";
+                icon.setAttribute("aria-hidden", "true");
+                icon.textContent = reaction === "like" ? "\u{1F44D}" : "\u2665";
+
+                const count = document.createElement("span");
+                count.className = "reaction-count";
+                count.dataset.reactionCount = reaction;
+                count.textContent = String(reactions[`${reaction}_count`] || 0);
+
+                button.append(icon, count);
+                bar.appendChild(button);
+            });
+
+            return bar;
+        };
+
+        const buildHomePhotoCard = (photo) => {
+            const item = document.createElement("figure");
+            item.className = "public-photo-item";
+
+            const button = document.createElement("button");
+            button.className = "public-photo-card";
+            button.type = "button";
+            button.title = `${homeText(photo.owner_name)}${photo.display_date ? ` - ${photo.display_date}` : ""}`;
+            button.dataset.fullSrc = homeText(photo.image_url);
+            button.dataset.photoTitle = homeText(photo.title);
+            button.dataset.photoCaption = homeText(photo.caption);
+            button.dataset.photoOwner = homeText(photo.owner_name);
+            button.dataset.photoDate = homeText(photo.display_date);
+            button.dataset.messagesUrl = homeText(photo.messages_url);
+            button.dataset.photoId = homeText(photo.id);
+
+            const image = document.createElement("img");
+            image.src = homeText(photo.image_url);
+            image.alt = homeText(photo.title) || "Public photo";
+            image.loading = "lazy";
+            button.appendChild(image);
+
+            const caption = document.createElement("figcaption");
+            caption.className = "public-photo-meta";
+
+            const ownerRow = document.createElement("div");
+            ownerRow.className = "public-photo-owner-row";
+
+            const owner = document.createElement("strong");
+            owner.textContent = homeText(photo.owner_name);
+            ownerRow.appendChild(owner);
+
+            const connectionState = photo.connection_state || {};
+            if (connectionState.can_request) {
+                const connectButton = document.createElement("button");
+                connectButton.className = "button secondary small connect-open-button";
+                connectButton.type = "button";
+                connectButton.dataset.recipientId = homeText(photo.owner_id);
+                connectButton.dataset.recipientName = homeText(photo.owner_name);
+                connectButton.textContent = "Add connection";
+                ownerRow.appendChild(connectButton);
+            } else {
+                const badge = document.createElement("span");
+                badge.className = "status-badge";
+                badge.textContent = homeText(connectionState.label);
+                ownerRow.appendChild(badge);
+            }
+
+            const date = document.createElement("span");
+            date.textContent = homeText(photo.display_date) || "No date";
+            const title = document.createElement("span");
+            title.textContent = homeText(photo.title);
+            const comments = document.createElement("span");
+            const messageCount = Number(photo.message_count || 0);
+            comments.dataset.publicMessageCount = "true";
+            comments.dataset.photoId = homeText(photo.id);
+            comments.textContent = `${messageCount} ${messageCount === 1 ? "comment" : "comments"}`;
+
+            caption.append(ownerRow, date, title, comments);
+            item.append(button, buildHomeReactionBar(photo), caption);
+            return item;
+        };
+
+        const renderHomePhotoGrid = (photos) => {
+            if (!homePhotoGrid) {
+                return;
+            }
+            homePhotoGrid.innerHTML = "";
+            photos.forEach((photo) => {
+                homePhotoGrid.appendChild(buildHomePhotoCard(photo));
+            });
+            if (homeEmptyState) {
+                homeEmptyState.hidden = photos.length > 0;
+            }
+        };
+
+        const refreshHomePhotoGrid = async () => {
+            if (!homePhotoSection || !homePhotoGrid || !homePhotoSection.dataset.homeRefreshUrl || !homePhotoModal.hidden || document.hidden) {
+                return;
+            }
+
+            homePhotoGrid.classList.add("is-refreshing");
+            window.setTimeout(async () => {
+                try {
+                    const response = await csrfFetch(homePhotoSection.dataset.homeRefreshUrl, {
+                        headers: {"Accept": "application/json"},
+                    });
+                    if (response.ok) {
+                        const payload = await response.json();
+                        renderHomePhotoGrid(Array.isArray(payload.photos) ? payload.photos : []);
+                    }
+                } finally {
+                    requestAnimationFrame(() => {
+                        homePhotoGrid.classList.remove("is-refreshing");
+                    });
+                }
+            }, 320);
+        };
+
+        if (homePhotoSection && homePhotoGrid) {
+            const interval = Math.max(Number(homePhotoSection.dataset.homeRefreshInterval || 12000), 3000);
+            homeRefreshTimer = window.setInterval(refreshHomePhotoGrid, interval);
+        }
 
         const renderHomePhotoMessages = (messages) => {
             homePhotoMessageList.innerHTML = "";
@@ -3532,9 +3685,14 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         };
 
-        document.querySelectorAll(".public-photo-card").forEach((button) => {
-            button.addEventListener("click", () => openHomePhotoModal(button));
-        });
+        if (homePhotoGrid) {
+            homePhotoGrid.addEventListener("click", (event) => {
+                const button = event.target instanceof Element ? event.target.closest(".public-photo-card") : null;
+                if (button) {
+                    openHomePhotoModal(button);
+                }
+            });
+        }
 
         homePhotoModal.querySelectorAll("[data-close-home-photo-modal]").forEach((button) => {
             button.addEventListener("click", closeHomePhotoModal);

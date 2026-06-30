@@ -11,9 +11,14 @@
     </div>
 </section>
 
-<section class="public-photo-section" aria-label="Public photos">
+<section
+    class="public-photo-section"
+    aria-label="Public photos"
+    data-home-refresh-url="{{ url_for('home_photos') }}"
+    data-home-refresh-interval="12000"
+>
     {% if photos %}
-        <div class="public-photo-grid">
+        <div class="public-photo-grid" data-home-photo-grid>
             {% for photo in photos %}
                 <figure class="public-photo-item">
                     <button
@@ -60,8 +65,10 @@
                 </figure>
             {% endfor %}
         </div>
+        <p class="empty-state" data-home-empty-state hidden>No public photos yet.</p>
     {% else %}
-        <p class="empty-state">No public photos yet.</p>
+        <div class="public-photo-grid" data-home-photo-grid></div>
+        <p class="empty-state" data-home-empty-state>No public photos yet.</p>
     {% endif %}
 </section>
 

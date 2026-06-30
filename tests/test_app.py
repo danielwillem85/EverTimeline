@@ -508,6 +508,32 @@ def test_uploads_text_entries_and_pdf_exports(client, helpers):
     assert month_pdf.data.startswith(b"%PDF")
 
 
+def test_home_photo_refresh_endpoint_and_public_image_cache(client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="home-public.png",
+        title="Home public photo",
+        tag="public",
+    )
+
+    home = client.get("/home")
+    assert home.status_code == 200
+    assert b'data-home-refresh-url="/api/home/photos"' in home.data
+    assert b"data-home-photo-grid" in home.data
+
+    response = client.get("/api/home/photos")
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    payload = response.get_json()
+    assert payload["photos"][0]["id"] == photo_id
+    assert payload["photos"][0]["image_url"] == f"/public/photo/{photo_id}/image"
+
+    image = client.get(f"/public/photo/{photo_id}/image")
+    assert image.status_code == 200
+    assert image.headers["Cache-Control"] == "private, max-age=604800"
+
+
 def test_photo_date_detection_uses_exif_and_filename_fallbacks(client, helpers):
     helpers.create_user(client, "owner")
 

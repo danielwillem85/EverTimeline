@@ -115,6 +115,8 @@ DEFAULT_MAX_UPLOAD_BYTES = 256 * 1024 * 1024
 DEFAULT_MAX_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024
 DEFAULT_MAX_IMAGE_PIXELS = 50_000_000
 DEFAULT_MAX_BACKUP_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+DEFAULT_MAX_BACKUP_MANIFEST_BYTES = 10 * 1024 * 1024
+DEFAULT_MAX_BACKUP_FILE_COUNT = 5_000
 ADMIN_USERNAME = "Daniel"
 SQLITE_BUSY_TIMEOUT_MS = 30000
 IMAGE_CONVERSION_COMMIT_INTERVAL = 5
@@ -181,6 +183,13 @@ def configured_max_backup_uncompressed_bytes():
     )
 
 
+def configured_max_backup_manifest_bytes():
+    return configured_megabyte_limit(
+        "EVERTIMELINE_MAX_BACKUP_MANIFEST_MB",
+        DEFAULT_MAX_BACKUP_MANIFEST_BYTES,
+    )
+
+
 def configured_megabyte_limit(env_name, default_bytes):
     value = os.environ.get(env_name)
     if not value:
@@ -207,6 +216,19 @@ def configured_max_image_pixels():
     return pixels
 
 
+def configured_max_backup_file_count():
+    value = os.environ.get("EVERTIMELINE_MAX_BACKUP_FILES")
+    if not value:
+        return DEFAULT_MAX_BACKUP_FILE_COUNT
+    try:
+        file_count = int(value)
+    except ValueError:
+        return DEFAULT_MAX_BACKUP_FILE_COUNT
+    if file_count <= 0:
+        return DEFAULT_MAX_BACKUP_FILE_COUNT
+    return file_count
+
+
 def human_readable_bytes(byte_count):
     if byte_count >= 1024 * 1024 * 1024:
         return f"{byte_count / (1024 * 1024 * 1024):g} GB"
@@ -225,6 +247,8 @@ app.config.update(
     MAX_IMAGE_UPLOAD_BYTES=configured_max_image_upload_bytes(),
     MAX_IMAGE_PIXELS=configured_max_image_pixels(),
     MAX_BACKUP_UNCOMPRESSED_BYTES=configured_max_backup_uncompressed_bytes(),
+    MAX_BACKUP_MANIFEST_BYTES=configured_max_backup_manifest_bytes(),
+    MAX_BACKUP_FILE_COUNT=configured_max_backup_file_count(),
     CSRF_PROTECT=True,
     LOCAL_PASSWORD_RESET_LINKS=is_local_development(),
     PRODUCTION_SECURITY_HEADERS=PRODUCTION_SECURITY_ENABLED,
@@ -8082,6 +8106,20 @@ def backup_created_at(value):
     return text or utc_now().isoformat()
 
 
+def backup_upload_stream(backup_file):
+    stream = getattr(backup_file, "stream", backup_file)
+    try:
+        stream.seek(0, os.SEEK_END)
+        if stream.tell() == 0:
+            raise ValueError("Choose a backup zip to import.")
+        stream.seek(0)
+    except ValueError:
+        raise
+    except (AttributeError, OSError):
+        pass
+    return stream
+
+
 def read_backup_manifest(archive):
     try:
         manifest_data = archive.read(BACKUP_MANIFEST_NAME)
@@ -8102,13 +8140,32 @@ def read_backup_manifest(archive):
     return manifest
 
 
-def validate_backup_archive_size(archive):
+def validate_backup_archive(archive):
+    entries = archive.infolist()
+    max_files = app.config["MAX_BACKUP_FILE_COUNT"]
+    if len(entries) > max_files:
+        raise ValueError(f"Backup contains too many files. The limit is {max_files:,} files.")
+
     max_uncompressed = app.config["MAX_BACKUP_UNCOMPRESSED_BYTES"]
     total_uncompressed = 0
-    for info in archive.infolist():
+    seen_names = set()
+    manifest_info = None
+    for info in entries:
+        if info.filename in seen_names:
+            raise ValueError("Backup contains duplicate file entries.")
+        seen_names.add(info.filename)
+        if info.filename == BACKUP_MANIFEST_NAME:
+            manifest_info = info
         total_uncompressed += info.file_size
         if total_uncompressed > max_uncompressed:
             raise ValueError("Backup is too large to import.")
+    if manifest_info is None:
+        raise ValueError("Choose an EverTimeline backup zip.")
+    max_manifest_bytes = app.config["MAX_BACKUP_MANIFEST_BYTES"]
+    if manifest_info.file_size > max_manifest_bytes:
+        raise ValueError(
+            f"Backup manifest is too large. The limit is {human_readable_bytes(max_manifest_bytes)}."
+        )
 
 
 def restore_backup_birthday(db, manifest):
@@ -8357,13 +8414,9 @@ def import_chapters_from_backup(db, chapters, photo_id_map, text_id_map):
 
 
 def import_account_backup(backup_file):
-    data = backup_file.read()
-    if not data:
-        raise ValueError("Choose a backup zip to import.")
-
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            validate_backup_archive_size(archive)
+        with zipfile.ZipFile(backup_upload_stream(backup_file)) as archive:
+            validate_backup_archive(archive)
             manifest = read_backup_manifest(archive)
             db = get_db()
             restore_backup_birthday(db, manifest)

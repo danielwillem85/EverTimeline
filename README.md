@@ -17,7 +17,14 @@ Debug mode is off by default. Set `EVERTIMELINE_DEBUG=1` for local debugging.
 
 Local `python app.py` runs with a development secret key. For any non-local environment, set `SECRET_KEY` to a strong random value and set `EVERTIMELINE_ENV=production`.
 
-Password reset links are shown in the browser only for local development. Production reset delivery should stay disabled until email delivery is added.
+Password reset links are shown in the browser only for local development. To send reset links by email, configure Resend with:
+
+```powershell
+$env:RESEND_API_KEY = "re_..."
+$env:RESEND_FROM_EMAIL = "EverTimeline <reset@your-verified-domain.com>"
+```
+
+Resend requires a valid API key and a verified sending domain. In production, leave local reset links disabled and use the email delivery path.
 
 ## Storage
 

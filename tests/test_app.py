@@ -280,6 +280,37 @@ def test_password_reset_sends_resend_email_when_configured(app, client, helpers,
     assert helpers.row("SELECT COUNT(*) AS token_count FROM password_reset_tokens")["token_count"] == 1
 
 
+def test_password_reset_email_still_sends_when_local_link_enabled(app, client, helpers, monkeypatch):
+    helpers.create_user(client, "alice")
+    app.config.update(
+        LOCAL_PASSWORD_RESET_LINKS=True,
+        PASSWORD_RESET_EMAIL_ENABLED=True,
+        RESEND_API_KEY="test-resend-key",
+        RESEND_FROM_EMAIL="EverTimeline <reset@example.com>",
+    )
+    sent_messages = []
+
+    def fake_send(payload):
+        sent_messages.append(payload)
+        return {"id": "email_456"}
+
+    monkeypatch.setattr(helpers.app_module.resend.Emails, "send", fake_send)
+
+    response = client.post(
+        "/forgot-password",
+        data={
+            **helpers.csrf_form_data(client, "/forgot-password"),
+            "identifier": "alice",
+        },
+    )
+
+    assert response.status_code == 200
+    assert b"/reset-password/" in response.data
+    assert len(sent_messages) == 1
+    assert sent_messages[0]["to"] == ["alice@example.com"]
+    assert "/reset-password/" in sent_messages[0]["text"]
+
+
 def test_password_reset_token_changes_password_and_cannot_be_reused(app, client, helpers):
     helpers.create_user(client, "alice", password="old-password")
     app.config["LOCAL_PASSWORD_RESET_LINKS"] = True

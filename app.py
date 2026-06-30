@@ -2287,14 +2287,12 @@ def prepare_password_reset_delivery(db, user):
     token = create_password_reset_token(db, user["id"])
     reset_url = url_for("reset_password", token=token, _external=True)
 
-    if local_links_enabled:
-        db.commit()
-        return reset_url
-
     if email_delivery_enabled:
         send_password_reset_email(user, reset_url)
-        db.commit()
 
+    db.commit()
+    if local_links_enabled:
+        return reset_url
     return None
 
 

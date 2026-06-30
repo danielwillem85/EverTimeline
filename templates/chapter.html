@@ -89,6 +89,8 @@
     </details>
 </section>
 
+{% include "_legacy_notes.html" %}
+
 <section class="connection-section">
     <h2>Shared album invites</h2>
     <form method="post" action="{{ url_for('create_chapter_invite', chapter_id=chapter['id']) }}" class="chapter-invite-form">

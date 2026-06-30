@@ -37,6 +37,7 @@ def register_chapter_routes(app, core):
     get_shared_chapters = core.get_shared_chapters
     invitable_chapter_connections = core.invitable_chapter_connections
     load_messages_for_timeline_item = core.load_messages_for_timeline_item
+    load_legacy_notes = core.load_legacy_notes
     move_chapter_item = core.move_chapter_item
     next_chapter_position = core.next_chapter_position
     parse_chapter_bulk_photo_ids = core.parse_chapter_bulk_photo_ids
@@ -363,6 +364,9 @@ def register_chapter_routes(app, core):
             cover_options=items,
             invite_connections=invitable_chapter_connections(db, chapter_id),
             chapter_invites=chapter_invites_for_chapter(db, chapter_id),
+            legacy_notes=load_legacy_notes(db, "chapter", chapter_id),
+            legacy_note_target={"type": "chapter", "key": chapter_id},
+            legacy_note_prompt="Why this chapter mattered",
             selected_cover_ref=(
                 f"{chapter['cover_item_kind']}:{chapter['cover_item_id']}"
                 if chapter.get("cover_item_kind") and chapter.get("cover_item_id")
@@ -581,6 +585,13 @@ def register_chapter_routes(app, core):
     def delete_chapter(chapter_id):
         get_owned_chapter(chapter_id)
         db = get_db()
+        db.execute(
+            """
+            DELETE FROM legacy_notes
+            WHERE user_id = ? AND target_type = 'chapter' AND target_key = ?
+            """,
+            (g.user["id"], str(chapter_id)),
+        )
         db.execute(
             "DELETE FROM chapters WHERE id = ? AND user_id = ?",
             (chapter_id, g.user["id"]),

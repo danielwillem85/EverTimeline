@@ -4863,6 +4863,110 @@ details.privacy-toggle-panel {
     font-weight: 800;
 }
 
+.legacy-notes-panel {
+    display: grid;
+    gap: 14px;
+    margin-bottom: 18px;
+    border: 1px solid rgba(22, 109, 103, 0.24);
+    border-radius: 8px;
+    padding: 16px;
+    background: #f7fbfa;
+}
+
+.legacy-notes-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+}
+
+.legacy-notes-header h2 {
+    margin: 6px 0 4px;
+    color: var(--ink);
+    font-size: 1.08rem;
+}
+
+.legacy-notes-header p {
+    margin-bottom: 0;
+    color: var(--muted);
+    font-weight: 800;
+    line-height: 1.45;
+}
+
+.legacy-note-form {
+    display: grid;
+    grid-template-columns: minmax(140px, 0.42fr) minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 10px;
+}
+
+.legacy-note-form label {
+    display: grid;
+    gap: 5px;
+}
+
+.legacy-note-form span {
+    color: var(--muted);
+    font-size: 0.76rem;
+    font-weight: 900;
+}
+
+.legacy-note-form input,
+.legacy-note-form textarea {
+    width: 100%;
+    min-height: 38px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0 10px;
+    background: #fff;
+    color: var(--ink);
+    font: inherit;
+    font-size: 0.88rem;
+    font-weight: 800;
+}
+
+.legacy-note-form textarea {
+    min-height: 84px;
+    padding: 9px 10px;
+    line-height: 1.4;
+    resize: vertical;
+}
+
+.legacy-note-list {
+    display: grid;
+    gap: 10px;
+}
+
+.legacy-note-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    background: #fff;
+}
+
+.legacy-note-card h3 {
+    margin-bottom: 5px;
+    color: var(--ink);
+    font-size: 0.98rem;
+}
+
+.legacy-note-card p {
+    margin-bottom: 6px;
+    color: var(--ink);
+    line-height: 1.45;
+    white-space: pre-wrap;
+}
+
+.legacy-note-card span {
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 900;
+}
+
 .hub-chip-list {
     display: flex;
     flex-wrap: wrap;
@@ -5175,6 +5279,10 @@ details.privacy-toggle-panel {
         flex-direction: column;
     }
 
+    .legacy-notes-header {
+        flex-direction: column;
+    }
+
     .floating-progress {
         right: 10px;
         bottom: 10px;
@@ -5210,6 +5318,7 @@ details.privacy-toggle-panel {
     .review-place-form,
     .review-prompt-form,
     .review-prompt-place-form,
+    .legacy-note-form,
     .collection-filter-form,
     .tags-form,
     .location-form,
@@ -5256,6 +5365,7 @@ details.privacy-toggle-panel {
     .timeline-search-card,
     .review-focus-panel,
     .review-issue-header,
+    .legacy-note-card,
     .map-place-card,
     .collections-layout,
     .saved-view-card,
@@ -5274,6 +5384,7 @@ details.privacy-toggle-panel {
     .review-card-actions,
     .review-inline-form .button,
     .review-duplicate-actions .button,
+    .legacy-note-card .button,
     .map-place-card .button,
     .saved-view-card .button,
     .collection-result-card .button,

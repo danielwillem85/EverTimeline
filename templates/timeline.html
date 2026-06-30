@@ -61,7 +61,10 @@
         <progress max="100" value="{{ score['percent'] }}"></progress>
         <div class="memory-completeness-summary-row">
             <p>{{ score["summary"] }}</p>
-            <a class="button secondary small" href="{{ url_for('timeline_review') }}">Open review queue</a>
+            <div class="memory-completeness-actions">
+                <a class="button primary small" href="{{ url_for('timeline_guided_review') }}">Start guided review</a>
+                <a class="button secondary small" href="{{ url_for('timeline_review') }}">Open review queue</a>
+            </div>
         </div>
     </section>
 {% endif %}

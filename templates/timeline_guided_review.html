@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+
+{% block title %}Guided memory review - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
+        <h1>Guided memory review</h1>
+    </div>
+    <div class="page-actions">
+        <a class="button secondary" href="{{ url_for('timeline_review') }}">Review queue</a>
+    </div>
+</section>
+
+{% set score = queue["score"] %}
+<section class="guided-review-shell">
+    <aside class="guided-review-progress" aria-label="Guided review progress">
+        <span class="status-badge">Focused mode</span>
+        <strong>{{ score["percent"] }}% - {{ score["label"] }}</strong>
+        <progress max="100" value="{{ score['percent'] }}"></progress>
+        <p>{{ score["summary"] }}</p>
+        {% if current %}
+            <span>{{ steps|length }} guided item{% if steps|length != 1 %}s{% endif %} ready</span>
+        {% endif %}
+    </aside>
+
+    <section class="guided-review-main" aria-label="Current guided review item">
+        {% if current %}
+            {% set issue = current["issue"] %}
+            {% set item = current["item"] %}
+            <div class="guided-review-step">
+                <div>
+                    <span class="status-badge">Step 1 of {{ steps|length }}</span>
+                    <h2>{{ issue["title"] }}</h2>
+                    <p>{{ issue["description"] }}</p>
+                </div>
+                <a class="button secondary small" href="{{ item['url'] }}">Open item</a>
+            </div>
+
+            <article
+                class="timeline-search-card review-sample-card guided-review-card"
+                data-review-card
+                data-kind="{{ item['kind_key'] }}"
+                data-item-id="{{ item['id'] }}"
+                data-api-url="{{ item['api_url'] }}"
+                data-people-url="{{ item['people_url'] }}"
+                data-location-url="{{ item['location_url'] }}"
+                data-chapter-url="{{ item['chapter_url'] }}"
+                data-title="{{ item['title_value'] }}"
+                data-caption="{{ item['caption'] }}"
+                data-body="{{ item['body'] }}"
+                data-entry-date="{{ item['entry_date'] }}"
+                data-tags="{{ item['tags_text'] }}"
+                data-people="{{ item['people_text'] }}"
+                data-location-name="{{ item['location_name'] }}"
+                data-latitude="{{ item['latitude'] if item['latitude'] is not none else '' }}"
+                data-longitude="{{ item['longitude'] if item['longitude'] is not none else '' }}"
+                data-guided-prompts="{{ item['guided_prompts']|tojson|forceescape }}"
+            >
+                <div class="timeline-search-content">
+                    {% if item.get("image_url") %}
+                        <img class="timeline-search-thumb guided-review-thumb" src="{{ item['image_url'] }}" alt="">
+                    {% endif %}
+                    <div class="timeline-search-main">
+                        <span class="status-badge">{{ item["kind"] }}</span>
+                        <h3>{{ item["title"] }}</h3>
+                        <span>{{ item["context"] }}</span>
+                        <p>{{ item["preview"] }}</p>
+                        {% if item.get("meta") %}
+                            <div class="timeline-search-meta">
+                                {% for meta in item["meta"] %}
+                                    <span>{{ meta }}</span>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="review-card-actions guided-review-actions">
+                    {% if issue["key"] == "prompts" %}
+                        <div class="review-prompt-stack">
+                            {% for prompt in item["review_prompts"] %}
+                                {% if prompt["target"] == "caption" %}
+                                    <form class="review-inline-form review-prompt-form" data-review-action="prompt-caption">
+                                        <div class="review-prompt-copy">
+                                            <span>Time capsule question</span>
+                                            <strong>{{ prompt["label"] }}</strong>
+                                            <small>{{ prompt["text"] }}</small>
+                                        </div>
+                                        <label>
+                                            <span>Answer</span>
+                                            <textarea name="caption" rows="2" maxlength="2000" placeholder="{{ prompt['text'] }}">{{ item["caption"] }}</textarea>
+                                        </label>
+                                        <button class="button primary small" type="submit">Save answer</button>
+                                    </form>
+                                {% elif prompt["target"] == "body" %}
+                                    <form class="review-inline-form review-prompt-form" data-review-action="prompt-body">
+                                        <div class="review-prompt-copy">
+                                            <span>Time capsule question</span>
+                                            <strong>{{ prompt["label"] }}</strong>
+                                            <small>{{ prompt["text"] }}</small>
+                                        </div>
+                                        <label>
+                                            <span>Answer</span>
+                                            <textarea name="body" rows="3" placeholder="{{ prompt['text'] }}">{{ item["body"] }}</textarea>
+                                        </label>
+                                        <button class="button primary small" type="submit">Save answer</button>
+                                    </form>
+                                {% elif prompt["target"] == "people" %}
+                                    <form class="review-inline-form review-prompt-form" data-review-action="prompt-people">
+                                        <div class="review-prompt-copy">
+                                            <span>Time capsule question</span>
+                                            <strong>{{ prompt["label"] }}</strong>
+                                            <small>{{ prompt["text"] }}</small>
+                                        </div>
+                                        <label>
+                                            <span>People</span>
+                                            <input name="people" value="{{ item['people_text'] }}" placeholder="Alice, Sam" maxlength="500" autocomplete="off">
+                                        </label>
+                                        <button class="button primary small" type="submit">Save people</button>
+                                    </form>
+                                {% elif prompt["target"] == "location" %}
+                                    <form class="review-inline-form review-prompt-form review-prompt-place-form" data-review-action="prompt-location">
+                                        <div class="review-prompt-copy">
+                                            <span>Time capsule question</span>
+                                            <strong>{{ prompt["label"] }}</strong>
+                                            <small>{{ prompt["text"] }}</small>
+                                        </div>
+                                        <label>
+                                            <span>Place</span>
+                                            <input name="location_name" value="{{ item['location_name'] }}" placeholder="City, venue, or address" autocomplete="off">
+                                        </label>
+                                        <label>
+                                            <span>Lat</span>
+                                            <input name="latitude" value="{{ item['latitude'] if item['latitude'] is not none else '' }}" inputmode="decimal">
+                                        </label>
+                                        <label>
+                                            <span>Long</span>
+                                            <input name="longitude" value="{{ item['longitude'] if item['longitude'] is not none else '' }}" inputmode="decimal">
+                                        </label>
+                                        <button class="button primary small" type="submit">Save place</button>
+                                    </form>
+                                {% endif %}
+                            {% endfor %}
+                        </div>
+                    {% elif issue["key"] in ("captions", "public") and item["kind_key"] == "photo" %}
+                        <form class="review-inline-form review-caption-form" data-review-action="caption">
+                            <label>
+                                <span>Caption</span>
+                                <textarea name="caption" rows="2" maxlength="2000" placeholder="Add what makes this photo meaningful">{{ item["caption"] }}</textarea>
+                            </label>
+                            <button class="button primary small" type="submit">Save caption</button>
+                        </form>
+                    {% elif issue["key"] == "people" %}
+                        <form class="review-inline-form" data-review-action="people">
+                            <label>
+                                <span>People</span>
+                                <input name="people" value="{{ item['people_text'] }}" placeholder="Alice, Sam" maxlength="500" autocomplete="off">
+                            </label>
+                            <button class="button primary small" type="submit">Save people</button>
+                        </form>
+                    {% elif issue["key"] == "places" %}
+                        <form class="review-inline-form review-place-form" data-review-action="location">
+                            <label>
+                                <span>Place</span>
+                                <input name="location_name" value="{{ item['location_name'] }}" placeholder="City, venue, or address" autocomplete="off">
+                            </label>
+                            <label>
+                                <span>Lat</span>
+                                <input name="latitude" value="{{ item['latitude'] if item['latitude'] is not none else '' }}" inputmode="decimal">
+                            </label>
+                            <label>
+                                <span>Long</span>
+                                <input name="longitude" value="{{ item['longitude'] if item['longitude'] is not none else '' }}" inputmode="decimal">
+                            </label>
+                            <button class="button primary small" type="submit">Save place</button>
+                        </form>
+                    {% elif issue["key"] == "chapters" %}
+                        {% if queue["chapter_options"] %}
+                            <form class="review-inline-form" data-review-action="chapter">
+                                <label>
+                                    <span>Chapter</span>
+                                    <select name="chapter_id" required>
+                                        <option value="">Choose chapter</option>
+                                        {% for chapter in queue["chapter_options"] %}
+                                            <option value="{{ chapter['id'] }}">{{ chapter["title"] }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </label>
+                                <button class="button primary small" type="submit">Add</button>
+                            </form>
+                        {% else %}
+                            <a class="button primary small" href="{{ url_for('chapters') }}">Create chapter</a>
+                        {% endif %}
+                    {% elif issue["key"] == "duplicates" %}
+                        <div class="review-duplicate-actions">
+                            <a class="button secondary small" href="{{ item['duplicate_keep_url'] }}">Open original</a>
+                            <button
+                                class="button danger small"
+                                type="button"
+                                data-review-delete
+                                data-confirm-title="Delete duplicate photo?"
+                                data-confirm-message="This permanently removes this matching copy, including messages, chapter placements, tags, and reactions."
+                            >Delete duplicate</button>
+                        </div>
+                    {% endif %}
+                    <span class="review-action-status" data-review-status aria-live="polite"></span>
+                </div>
+            </article>
+        {% elif queue["complete"] %}
+            <p class="empty-state">Your timeline has no review issues right now.</p>
+        {% else %}
+            <p class="empty-state">Add memories to start guided review.</p>
+        {% endif %}
+    </section>
+</section>
+{% endblock %}

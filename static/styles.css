@@ -1509,6 +1509,14 @@ details.privacy-toggle-panel {
     flex: 0 0 auto;
 }
 
+.memory-completeness-actions {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
 .submit-progress {
     margin-top: 4px;
 }
@@ -4865,6 +4873,101 @@ details.privacy-toggle-panel {
     gap: 14px;
 }
 
+.guided-review-shell {
+    display: grid;
+    grid-template-columns: minmax(220px, 0.32fr) minmax(0, 1fr);
+    gap: 18px;
+    align-items: start;
+}
+
+.guided-review-progress,
+.guided-review-main {
+    display: grid;
+    gap: 12px;
+}
+
+.guided-review-progress {
+    position: sticky;
+    top: 78px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.guided-review-progress strong {
+    color: var(--ink);
+    font-size: 1.08rem;
+}
+
+.guided-review-progress progress {
+    width: 100%;
+    height: 10px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 999px;
+    background: var(--border);
+}
+
+.guided-review-progress progress::-webkit-progress-bar {
+    border-radius: 999px;
+    background: var(--border);
+}
+
+.guided-review-progress progress::-webkit-progress-value {
+    border-radius: 999px;
+    background: var(--primary);
+}
+
+.guided-review-progress progress::-moz-progress-bar {
+    border-radius: 999px;
+    background: var(--primary);
+}
+
+.guided-review-progress p,
+.guided-review-progress > span:not(.status-badge),
+.guided-review-step p {
+    margin-bottom: 0;
+    color: var(--muted);
+    line-height: 1.45;
+}
+
+.guided-review-progress > span:not(.status-badge) {
+    font-size: 0.86rem;
+    font-weight: 900;
+}
+
+.guided-review-step {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+    border: 1px solid rgba(22, 109, 103, 0.28);
+    border-radius: 8px;
+    padding: 18px;
+    background: #f7fbfa;
+}
+
+.guided-review-step h2 {
+    margin: 6px 0 4px;
+    color: var(--ink);
+    font-size: 1.24rem;
+}
+
+.guided-review-card {
+    align-items: stretch;
+}
+
+.guided-review-thumb {
+    width: 150px;
+    height: 150px;
+}
+
+.guided-review-actions {
+    min-width: min(100%, 420px);
+}
+
 .review-issue-card {
     display: grid;
     gap: 14px;
@@ -5666,6 +5769,11 @@ details.privacy-toggle-panel {
         gap: 10px;
     }
 
+    .memory-completeness-actions {
+        width: 100%;
+        justify-content: flex-start;
+    }
+
     .anniversary-group-header {
         align-items: flex-start;
         flex-direction: column;
@@ -5762,12 +5870,18 @@ details.privacy-toggle-panel {
     .legacy-note-card,
     .map-place-card,
     .collections-layout,
+    .guided-review-shell,
+    .guided-review-step,
     .saved-view-card,
     .collection-result-card,
     .chapter-invite-card,
     .chapter-share-link-card {
         grid-template-columns: 1fr;
         align-items: stretch;
+    }
+
+    .guided-review-progress {
+        position: static;
     }
 
     .memory-score-meter {

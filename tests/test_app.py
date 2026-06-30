@@ -2746,6 +2746,57 @@ def test_legacy_notes_attach_to_private_timeline_hubs(app, client, helpers):
     assert b"What I want you to know about Avery." not in client.get(f"/timeline/people/{person_id}").data
 
 
+def test_timeline_heat_map_button_and_png_use_photo_counts(app, client, helpers):
+    user_id = helpers.create_user(client, "owner", birthday="2020-01-15")
+    with app.app_context():
+        db = helpers.app_module.get_db()
+        for index, year in enumerate([2022, 2022, 2022, 2022], start=1):
+            image = io.BytesIO()
+            Image.new("RGB", (12, 12), color=(40 + index, 80, 120)).save(image, format="JPEG")
+            image_data = image.getvalue()
+            db.execute(
+                """
+                INSERT INTO photos (
+                    user_id, year, month, original_filename, title, caption,
+                    image_hash, mime_type, image_data, photo_date
+                )
+                VALUES (?, ?, 5, ?, ?, '', ?, 'image/jpeg', ?, ?)
+                """,
+                (
+                    user_id,
+                    year,
+                    f"heat-{index}.jpg",
+                    f"Heat photo {index}",
+                    helpers.app_module.photo_image_hash(image_data),
+                    image_data,
+                    f"{year}-05-{index:02d}",
+                ),
+            )
+        db.execute(
+            """
+            INSERT INTO text_entries (user_id, year, month, body, entry_date)
+            VALUES (?, 2021, 5, 'Text should not affect photo heat', '2021-05-04')
+            """,
+            (user_id,),
+        )
+        db.commit()
+
+    timeline = client.get("/timeline")
+    assert timeline.status_code == 200
+    assert b"Heat map" in timeline.data
+    assert b"/timeline/heat-map.png" in timeline.data
+
+    response = client.get("/timeline/heat-map.png")
+    assert response.status_code == 200
+    assert response.mimetype == "image/png"
+    assert response.data.startswith(b"\x89PNG")
+
+    heat_map = Image.open(io.BytesIO(response.data)).convert("RGB")
+    colors = set(heat_map.getdata())
+    assert (29, 78, 216) in colors
+    assert (220, 38, 38) in colors
+
+
 def test_memory_review_queue_prioritizes_incomplete_memories(client, helpers):
     helpers.create_user(client, "owner")
     helpers.upload_photo(

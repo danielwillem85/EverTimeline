@@ -5,6 +5,7 @@ import calendar
 import hashlib
 import io
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import random
@@ -38,7 +39,7 @@ from flask_limiter.util import get_remote_address
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
-from PIL import Image, ImageOps
+from PIL import Image, ImageDraw, ImageOps
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -3559,6 +3560,72 @@ def get_year_counts(db, user_id=None, allowed_tags=None):
         for row in rows:
             counts[row["year"]] = counts.get(row["year"], 0) + row["item_count"]
     return counts
+
+
+def get_year_photo_counts(db, user_id=None):
+    owner_id = user_id if user_id is not None else g.user["id"]
+    rows = db.execute(
+        """
+        SELECT year, COUNT(*) AS photo_count
+        FROM photos
+        WHERE user_id = ?
+        GROUP BY year
+        """,
+        (owner_id,),
+    ).fetchall()
+    return {row["year"]: row["photo_count"] for row in rows}
+
+
+def heat_map_square_color(count, max_count):
+    if count <= 0 or max_count <= 0:
+        return (29, 78, 216)
+    intensity = min(1.0, count / max_count)
+    blue = (29, 78, 216)
+    red = (220, 38, 38)
+    return tuple(
+        round(blue[index] + ((red[index] - blue[index]) * intensity))
+        for index in range(3)
+    )
+
+
+def render_timeline_heat_map(years, photo_counts):
+    years = list(years)
+    square_size = 72
+    gap = 8
+    padding = 24
+    columns = max(1, math.ceil(math.sqrt(len(years) or 1)))
+    rows = max(1, math.ceil((len(years) or 1) / columns))
+    width = padding * 2 + columns * square_size + (columns - 1) * gap
+    height = padding * 2 + rows * square_size + (rows - 1) * gap
+    max_count = max((photo_counts.get(year, 0) for year in years), default=0)
+
+    image = Image.new("RGB", (width, height), (247, 251, 250))
+    draw = ImageDraw.Draw(image)
+    for index, year in enumerate(years):
+        row = index // columns
+        column = index % columns
+        x = padding + column * (square_size + gap)
+        y = padding + row * (square_size + gap)
+        count = photo_counts.get(year, 0)
+        color = heat_map_square_color(count, max_count)
+        draw.rectangle(
+            (x, y, x + square_size - 1, y + square_size - 1),
+            fill=color,
+        )
+        text_color = (255, 255, 255)
+        year_text = str(year)
+        count_text = f"{count} photo" if count == 1 else f"{count} photos"
+        year_box = draw.textbbox((0, 0), year_text)
+        count_box = draw.textbbox((0, 0), count_text)
+        year_x = x + (square_size - (year_box[2] - year_box[0])) / 2
+        count_x = x + (square_size - (count_box[2] - count_box[0])) / 2
+        draw.text((year_x, y + 22), year_text, fill=text_color)
+        draw.text((count_x, y + 40), count_text, fill=text_color)
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer.getvalue()
 
 
 def get_month_counts(db, year, user_id=None, allowed_tags=None):
@@ -9408,6 +9475,19 @@ def timeline():
         year_counts=year_counts,
         review_queue=review_queue,
     )
+
+
+@app.route("/timeline/heat-map.png")
+@birthday_required
+def timeline_heat_map_image():
+    db = get_db()
+    image_data = render_timeline_heat_map(
+        user_years(),
+        get_year_photo_counts(db),
+    )
+    response = Response(image_data, mimetype="image/png")
+    response.headers["Cache-Control"] = "private, max-age=300"
+    return response
 
 
 @app.route("/timeline/anniversaries")

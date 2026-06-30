@@ -65,6 +65,12 @@ PRIVACY_AUDIENCE_HELP = {
     "public": "All accepted connections can see this item.",
 }
 CONNECTION_RELATIONS = ("friend", "family")
+CHAPTER_SHARE_LINK_DURATIONS = (
+    (7, "7 days"),
+    (30, "30 days"),
+    (90, "90 days"),
+    (365, "1 year"),
+)
 CONNECTION_VISIBLE_TAGS = {
     "friend": ("friends", "public"),
     "family": ("family", "friends", "public"),
@@ -671,6 +677,16 @@ def init_db():
                 FOREIGN KEY (recipient_id) REFERENCES users (id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS chapter_share_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chapter_id INTEGER NOT NULL,
+                token TEXT NOT NULL UNIQUE,
+                expires_at TEXT NOT NULL,
+                revoked_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (chapter_id) REFERENCES chapters (id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
@@ -803,6 +819,18 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS chapter_invites_chapter_status
             ON chapter_invites (chapter_id, status, recipient_id)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS chapter_share_links_chapter_created
+            ON chapter_share_links (chapter_id, created_at, id)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS chapter_share_links_token_active
+            ON chapter_share_links (token, revoked_at, expires_at)
             """
         )
         db.execute(
@@ -4330,6 +4358,116 @@ def chapter_invites_for_chapter(db, chapter_id):
     ).fetchall()
 
 
+def chapter_share_link_duration(value):
+    allowed_days = {days for days, _label in CHAPTER_SHARE_LINK_DURATIONS}
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        return 30
+    return days if days in allowed_days else 30
+
+
+def parse_stored_datetime(value):
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def chapter_share_link_status(row):
+    if row["revoked_at"]:
+        return "revoked"
+    expires_at = parse_stored_datetime(row["expires_at"])
+    if expires_at is None or expires_at <= utc_now():
+        return "expired"
+    return "active"
+
+
+def chapter_share_link_url(token):
+    return url_for("public_chapter_share", token=token, _external=True)
+
+
+def chapter_share_links_for_chapter(db, chapter_id):
+    rows = db.execute(
+        """
+        SELECT *
+        FROM chapter_share_links
+        WHERE chapter_id = ?
+        ORDER BY created_at DESC, id DESC
+        """,
+        (chapter_id,),
+    ).fetchall()
+    links = []
+    for row in rows:
+        link = dict(row)
+        link["status"] = chapter_share_link_status(row)
+        link["share_url"] = chapter_share_link_url(row["token"]) if link["status"] == "active" else ""
+        links.append(link)
+    return links
+
+
+def create_chapter_share_link(db, chapter_id, days):
+    token = secrets.token_urlsafe(32)
+    expires_at = (utc_now() + timedelta(days=days)).isoformat()
+    db.execute(
+        """
+        INSERT INTO chapter_share_links (chapter_id, token, expires_at)
+        VALUES (?, ?, ?)
+        """,
+        (chapter_id, token, expires_at),
+    )
+    return token
+
+
+def get_valid_chapter_share_link(token):
+    row = get_db().execute(
+        """
+        SELECT
+            csl.*,
+            c.user_id,
+            c.title,
+            c.description,
+            c.visibility,
+            c.cover_item_kind,
+            c.cover_item_id,
+            u.username,
+            u.first_name,
+            u.last_name
+        FROM chapter_share_links csl
+        JOIN chapters c ON c.id = csl.chapter_id
+        JOIN users u ON u.id = c.user_id
+        WHERE csl.token = ?
+        """,
+        (token or "",),
+    ).fetchone()
+    if row is None or chapter_share_link_status(row) != "active":
+        abort(404)
+
+    chapter = dict(row)
+    chapter["id"] = row["chapter_id"]
+    chapter["owner_name"] = user_full_name(row) or row["username"]
+    return chapter
+
+
+def public_chapter_share_contains_item(db, token, item_kind, item_id):
+    if item_kind not in ("photo", "text"):
+        abort(404)
+    chapter = get_valid_chapter_share_link(token)
+    row = db.execute(
+        """
+        SELECT id
+        FROM chapter_items
+        WHERE chapter_id = ? AND item_kind = ? AND item_id = ?
+        """,
+        (chapter["id"], item_kind, item_id),
+    ).fetchone()
+    if row is None:
+        abort(404)
+    return chapter
+
+
 def invitable_chapter_connections(db, chapter_id):
     invited_ids = {
         row["recipient_id"]
@@ -4572,6 +4710,7 @@ def build_chapter_items(
     item_url_builder=None,
     reaction_url_builder=None,
     include_messages=True,
+    include_reactions=True,
 ):
     owner_id = owner_id if owner_id is not None else g.user["id"]
     refs = db.execute(
@@ -4694,8 +4833,9 @@ def build_chapter_items(
             if include_messages:
                 item["messages"] = load_messages_for_timeline_item(db, "text", entry["id"]) if message_url_builder else []
             items.append(item)
-    attach_reactions(db, items)
-    if reaction_url_builder:
+    if include_reactions:
+        attach_reactions(db, items)
+    if include_reactions and reaction_url_builder:
         for item in items:
             item["reactions"]["reaction_url"] = reaction_url_builder(item["kind"], item["id"])
     return items

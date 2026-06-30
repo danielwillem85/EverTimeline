@@ -3167,6 +3167,112 @@ def test_shared_chapter_invite_allows_album_comments_without_timeline_access(app
     assert b"loved your text entry" in notifications.data
 
 
+def test_private_chapter_share_link_is_expiring_read_only_access(app, client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="share-link-photo.png",
+        title="Shared link photo",
+        caption="Caption visible through the private link",
+        tag="private",
+    )
+    text_id = helpers.create_text(
+        client,
+        "Read-only link text memory",
+        tag="private",
+    )
+
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Link-only chapter",
+            "description": "No account needed",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Link-only chapter",))["id"]
+
+    for item_kind, item_id in (("photo", photo_id), ("text", text_id)):
+        response = client.post(
+            "/chapters/items",
+            data={
+                **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+                "chapter_id": chapter_id,
+                "item_kind": item_kind,
+                "item_id": item_id,
+            },
+        )
+        assert response.status_code == 302
+
+    chapter_page = client.get(f"/chapters/{chapter_id}")
+    assert chapter_page.status_code == 200
+    assert b"Private sharing links" in chapter_page.data
+    assert b"Create private link" in chapter_page.data
+
+    create_link_response = client.post(
+        f"/chapters/{chapter_id}/share-links",
+        data={
+            **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+            "expires_days": "7",
+        },
+    )
+    assert create_link_response.status_code == 302
+    link = helpers.row(
+        "SELECT id, token, expires_at, revoked_at FROM chapter_share_links WHERE chapter_id = ?",
+        (chapter_id,),
+    )
+    assert link["token"]
+    assert link["revoked_at"] is None
+
+    updated_chapter_page = client.get(f"/chapters/{chapter_id}")
+    assert updated_chapter_page.status_code == 200
+    assert f"/share/chapter/{link['token']}".encode() in updated_chapter_page.data
+    assert b"Active link" in updated_chapter_page.data
+
+    public = app.test_client()
+    public_page = public.get(f"/share/chapter/{link['token']}")
+    assert public_page.status_code == 200
+    assert b"Link-only chapter" in public_page.data
+    assert b"Read-only link text memory" in public_page.data
+    assert b"Caption visible through the private link" in public_page.data
+    assert b"Export chapter PDF" in public_page.data
+    assert b"chapter-reactions" not in public_page.data
+    assert b"api/timeline-item" not in public_page.data
+
+    image_response = public.get(f"/share/chapter/{link['token']}/photo/{photo_id}/image")
+    assert image_response.status_code == 200
+    assert image_response.mimetype == "image/jpeg"
+
+    assert public.get(f"/share/chapter/{link['token']}/photo/{photo_id + 999}/image").status_code == 404
+
+    pdf_response = public.get(f"/share/chapter/{link['token']}/export.pdf")
+    assert pdf_response.status_code == 200
+    assert pdf_response.mimetype == "application/pdf"
+    assert pdf_response.data.startswith(b"%PDF")
+
+    revoke_response = client.post(
+        f"/chapters/{chapter_id}/share-links/{link['id']}/revoke",
+        data=helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+    )
+    assert revoke_response.status_code == 302
+    assert public.get(f"/share/chapter/{link['token']}").status_code == 404
+
+    expired_token = "expired-test-token"
+    with app.app_context():
+        db = helpers.app_module.get_db()
+        db.execute(
+            """
+            INSERT INTO chapter_share_links (chapter_id, token, expires_at)
+            VALUES (?, ?, ?)
+            """,
+            (chapter_id, expired_token, "2000-01-01T00:00:00+00:00"),
+        )
+        db.commit()
+    assert public.get(f"/share/chapter/{expired_token}").status_code == 404
+
+
 def test_reactions_messages_and_notifications_for_connection(app, client, helpers):
     owner_id = helpers.create_user(client, "owner")
     text_id = helpers.create_text(client, "A memory worth sharing", tag="friends")

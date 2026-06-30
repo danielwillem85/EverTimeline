@@ -3903,7 +3903,8 @@ details.privacy-toggle-panel {
     font-size: 0.84rem;
     font-weight: 800;
 }
-.chapter-invite-form {
+.chapter-invite-form,
+.chapter-share-link-form {
     display: grid;
     grid-template-columns: minmax(220px, 360px) auto;
     align-items: end;
@@ -3911,12 +3912,14 @@ details.privacy-toggle-panel {
     margin-bottom: 14px;
 }
 
-.chapter-invite-list {
+.chapter-invite-list,
+.chapter-share-link-list {
     display: grid;
     gap: 10px;
 }
 
-.chapter-invite-card {
+.chapter-invite-card,
+.chapter-share-link-card {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
@@ -3927,13 +3930,15 @@ details.privacy-toggle-panel {
     background: #fff;
 }
 
-.chapter-invite-card div {
+.chapter-invite-card div,
+.chapter-share-link-card div {
     display: grid;
     min-width: 0;
     gap: 4px;
 }
 
-.chapter-invite-card span {
+.chapter-invite-card span,
+.chapter-share-link-card span {
     overflow: hidden;
     color: var(--muted);
     font-size: 0.84rem;
@@ -5326,7 +5331,8 @@ details.privacy-toggle-panel {
     .chapter-form,
     .chapter-draft-filter-form,
     .chapter-bulk-review-form,
-    .chapter-invite-form {
+    .chapter-invite-form,
+    .chapter-share-link-form {
         grid-template-columns: 1fr;
     }
 
@@ -5370,7 +5376,8 @@ details.privacy-toggle-panel {
     .collections-layout,
     .saved-view-card,
     .collection-result-card,
-    .chapter-invite-card {
+    .chapter-invite-card,
+    .chapter-share-link-card {
         grid-template-columns: 1fr;
         align-items: stretch;
     }
@@ -5389,6 +5396,7 @@ details.privacy-toggle-panel {
     .saved-view-card .button,
     .collection-result-card .button,
     .chapter-invite-card .button,
+    .chapter-share-link-card .button,
     .inline-form {
         width: 100%;
     }
@@ -5402,7 +5410,8 @@ details.privacy-toggle-panel {
     .collection-result-main span,
     .map-place-main span:not(.status-badge),
     .map-place-main small,
-    .chapter-invite-card span {
+    .chapter-invite-card span,
+    .chapter-share-link-card span {
         white-space: normal;
     }
 

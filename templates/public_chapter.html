@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}{{ chapter["title"] }} - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <div class="chapter-title-row">
+            <h1>{{ chapter["title"] }}</h1>
+            <span class="status-badge">Shared by {{ chapter["owner_name"] }}</span>
+        </div>
+        {% if chapter["description"] %}
+            <p class="muted">{{ chapter["description"] }}</p>
+        {% endif %}
+    </div>
+</section>
+
+<section class="chapter-hero-panel shared-chapter-hero">
+    <div class="chapter-hero-cover">
+        {% if chapter["cover"] %}
+            {% if chapter["cover"]["kind"] == "photo" %}
+                <img src="{{ chapter['cover']['image_url'] }}" alt="{{ chapter['cover']['label'] }}" loading="lazy">
+            {% else %}
+                <div class="chapter-hero-text-cover">{{ chapter["cover"]["body"] }}</div>
+            {% endif %}
+        {% else %}
+            <div class="chapter-hero-empty-cover">No cover</div>
+        {% endif %}
+    </div>
+    <div class="shared-chapter-summary">
+        <h2>Shared chapter</h2>
+        <p>This read-only link shows only the items in this chapter.</p>
+        <a
+            class="button secondary"
+            href="{{ url_for('export_public_chapter_pdf', token=token) }}"
+            data-download-progress
+            data-progress-label="Preparing chapter PDF..."
+        >Export chapter PDF</a>
+    </div>
+</section>
+
+<section class="connection-section">
+    <h2>Chapter sequence</h2>
+    {% if items %}
+        <div class="chapter-sequence shared-chapter-sequence">
+            {% for item in items %}
+                <article class="chapter-sequence-item" id="{{ item['kind'] }}-{{ item['id'] }}">
+                    <div class="chapter-position">{{ loop.index }}</div>
+                    <div class="chapter-preview-wrap">
+                        <div class="chapter-preview">
+                            {% if item["kind"] == "photo" %}
+                                <img src="{{ item['image_url'] }}" alt="{{ item['title'] }}" loading="lazy">
+                            {% else %}
+                                <div class="chapter-text-preview">{{ item["body"] }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="chapter-item-main">
+                        <strong>{{ item["title"] }}</strong>
+                        <span>{{ item["date_label"] }} - {{ item["source_label"] }}</span>
+                        {% if item["people"] %}
+                            <div class="people-chip-list" aria-label="People">
+                                {% for person in item["people"] %}
+                                    <span class="people-chip">{{ person }}</span>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                        {% if item["kind"] == "photo" and item["caption"] %}
+                            <p>{{ item["caption"] }}</p>
+                        {% endif %}
+                        {% if item["kind"] == "text" %}
+                            <p>{{ item["body"] }}</p>
+                        {% endif %}
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty-state">This shared chapter has no items yet.</p>
+    {% endif %}
+</section>
+{% endblock %}

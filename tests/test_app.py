@@ -3,6 +3,7 @@ import json
 import re
 import zipfile
 import hashlib
+from datetime import date
 
 from PIL import Image
 
@@ -2152,6 +2153,53 @@ def test_timeline_search_finds_owned_content_types_and_excludes_other_users(app,
     assert response.status_code == 200
     assert b"forbidden galaxy" not in response.data
     assert b"No timeline matches." in response.data
+
+
+def test_anniversary_mode_surfaces_today_upcoming_and_birthday(app, client, helpers):
+    app.config["ANNIVERSARY_TODAY"] = date(2026, 5, 4)
+    helpers.create_user(client, "owner", birthday="2000-05-06")
+    helpers.upload_photo(
+        client,
+        filename="anniversary-picnic.png",
+        photo_date="2020-05-04",
+        title="Park picnic",
+        caption="Blanket by the old willow",
+        people="Avery Guide",
+        location_name="Harbor Park",
+    )
+    helpers.create_text(
+        client,
+        "Graduation week dinner",
+        year=2019,
+        month=5,
+        entry_date="2019-05-06",
+        people="Riley Reader",
+    )
+    helpers.create_text(
+        client,
+        "Outside window",
+        year=2020,
+        month=7,
+        entry_date="2020-07-04",
+    )
+
+    timeline = client.get("/timeline")
+    assert timeline.status_code == 200
+    assert b"/timeline/anniversaries" in timeline.data
+    assert b"Anniversaries" in timeline.data
+
+    response = client.get("/timeline/anniversaries")
+    assert response.status_code == 200
+    assert b"Anniversaries" in response.data
+    assert b"On this day" in response.data
+    assert b"Coming this week" in response.data
+    assert b"Park picnic" in response.data
+    assert b"6 years ago" in response.data
+    assert b"Graduation week dinner" in response.data
+    assert b"7 years ago" in response.data
+    assert b"Your birthday" in response.data
+    assert b"You turn 26." in response.data
+    assert b"Outside window" not in response.data
 
 
 def test_memory_review_queue_prioritizes_incomplete_memories(client, helpers):

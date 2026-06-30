@@ -1778,6 +1778,12 @@ details.privacy-toggle-panel {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
     gap: 16px;
+    opacity: 1;
+    transition: opacity 300ms ease;
+}
+
+.public-photo-grid.is-refreshing {
+    opacity: 0;
 }
 
 .public-photo-item {

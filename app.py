@@ -9037,13 +9037,26 @@ def index():
 @app.route("/home")
 @birthday_required
 def home():
-    return render_template("home.html", photos=public_photo_wall_items(get_db()))
+    db = get_db()
+    return render_template(
+        "home.html",
+        photos=public_photo_wall_items(db),
+        public_photos=random_public_photos(db),
+    )
 
 
 @app.route("/api/home/public-photos")
 @birthday_required
 def home_public_photos():
     return jsonify({"photos": public_photo_wall_items(get_db())})
+
+
+@app.route("/api/home/photos")
+@birthday_required
+def home_photos():
+    response = jsonify({"photos": random_public_photos(get_db())})
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.route("/splash")
@@ -11216,7 +11229,9 @@ def photo_image(photo_id):
 @birthday_required
 def public_photo_image(photo_id):
     photo = get_public_photo(photo_id)
-    return Response(photo["image_data"], mimetype=photo["mime_type"])
+    response = Response(photo["image_data"], mimetype=photo["mime_type"])
+    response.headers["Cache-Control"] = "private, max-age=604800"
+    return response
 
 
 @app.route("/public/photo/<int:photo_id>/messages", methods=("GET", "POST"))

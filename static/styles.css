@@ -1382,6 +1382,23 @@ details.privacy-toggle-panel {
     margin-top: -2px;
 }
 
+.heat-map-frame {
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.heat-map-frame img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border-radius: 6px;
+}
+
 .anniversary-group-list {
     display: grid;
     gap: 18px;

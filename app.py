@@ -9490,6 +9490,12 @@ def timeline_heat_map_image():
     return response
 
 
+@app.route("/timeline/heat-map")
+@birthday_required
+def timeline_heat_map():
+    return render_template("timeline_heat_map.html")
+
+
 @app.route("/timeline/anniversaries")
 @birthday_required
 def timeline_anniversaries():

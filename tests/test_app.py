@@ -2784,7 +2784,12 @@ def test_timeline_heat_map_button_and_png_use_photo_counts(app, client, helpers)
     timeline = client.get("/timeline")
     assert timeline.status_code == 200
     assert b"Heat map" in timeline.data
-    assert b"/timeline/heat-map.png" in timeline.data
+    assert b"/timeline/heat-map" in timeline.data
+
+    heat_map_page = client.get("/timeline/heat-map")
+    assert heat_map_page.status_code == 200
+    assert b"Timeline photo heat map" in heat_map_page.data
+    assert b"/timeline/heat-map.png" in heat_map_page.data
 
     response = client.get("/timeline/heat-map.png")
     assert response.status_code == 200

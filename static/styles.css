@@ -1492,8 +1492,20 @@ details.privacy-toggle-panel {
     margin-top: 0;
 }
 
-.memory-completeness-card .button {
-    justify-self: start;
+.memory-completeness-summary-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    min-width: 0;
+}
+
+.memory-completeness-summary-row p {
+    min-width: 0;
+}
+
+.memory-completeness-summary-row .button {
+    flex: 0 0 auto;
 }
 
 .submit-progress {
@@ -5500,6 +5512,12 @@ details.privacy-toggle-panel {
     .progress-card-row {
         align-items: flex-start;
         flex-direction: column;
+    }
+
+    .memory-completeness-summary-row {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 10px;
     }
 
     .anniversary-group-header {

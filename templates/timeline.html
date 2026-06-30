@@ -38,8 +38,10 @@
             <span>{{ score["percent"] }}% - {{ score["label"] }}</span>
         </div>
         <progress max="100" value="{{ score['percent'] }}"></progress>
-        <p>{{ score["summary"] }}</p>
-        <a class="button secondary small" href="{{ url_for('timeline_review') }}">Open review queue</a>
+        <div class="memory-completeness-summary-row">
+            <p>{{ score["summary"] }}</p>
+            <a class="button secondary small" href="{{ url_for('timeline_review') }}">Open review queue</a>
+        </div>
     </section>
 {% endif %}
 <section class="progress-card timeline-completeness-card" aria-label="Timeline completeness">

@@ -90,6 +90,10 @@
     <p>{{ month_progress.item_count }} item{% if month_progress.item_count != 1 %}s{% endif %} in {{ year }}</p>
 </section>
 
+{% if not privacy_preview %}
+    {% include "_legacy_notes.html" %}
+{% endif %}
+
 {% set carousel_items_url = preview_url('timeline_items', year=year) %}
 <section class="timeline-frame year-carousel-actions" aria-label="Year carousel">
     <button class="button primary view-all-button" id="view-all-button" type="button">View all</button>

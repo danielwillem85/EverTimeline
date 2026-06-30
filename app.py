@@ -480,6 +480,18 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS legacy_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                target_type TEXT NOT NULL CHECK (target_type IN ('person', 'chapter', 'year', 'place')),
+                target_key TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS photo_import_batches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
@@ -684,6 +696,12 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS timeline_stories_user_updated
             ON timeline_stories (user_id, updated_at, created_at)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS legacy_notes_user_target_updated
+            ON legacy_notes (user_id, target_type, target_key, updated_at, created_at)
             """
         )
         db.execute(
@@ -1146,6 +1164,14 @@ def normalize_photo_title(value):
 
 def normalize_photo_caption(value):
     return (value or "").strip()[:2000]
+
+
+def normalize_legacy_note_title(value):
+    return " ".join((value or "").strip().split())[:120]
+
+
+def normalize_legacy_note_body(value):
+    return (value or "").strip()[:4000]
 
 
 def photo_display_title(photo):
@@ -3669,6 +3695,71 @@ def redirect_back(default_endpoint="timeline", **kwargs):
     if target and target.startswith("/") and not target.startswith("//"):
         return redirect(target)
     return redirect(url_for(default_endpoint, **kwargs))
+
+
+LEGACY_NOTE_TARGETS = ("person", "chapter", "year", "place")
+
+
+def legacy_note_target_key(target_type, target_key):
+    raw_key = str(target_key or "").strip()
+    if target_type in ("person", "chapter"):
+        try:
+            return str(int(raw_key))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Choose a valid note target.") from exc
+    if target_type == "year":
+        try:
+            year = int(raw_key)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Choose a valid year.") from exc
+        if year not in user_years():
+            raise ValueError("Choose a year in your timeline.")
+        return str(year)
+    if target_type == "place":
+        normalized_place = normalize_place_name(raw_key)
+        if not normalized_place:
+            raise ValueError("Choose a valid place.")
+        return place_group_key(normalized_place)
+    raise ValueError("Choose a valid note target.")
+
+
+def legacy_note_target_exists(db, target_type, target_key):
+    if target_type == "person":
+        get_timeline_person(db, int(target_key))
+        return True
+    if target_type == "chapter":
+        get_owned_chapter(int(target_key))
+        return True
+    if target_type == "year":
+        return int(target_key) in user_years()
+    if target_type == "place":
+        for item in build_timeline_map_items(db):
+            if place_group_key(item["location_name"]) == target_key:
+                return True
+        raise ValueError("Choose a place from your timeline.")
+    raise ValueError("Choose a valid note target.")
+
+
+def normalize_legacy_note_target(db, target_type, target_key):
+    normalized_type = (target_type or "").strip().lower()
+    if normalized_type not in LEGACY_NOTE_TARGETS:
+        raise ValueError("Choose a valid note target.")
+    normalized_key = legacy_note_target_key(normalized_type, target_key)
+    legacy_note_target_exists(db, normalized_type, normalized_key)
+    return normalized_type, normalized_key
+
+
+def load_legacy_notes(db, target_type, target_key):
+    normalized_key = legacy_note_target_key(target_type, target_key)
+    return db.execute(
+        """
+        SELECT id, target_type, target_key, title, body, created_at, updated_at
+        FROM legacy_notes
+        WHERE user_id = ? AND target_type = ? AND target_key = ?
+        ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
+        """,
+        (g.user["id"], target_type, normalized_key),
+    ).fetchall()
 
 
 def request_includes_messages():
@@ -9177,6 +9268,9 @@ def timeline_person(person_id):
         person=person,
         items=items,
         hub=build_person_hub(db, person, items),
+        legacy_notes=load_legacy_notes(db, "person", person_id),
+        legacy_note_target={"type": "person", "key": person_id},
+        legacy_note_prompt=f"What I want you to know about {person['name']}",
     )
 
 @app.route("/timeline/map")
@@ -9237,6 +9331,9 @@ def timeline_place():
         mapped_items=[item for item in items if item["has_coordinates"]],
         year_label=build_place_summaries(items)[0]["year_label"],
         hub=build_place_hub(db, normalize_place_name(items[0]["location_name"]), items),
+        legacy_notes=load_legacy_notes(db, "place", normalize_place_name(items[0]["location_name"])),
+        legacy_note_target={"type": "place", "key": normalize_place_name(items[0]["location_name"])},
+        legacy_note_prompt=f"Why {normalize_place_name(items[0]['location_name'])} mattered",
     )
 
 
@@ -9258,6 +9355,9 @@ def year_view(year):
             year,
             allowed_tags=privacy_preview_allowed_tags(preview),
         ),
+        legacy_notes=[] if preview else load_legacy_notes(db, "year", year),
+        legacy_note_target={"type": "year", "key": year},
+        legacy_note_prompt=f"What {year} meant",
     )
 
 
@@ -9863,6 +9963,62 @@ def timeline_items():
             include_messages=request_includes_messages(),
         )
     )
+
+
+@app.route("/legacy-notes", methods=("POST",))
+@birthday_required
+def create_legacy_note():
+    db = get_db()
+    try:
+        target_type, target_key = normalize_legacy_note_target(
+            db,
+            request.form.get("target_type", ""),
+            request.form.get("target_key", ""),
+        )
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect_back()
+
+    title = normalize_legacy_note_title(request.form.get("title", ""))
+    body = normalize_legacy_note_body(request.form.get("body", ""))
+    if not body:
+        flash("Legacy note cannot be empty.", "error")
+        return redirect_back()
+
+    db.execute(
+        """
+        INSERT INTO legacy_notes (user_id, target_type, target_key, title, body)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (g.user["id"], target_type, target_key, title, body),
+    )
+    db.commit()
+    flash("Legacy note saved.", "success")
+    return redirect_back()
+
+
+@app.route("/legacy-notes/<int:note_id>/delete", methods=("POST",))
+@birthday_required
+def delete_legacy_note(note_id):
+    db = get_db()
+    note = db.execute(
+        """
+        SELECT id
+        FROM legacy_notes
+        WHERE id = ? AND user_id = ?
+        """,
+        (note_id, g.user["id"]),
+    ).fetchone()
+    if note is None:
+        abort(404)
+
+    db.execute(
+        "DELETE FROM legacy_notes WHERE id = ? AND user_id = ?",
+        (note_id, g.user["id"]),
+    )
+    db.commit()
+    flash("Legacy note deleted.", "success")
+    return redirect_back()
 
 
 from routes.chapters import register_chapter_routes

@@ -2202,6 +2202,89 @@ def test_anniversary_mode_surfaces_today_upcoming_and_birthday(app, client, help
     assert b"Outside window" not in response.data
 
 
+def test_legacy_notes_attach_to_private_timeline_hubs(app, client, helpers):
+    helpers.create_user(client, "owner")
+    helpers.upload_photo(
+        client,
+        filename="legacy-place.png",
+        photo_date="2020-05-04",
+        title="Harbor picnic",
+        caption="Blanket by the water",
+        people="Avery Guide",
+        location_name="Harbor Park",
+    )
+    person_id = helpers.row("SELECT id FROM people WHERE name = ?", ("Avery Guide",))["id"]
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Legacy chapter",
+            "description": "A family story",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Legacy chapter",))["id"]
+
+    note_targets = [
+        ("person", person_id, f"/timeline/people/{person_id}", "For Avery", "What I want you to know about Avery."),
+        ("chapter", chapter_id, f"/chapters/{chapter_id}", "For the chapter", "Why this trip mattered."),
+        ("year", 2020, "/year/2020", "For 2020", "For my children later."),
+        ("place", "Harbor Park", "/timeline/map/place?name=Harbor%20Park", "For Harbor Park", "This place held us together."),
+    ]
+    for target_type, target_key, next_url, title, body in note_targets:
+        response = client.post(
+            "/legacy-notes",
+            data={
+                **helpers.csrf_form_data(client, next_url),
+                "target_type": target_type,
+                "target_key": target_key,
+                "title": title,
+                "body": body,
+                "next": next_url,
+            },
+        )
+        assert response.status_code == 302
+
+    person_page = client.get(f"/timeline/people/{person_id}")
+    assert b"Legacy notes" in person_page.data
+    assert b"For Avery" in person_page.data
+    assert b"What I want you to know about Avery." in person_page.data
+
+    chapter_page = client.get(f"/chapters/{chapter_id}")
+    assert b"For the chapter" in chapter_page.data
+    assert b"Why this trip mattered." in chapter_page.data
+
+    year_page = client.get("/year/2020")
+    assert b"For 2020" in year_page.data
+    assert b"For my children later." in year_page.data
+
+    place_page = client.get("/timeline/map/place?name=Harbor%20Park")
+    assert b"For Harbor Park" in place_page.data
+    assert b"This place held us together." in place_page.data
+
+    note_id = helpers.row("SELECT id FROM legacy_notes WHERE title = ?", ("For Avery",))["id"]
+    other = app.test_client()
+    helpers.create_user(other, "other")
+    assert other.post(
+        f"/legacy-notes/{note_id}/delete",
+        data={
+            **helpers.csrf_form_data(other, "/timeline"),
+            "next": "/timeline",
+        },
+    ).status_code == 404
+
+    delete_response = client.post(
+        f"/legacy-notes/{note_id}/delete",
+        data={
+            **helpers.csrf_form_data(client, f"/timeline/people/{person_id}"),
+            "next": f"/timeline/people/{person_id}",
+        },
+    )
+    assert delete_response.status_code == 302
+    assert b"What I want you to know about Avery." not in client.get(f"/timeline/people/{person_id}").data
+
+
 def test_memory_review_queue_prioritizes_incomplete_memories(client, helpers):
     helpers.create_user(client, "owner")
     helpers.upload_photo(

@@ -1199,6 +1199,8 @@ def test_splash_page_api_and_thumbnails_are_owned(app, client, helpers):
     assert b'data-splash-size="0.5"' in page.data
     assert b'data-splash-size="1"' in page.data
     assert b'data-splash-size="1.5"' in page.data
+    assert b"data-splash-photo-prev" in page.data
+    assert b"data-splash-photo-next" in page.data
 
     response = client.get("/api/splash-photos?seed=test-seed&page=0&page_size=1")
     assert response.status_code == 200

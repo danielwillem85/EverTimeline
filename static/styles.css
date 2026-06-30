@@ -3251,6 +3251,12 @@ details.privacy-toggle-panel {
     color: #9c2f22;
 }
 
+.splash-photo-modal-nav-button {
+    min-width: 36px;
+    padding-left: 8px;
+    padding-right: 8px;
+}
+
 .splash-photo-modal-body {
     display: grid;
     min-width: 0;

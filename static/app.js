@@ -1176,6 +1176,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const splashPhotoImage = document.getElementById("splash-photo-modal-image");
         const splashPhotoTitle = document.getElementById("splash-photo-modal-title");
         const splashPhotoDate = document.getElementById("splash-photo-modal-date");
+        const splashPhotoPrevButton = splashPhotoModal ? splashPhotoModal.querySelector("[data-splash-photo-prev]") : null;
+        const splashPhotoNextButton = splashPhotoModal ? splashPhotoModal.querySelector("[data-splash-photo-next]") : null;
         const splashChapterPhotoInput = document.querySelector("[data-splash-chapter-photo-id]");
         const splashChapterForm = document.querySelector("[data-splash-chapter-form]");
         const splashChapterSelect = document.querySelector("[data-splash-chapter-select]");
@@ -1202,6 +1204,8 @@ document.addEventListener("DOMContentLoaded", () => {
         let splashPageSize = 0;
         let splashTotalPages = 0;
         let splashResizeTimer = null;
+        let splashOpenPhotos = [];
+        let splashOpenPhotoIndex = -1;
         const selectedSplashPhotoIds = new Set();
         const splashSuggestions = new Map();
 
@@ -1284,13 +1288,27 @@ document.addEventListener("DOMContentLoaded", () => {
             if (splashChapterForm) {
                 delete splashChapterForm.dataset.submitting;
             }
+            splashOpenPhotoIndex = -1;
             syncModalOpenState();
         };
 
-        const openSplashPhotoModal = (photo) => {
+        const updateSplashPhotoNavigation = () => {
+            const hasMultiplePhotos = splashOpenPhotos.length > 1 && splashOpenPhotoIndex >= 0;
+            if (splashPhotoPrevButton) {
+                splashPhotoPrevButton.hidden = !hasMultiplePhotos;
+                splashPhotoPrevButton.disabled = !hasMultiplePhotos;
+            }
+            if (splashPhotoNextButton) {
+                splashPhotoNextButton.hidden = !hasMultiplePhotos;
+                splashPhotoNextButton.disabled = !hasMultiplePhotos;
+            }
+        };
+
+        const showSplashPhotoInModal = (photo, index = -1) => {
             if (!splashPhotoModal || !splashPhotoImage) {
                 return;
             }
+            splashOpenPhotoIndex = index;
             if (splashPhotoTitle) {
                 splashPhotoTitle.textContent = photo.title || "Picture";
             }
@@ -1314,7 +1332,36 @@ document.addEventListener("DOMContentLoaded", () => {
                 delete splashChapterForm.dataset.submitting;
             }
             splashPhotoModal.hidden = false;
+            updateSplashPhotoNavigation();
             syncModalOpenState();
+        };
+
+        const openSplashPhotoModal = (photo) => {
+            if (!splashPhotoModal || !splashPhotoImage) {
+                return;
+            }
+            const requestedId = Number(photo.id);
+            const photoIndex = splashOpenPhotos.findIndex((entry) => Number(entry.id) === requestedId);
+            showSplashPhotoInModal(photo, photoIndex);
+        };
+
+        const moveSplashPhoto = (delta) => {
+            if (splashOpenPhotos.length < 2 || splashOpenPhotoIndex < 0) {
+                return;
+            }
+            const nextPhotoIndex = (splashOpenPhotoIndex + delta + splashOpenPhotos.length) % splashOpenPhotos.length;
+            const nextPhoto = splashOpenPhotos[nextPhotoIndex];
+            if (nextPhoto) {
+                showSplashPhotoInModal(nextPhoto, nextPhotoIndex);
+            }
+        };
+
+        const isKeyboardTextControl = (element) => {
+            if (!(element instanceof HTMLElement)) {
+                return false;
+            }
+            const tag = element.tagName.toUpperCase();
+            return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
         };
 
         const closeNoDateQuickEdit = () => {
@@ -1446,6 +1493,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 const payload = await response.json();
                 splashPageIndex = payload.page || 0;
                 splashTotalPages = payload.total_pages || 0;
+                splashOpenPhotos = payload.photos || [];
+                if (splashPhotoModal && !splashPhotoModal.hidden) {
+                    if (splashOpenPhotoIndex >= splashOpenPhotos.length) {
+                        splashOpenPhotoIndex = splashOpenPhotos.length > 0 ? 0 : -1;
+                    }
+                    updateSplashPhotoNavigation();
+                }
                 if (splashSelectable) {
                     selectedSplashPhotoIds.forEach((photoId) => {
                         const stillExists = (payload.photos || []).some((photo) => Number(photo.id) === photoId);
@@ -1460,6 +1514,11 @@ document.addEventListener("DOMContentLoaded", () => {
             } catch (error) {
                 renderSplashPhotos([]);
                 splashTotalPages = 0;
+                splashOpenPhotos = [];
+                if (splashPhotoModal && !splashPhotoModal.hidden) {
+                    splashOpenPhotoIndex = -1;
+                    updateSplashPhotoNavigation();
+                }
                 setSplashStatus("Photos could not be loaded.");
                 updateSplashControls();
             }
@@ -1477,6 +1536,12 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (splashNextButton) {
             splashNextButton.addEventListener("click", () => moveSplashPage(1));
+        }
+        if (splashPhotoPrevButton) {
+            splashPhotoPrevButton.addEventListener("click", () => moveSplashPhoto(-1));
+        }
+        if (splashPhotoNextButton) {
+            splashPhotoNextButton.addEventListener("click", () => moveSplashPhoto(1));
         }
 
         const updateSplashSizeButtons = (selectedScale) => {
@@ -1681,12 +1746,28 @@ document.addEventListener("DOMContentLoaded", () => {
             if (splashSelectable) {
                 return;
             }
-            if (splashPhotoModal && !splashPhotoModal.hidden && event.key === "Escape") {
-                closeSplashPhotoModal();
-                return;
-            }
             if (splashPhotoModal && !splashPhotoModal.hidden) {
-                return;
+                if (isKeyboardTextControl(event.target)) {
+                    return;
+                }
+                if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    closeSplashPhotoModal();
+                    return;
+                }
+                if (event.key === "ArrowLeft") {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    moveSplashPhoto(-1);
+                    return;
+                }
+                if (event.key === "ArrowRight") {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    moveSplashPhoto(1);
+                    return;
+                }
             }
             if (event.key === "ArrowLeft") {
                 moveSplashPage(-1);

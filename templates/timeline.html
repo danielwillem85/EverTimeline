@@ -30,6 +30,27 @@
     {% endif %}
 {% endfor %}
 {% set timeline_percent = ((timeline_progress.years_with_items * 100 / years|length)|round(0, 'floor')) if years else 0 %}
+
+{% set carousel_items_url = preview_url('timeline_items') %}
+<section class="timeline-frame" aria-label="Year timeline">
+    <button class="button primary view-all-button" id="view-all-button" type="button">View all</button>
+    <button class="button secondary view-random-button" id="view-random-button" type="button">View random</button>
+    <div class="year-grid">
+        {% for year in years %}
+            {% set year_count = year_counts.get(year, 0) %}
+            <a class="timeline-button counted-button" href="{{ preview_url('year_view', year=year) }}">
+                <span>{{ year }}</span>
+                {% if year_count %}
+                    <span class="count-badge">{{ year_count }}</span>
+                    <span class="button-progress" aria-hidden="true">
+                        <span style="width: {{ (year_count * 100 / timeline_progress.max_count)|round(0, 'floor') }}%"></span>
+                    </span>
+                {% endif %}
+            </a>
+        {% endfor %}
+    </div>
+</section>
+
 {% if review_queue %}
     {% set score = review_queue["score"] %}
     <section class="progress-card memory-completeness-card" aria-label="Memory completeness score">
@@ -51,26 +72,6 @@
     </div>
     <progress max="100" value="{{ timeline_percent }}"></progress>
     <p>{{ timeline_progress.item_count }} total timeline item{% if timeline_progress.item_count != 1 %}s{% endif %}</p>
-</section>
-
-{% set carousel_items_url = preview_url('timeline_items') %}
-<section class="timeline-frame" aria-label="Year timeline">
-    <button class="button primary view-all-button" id="view-all-button" type="button">View all</button>
-    <button class="button secondary view-random-button" id="view-random-button" type="button">View random</button>
-    <div class="year-grid">
-        {% for year in years %}
-            {% set year_count = year_counts.get(year, 0) %}
-            <a class="timeline-button counted-button" href="{{ preview_url('year_view', year=year) }}">
-                <span>{{ year }}</span>
-                {% if year_count %}
-                    <span class="count-badge">{{ year_count }}</span>
-                    <span class="button-progress" aria-hidden="true">
-                        <span style="width: {{ (year_count * 100 / timeline_progress.max_count)|round(0, 'floor') }}%"></span>
-                    </span>
-                {% endif %}
-            </a>
-        {% endfor %}
-    </div>
 </section>
 
 {% include "carousel_modal.html" %}

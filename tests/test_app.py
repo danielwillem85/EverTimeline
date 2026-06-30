@@ -595,6 +595,9 @@ def test_home_photo_refresh_endpoint_and_public_image_cache(client, helpers):
     assert home.status_code == 200
     assert b'data-home-refresh-url="/api/home/photos"' in home.data
     assert b"data-home-photo-grid" in home.data
+    assert b"id=\"home-photo-zoom-modal\"" in home.data
+    assert b"data-home-photo-zoom-prev" in home.data
+    assert b"data-home-photo-zoom-next" in home.data
 
     response = client.get("/api/home/photos")
     assert response.status_code == 200

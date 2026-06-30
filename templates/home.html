@@ -106,7 +106,9 @@
             <button class="icon-button" type="button" data-close-home-photo-modal aria-label="Close popup">x</button>
         </header>
         <div class="modal-body">
-            <img id="home-photo-modal-image" class="modal-image" alt="Selected public photo">
+            <button class="home-photo-zoom-trigger" type="button" aria-label="View public photo full size">
+                <img id="home-photo-modal-image" class="modal-image" alt="Selected public photo">
+            </button>
             <aside class="message-panel readonly-message-panel">
                 <h3>Messages</h3>
                 <div id="home-photo-message-list" class="message-list"></div>
@@ -118,6 +120,25 @@
                     <button class="button primary" type="submit">Add comment</button>
                 </form>
             </aside>
+        </div>
+    </section>
+</div>
+
+<div class="modal" id="home-photo-zoom-modal" hidden>
+    <div class="modal-backdrop" data-close-home-photo-zoom></div>
+    <section class="modal-panel photo-modal-panel home-photo-zoom-panel" role="dialog" aria-modal="true" aria-labelledby="home-photo-zoom-title">
+        <header class="modal-header">
+            <div>
+                <h2 id="home-photo-zoom-title">Public photo</h2>
+                <p id="home-photo-zoom-meta" class="muted"></p>
+                <p id="home-photo-zoom-caption" class="photo-caption-view"></p>
+            </div>
+            <button class="icon-button" type="button" data-close-home-photo-zoom aria-label="Close full-size photo">x</button>
+        </header>
+        <div class="home-photo-zoom-body">
+            <button class="home-photo-zoom-nav is-left" type="button" data-home-photo-zoom-prev aria-label="Previous public photo">&lt;</button>
+            <img id="home-photo-zoom-image" class="modal-image" alt="Selected public photo full size">
+            <button class="home-photo-zoom-nav is-right" type="button" data-home-photo-zoom-next aria-label="Next public photo">&gt;</button>
         </div>
     </section>
 </div>

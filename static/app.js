@@ -3616,6 +3616,14 @@ document.addEventListener("DOMContentLoaded", () => {
         const homePhotoGrid = homePhotoSection ? homePhotoSection.querySelector("[data-home-photo-grid]") : null;
         const homeEmptyState = homePhotoSection ? homePhotoSection.querySelector("[data-home-empty-state]") : null;
         const homePhotoImage = document.getElementById("home-photo-modal-image");
+        const homePhotoZoomTrigger = homePhotoModal.querySelector(".home-photo-zoom-trigger");
+        const homePhotoZoomModal = document.getElementById("home-photo-zoom-modal");
+        const homePhotoZoomImage = document.getElementById("home-photo-zoom-image");
+        const homePhotoZoomTitle = document.getElementById("home-photo-zoom-title");
+        const homePhotoZoomMeta = document.getElementById("home-photo-zoom-meta");
+        const homePhotoZoomCaption = document.getElementById("home-photo-zoom-caption");
+        const homePhotoZoomPreviousButton = homePhotoZoomModal ? homePhotoZoomModal.querySelector("[data-home-photo-zoom-prev]") : null;
+        const homePhotoZoomNextButton = homePhotoZoomModal ? homePhotoZoomModal.querySelector("[data-home-photo-zoom-next]") : null;
         const homePhotoTitle = document.getElementById("home-photo-modal-title");
         const homePhotoOwner = document.getElementById("home-photo-modal-owner");
         const homePhotoDate = document.getElementById("home-photo-modal-date");
@@ -3625,6 +3633,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const homePhotoMessageInput = homePhotoMessageForm ? homePhotoMessageForm.querySelector("textarea") : null;
         let activeHomePhotoId = null;
         let activeHomePhotoMessagesUrl = "";
+        let activeHomeZoomPhotoId = null;
         let homeRefreshTimer = null;
 
         const homeText = (value) => value == null ? "" : String(value);
@@ -3743,6 +3752,77 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         };
 
+        const homePhotoCards = () => homePhotoGrid ? Array.from(homePhotoGrid.querySelectorAll(".public-photo-card")) : [];
+
+        const homeCardIndex = (photoId) => homePhotoCards().findIndex((card) => {
+            return card.dataset.photoId === String(photoId || "");
+        });
+
+        const setHomeZoomFromButton = (button) => {
+            if (!button || !homePhotoZoomModal || !homePhotoZoomImage || !homePhotoZoomTitle || !homePhotoZoomMeta || !homePhotoZoomCaption) {
+                return;
+            }
+
+            activeHomeZoomPhotoId = button.dataset.photoId || "";
+            homePhotoZoomImage.src = button.dataset.fullSrc || "";
+            homePhotoZoomImage.alt = button.dataset.photoTitle || "Selected public photo full size";
+            homePhotoZoomTitle.textContent = button.dataset.photoTitle || "Public photo";
+            homePhotoZoomMeta.textContent = [button.dataset.photoOwner, button.dataset.photoDate].filter(Boolean).join(" - ");
+            homePhotoZoomCaption.textContent = button.dataset.photoCaption || "";
+
+            const cards = homePhotoCards();
+            const hasMultipleCards = cards.length > 1;
+            if (homePhotoZoomPreviousButton) {
+                homePhotoZoomPreviousButton.disabled = !hasMultipleCards;
+            }
+            if (homePhotoZoomNextButton) {
+                homePhotoZoomNextButton.disabled = !hasMultipleCards;
+            }
+        };
+
+        const closeHomeZoomModal = () => {
+            if (!homePhotoZoomModal || !homePhotoZoomImage) {
+                return;
+            }
+            homePhotoZoomModal.hidden = true;
+            homePhotoZoomImage.removeAttribute("src");
+            activeHomeZoomPhotoId = null;
+            if (homePhotoModal.hidden) {
+                document.body.classList.remove("modal-open");
+            }
+        };
+
+        const openHomeZoomModal = () => {
+            if (!homePhotoZoomModal || !activeHomePhotoId) {
+                return;
+            }
+            const cards = homePhotoCards();
+            const button = cards.find((card) => card.dataset.photoId === String(activeHomePhotoId));
+            if (!button) {
+                return;
+            }
+            setHomeZoomFromButton(button);
+            homePhotoZoomModal.hidden = false;
+            document.body.classList.add("modal-open");
+        };
+
+        const stepHomeZoom = (delta) => {
+            if (!homePhotoZoomModal || homePhotoZoomModal.hidden) {
+                return;
+            }
+            const cards = homePhotoCards();
+            if (cards.length <= 1) {
+                return;
+            }
+            const currentIndex = homeCardIndex(activeHomeZoomPhotoId);
+            const nextIndex = currentIndex === -1
+                ? 0
+                : (currentIndex + delta + cards.length) % cards.length;
+            const nextButton = cards[nextIndex];
+            setHomeZoomFromButton(nextButton);
+            openHomePhotoModal(nextButton);
+        };
+
         const refreshHomePhotoGrid = async () => {
             if (!homePhotoSection || !homePhotoGrid || !homePhotoSection.dataset.homeRefreshUrl || !homePhotoModal.hidden || document.hidden) {
                 return;
@@ -3813,6 +3893,7 @@ document.addEventListener("DOMContentLoaded", () => {
         };
 
         const closeHomePhotoModal = () => {
+            closeHomeZoomModal();
             homePhotoModal.hidden = true;
             homePhotoImage.removeAttribute("src");
             homePhotoMessageList.innerHTML = "";
@@ -3867,6 +3948,24 @@ document.addEventListener("DOMContentLoaded", () => {
             button.addEventListener("click", closeHomePhotoModal);
         });
 
+        if (homePhotoZoomTrigger) {
+            homePhotoZoomTrigger.addEventListener("click", openHomeZoomModal);
+        }
+
+        if (homePhotoZoomModal) {
+            homePhotoZoomModal.querySelectorAll("[data-close-home-photo-zoom]").forEach((button) => {
+                button.addEventListener("click", closeHomeZoomModal);
+            });
+        }
+
+        if (homePhotoZoomPreviousButton) {
+            homePhotoZoomPreviousButton.addEventListener("click", () => stepHomeZoom(-1));
+        }
+
+        if (homePhotoZoomNextButton) {
+            homePhotoZoomNextButton.addEventListener("click", () => stepHomeZoom(1));
+        }
+
         if (homePhotoMessageForm && homePhotoMessageInput) {
             homePhotoMessageForm.addEventListener("submit", async (event) => {
                 event.preventDefault();
@@ -3909,6 +4008,23 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         document.addEventListener("keydown", (event) => {
+            if (homePhotoZoomModal && !homePhotoZoomModal.hidden) {
+                if (event.key === "Escape") {
+                    event.preventDefault();
+                    closeHomeZoomModal();
+                    return;
+                }
+                if (event.key === "ArrowLeft") {
+                    event.preventDefault();
+                    stepHomeZoom(-1);
+                    return;
+                }
+                if (event.key === "ArrowRight") {
+                    event.preventDefault();
+                    stepHomeZoom(1);
+                    return;
+                }
+            }
             if (event.key === "Escape" && !homePhotoModal.hidden) {
                 closeHomePhotoModal();
             }

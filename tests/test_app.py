@@ -41,6 +41,49 @@ def test_auth_registration_birthday_login_and_logout(client, helpers):
     assert good_login.status_code == 302
 
 
+def test_home_photo_wall_uses_placeholder_tiles_without_public_photos(client, helpers):
+    helpers.create_user(client, "alice")
+
+    response = client.get("/home")
+
+    assert response.status_code == 200
+    assert b"EverTimeline helps you preserve life&rsquo;s moments" in response.data
+    assert response.data.count(b"home-photo-placeholder") == 80
+    assert response.data.count(b"home-photo-reserved") == 18
+    assert response.data.count(b"home-photo-tile") == 80
+    assert b"data-photo-url=\"/api/home/public-photos\"" in response.data
+
+
+def test_home_public_photos_api_fills_missing_tiles_with_placeholders(client, helpers):
+    helpers.create_user(client, "alice")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="home-public.png",
+        title="Public home photo",
+        tag="public",
+    )
+
+    response = client.get("/api/home/public-photos")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert len(payload["photos"]) == 80
+    real_photos = [photo for photo in payload["photos"] if not photo["placeholder"]]
+    placeholders = [photo for photo in payload["photos"] if photo["placeholder"]]
+    reserved = [photo for photo in placeholders if photo["reserved"]]
+    assert real_photos == [
+        {
+            "id": photo_id,
+            "image_url": f"/public/photo/{photo_id}/image",
+            "placeholder": False,
+            "reserved": False,
+            "title": "Public home photo",
+        }
+    ]
+    assert len(placeholders) == 79
+    assert len(reserved) == 18
+
+
 def test_csrf_token_required_for_unsafe_requests(client, helpers):
     helpers.create_user(client, "alice")
 

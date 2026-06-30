@@ -3796,6 +3796,65 @@ def random_public_photos(db, limit=48):
     return attach_reactions(db, photos)
 
 
+PHOTO_WALL_ITEM_LIMIT = 80
+PHOTO_WALL_RESERVED_INDEXES = {
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+}
+
+
+def photo_wall_placeholder(index, reserved=False):
+    return {
+        "id": f"{'reserved' if reserved else 'placeholder'}-{index + 1}",
+        "image_url": "",
+        "title": "Photo placeholder",
+        "placeholder": True,
+        "reserved": reserved,
+    }
+
+
+def public_photo_wall_items(db, limit=PHOTO_WALL_ITEM_LIMIT):
+    reserved_indexes = {index for index in PHOTO_WALL_RESERVED_INDEXES if index < limit}
+    public_photos = iter(random_public_photos(db, limit=limit - len(reserved_indexes)))
+    photos = []
+    for index in range(limit):
+        if index in reserved_indexes:
+            photos.append(photo_wall_placeholder(index, reserved=True))
+            continue
+
+        photo = next(public_photos, None)
+        if photo is None:
+            photos.append(photo_wall_placeholder(index))
+            continue
+
+        photos.append(
+            {
+                "id": photo["id"],
+                "image_url": photo["image_url"],
+                "title": photo["title"],
+                "placeholder": False,
+                "reserved": False,
+            }
+        )
+    return photos
+
+
 def no_date_photo_suggestion(photo):
     filename_date = filename_date_candidate(photo.get("original_filename"))
     if filename_date and filename_date.year in user_years():
@@ -8879,7 +8938,13 @@ def index():
 @app.route("/home")
 @birthday_required
 def home():
-    return render_template("home.html", photos=random_public_photos(get_db()))
+    return render_template("home.html", photos=public_photo_wall_items(get_db()))
+
+
+@app.route("/api/home/public-photos")
+@birthday_required
+def home_public_photos():
+    return jsonify({"photos": public_photo_wall_items(get_db())})
 
 
 @app.route("/splash")

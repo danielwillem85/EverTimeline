@@ -329,6 +329,61 @@ def test_password_reset_token_changes_password_and_cannot_be_reused(app, client,
     assert b"invalid or expired" in reused.data
 
 
+def test_actions_are_summarized_for_admin(client, helpers):
+    helpers.create_user(client, "alice")
+
+    response = client.post(
+        "/api/actions",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={
+            "button_text": "View all",
+            "context": "Timeline (/timeline)",
+        },
+    )
+    assert response.status_code == 204
+    response = client.post(
+        "/api/actions",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={
+            "button_text": "View all",
+            "context": "Timeline (/timeline)",
+        },
+    )
+    assert response.status_code == 204
+    response = client.post(
+        "/api/actions",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={
+            "button_text": "Upload",
+            "context": "March (/year/2020/3)",
+        },
+    )
+    assert response.status_code == 204
+
+    admin_response_for_user = client.get("/admin")
+    assert admin_response_for_user.status_code == 404
+
+    helpers.create_user(client, "Daniel")
+    admin_response = client.get("/admin")
+    assert admin_response.status_code == 200
+    assert b"Action overview" in admin_response.data
+    assert b"View all" in admin_response.data
+    assert b"Timeline (/timeline)" in admin_response.data
+    assert b"Upload" in admin_response.data
+    assert b"3 recorded actions across 2 unique button/context pairs." in admin_response.data
+
+    summary_rows = helpers.rows(
+        """
+        SELECT button_text, context, COUNT(*) AS frequency
+        FROM actions
+        GROUP BY button_text, context
+        ORDER BY frequency DESC
+        """
+    )
+    assert summary_rows[0]["button_text"] == "View all"
+    assert summary_rows[0]["frequency"] == 2
+
+
 def test_login_posts_are_rate_limited_with_form_error(app, client, helpers):
     helpers.create_user(client, "alice")
     assert client.post(
@@ -3677,4 +3732,3 @@ def test_activity_history_shows_uploads_chapters_connections_comments_and_reacti
     ]
     for expected in expectations:
         assert expected in activity.data
-

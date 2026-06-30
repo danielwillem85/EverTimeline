@@ -102,7 +102,7 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
         const actionElement = event.target.closest(actionTargetSelector);
-        if (actionElement) {
+        if (actionElement && !actionElement.disabled) {
             trackActionClick(actionElement);
         }
     }, true);
@@ -4614,4 +4614,3 @@ document.addEventListener("DOMContentLoaded", () => {
 
     focusEntryFromUrl();
 });
-

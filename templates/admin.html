@@ -75,6 +75,41 @@
 </section>
 
 <section class="auth-panel admin-panel">
+    <div class="section-title-row">
+        <div>
+            <h2>Action overview</h2>
+            <p class="muted">{{ action_summary["total_count"] }} recorded actions across {{ action_summary["rows"]|length }} unique button/context pairs.</p>
+        </div>
+    </div>
+    {% if action_summary["rows"] %}
+        <div class="table-wrap admin-action-table-wrap">
+            <table class="admin-action-table">
+                <thead>
+                    <tr>
+                        <th>Button</th>
+                        <th>Context</th>
+                        <th>Frequency</th>
+                        <th>Last used</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in action_summary["rows"] %}
+                        <tr>
+                            <td>{{ row["button_name"] }}</td>
+                            <td>{{ row["context"] }}</td>
+                            <td>{{ row["frequency"] }}</td>
+                            <td>{{ row["last_used_at"] }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <p class="empty-state">No actions have been recorded yet.</p>
+    {% endif %}
+</section>
+
+<section class="auth-panel admin-panel">
     <h2>Background jobs</h2>
     {% if admin_jobs %}
         <div class="admin-job-list" data-admin-job-list>

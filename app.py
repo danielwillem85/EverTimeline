@@ -754,6 +754,7 @@ def init_db():
                 updated_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             );
+
             """
         )
         ensure_user_profile_columns(db)
@@ -1610,6 +1611,28 @@ def admin_image_storage_summary(db):
         "database_size_label": format_file_size(database_size),
         "reclaimable_size": reclaimable_size,
         "reclaimable_size_label": format_file_size(reclaimable_size),
+    }
+
+
+def admin_action_summary(db):
+    rows = db.execute(
+        """
+        SELECT
+            button_text AS button_name,
+            context,
+            COUNT(*) AS frequency,
+            MAX(created_at) AS last_used_at
+        FROM actions
+        GROUP BY button_text, context
+        ORDER BY frequency DESC, last_used_at DESC, button_text COLLATE NOCASE, context COLLATE NOCASE
+        """
+    ).fetchall()
+    total_count = db.execute(
+        "SELECT COUNT(*) AS total_count FROM actions"
+    ).fetchone()["total_count"]
+    return {
+        "rows": rows,
+        "total_count": total_count or 0,
     }
 
 
@@ -9206,6 +9229,7 @@ def admin():
     return render_template(
         "admin.html",
         image_summary=admin_image_storage_summary(db),
+        action_summary=admin_action_summary(db),
         admin_jobs=recent_admin_jobs(db),
     )
 

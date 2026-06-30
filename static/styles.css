@@ -384,6 +384,37 @@ body.nav-open {
     border-color: rgba(174, 45, 45, 0.42);
 }
 
+.admin-action-table {
+    width: 100%;
+    min-width: 720px;
+    border-collapse: collapse;
+}
+
+.admin-action-table th,
+.admin-action-table td {
+    border-bottom: 1px solid var(--border);
+    padding: 12px;
+    text-align: left;
+    vertical-align: top;
+}
+
+.admin-action-table th {
+    color: var(--muted);
+    font-size: 0.82rem;
+    font-weight: 900;
+    text-transform: uppercase;
+}
+
+.admin-action-table td {
+    font-weight: 700;
+}
+
+.admin-action-table td:nth-child(3) {
+    color: var(--primary);
+    font-size: 1.05rem;
+    font-weight: 900;
+}
+
 .admin-job-header {
     display: flex;
     align-items: flex-start;

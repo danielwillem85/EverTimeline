@@ -40,9 +40,9 @@
                     {% if request.endpoint == 'splash' %}aria-current="page"{% endif %}
                 >Splash</a>
                 <a
-                    class="topbar-link{% if request.endpoint in ('timeline', 'timeline_anniversaries', 'timeline_review', 'timeline_search', 'timeline_people', 'timeline_person', 'timeline_collections', 'timeline_stories', 'timeline_story', 'timeline_map', 'timeline_place', 'timeline_import', 'timeline_import_review', 'year_view', 'year_no_date_view', 'month_view', 'birthday') %} is-active{% endif %}"
+                    class="topbar-link{% if request.endpoint in ('timeline', 'timeline_anniversaries', 'timeline_review', 'timeline_search', 'timeline_people', 'timeline_person', 'timeline_collections', 'timeline_map', 'timeline_place', 'timeline_import', 'timeline_import_review', 'year_view', 'year_no_date_view', 'month_view', 'birthday') %} is-active{% endif %}"
                     href="{{ url_for('timeline') }}"
-                    {% if request.endpoint in ('timeline', 'timeline_anniversaries', 'timeline_review', 'timeline_search', 'timeline_people', 'timeline_person', 'timeline_collections', 'timeline_stories', 'timeline_story', 'timeline_map', 'timeline_place', 'timeline_import', 'timeline_import_review', 'year_view', 'year_no_date_view', 'month_view', 'birthday') %}aria-current="page"{% endif %}
+                    {% if request.endpoint in ('timeline', 'timeline_anniversaries', 'timeline_review', 'timeline_search', 'timeline_people', 'timeline_person', 'timeline_collections', 'timeline_map', 'timeline_place', 'timeline_import', 'timeline_import_review', 'year_view', 'year_no_date_view', 'month_view', 'birthday') %}aria-current="page"{% endif %}
                 >Timeline</a>
                 <a
                     class="topbar-link{% if request.endpoint in ('chapters', 'chapter_detail', 'chapter_splash', 'chapter_draft', 'shared_chapter_detail') %} is-active{% endif %}"

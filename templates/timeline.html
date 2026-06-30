@@ -32,9 +32,21 @@
     {% endif %}
 {% endfor %}
 {% set timeline_percent = ((timeline_progress.years_with_items * 100 / years|length)|round(0, 'floor')) if years else 0 %}
+{% if review_queue %}
+    {% set score = review_queue["score"] %}
+    <section class="progress-card memory-completeness-card" aria-label="Memory completeness score">
+        <div class="progress-card-row">
+            <strong>Memory completeness</strong>
+            <span>{{ score["percent"] }}% - {{ score["label"] }}</span>
+        </div>
+        <progress max="100" value="{{ score['percent'] }}"></progress>
+        <p>{{ score["summary"] }}</p>
+        <a class="button secondary small" href="{{ url_for('timeline_review') }}">Open review queue</a>
+    </section>
+{% endif %}
 <section class="progress-card timeline-completeness-card" aria-label="Timeline completeness">
     <div class="progress-card-row">
-        <strong>Timeline completeness</strong>
+        <strong>Timeline coverage</strong>
         <span>{{ timeline_progress.years_with_items }} of {{ years|length }} years with memories</span>
     </div>
     <progress max="100" value="{{ timeline_percent }}"></progress>

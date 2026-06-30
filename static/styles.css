@@ -1382,6 +1382,10 @@ details.privacy-toggle-panel {
     margin-top: -2px;
 }
 
+.memory-completeness-card .button {
+    justify-self: start;
+}
+
 .submit-progress {
     margin-top: 4px;
 }
@@ -4461,6 +4465,80 @@ details.privacy-toggle-panel {
     border-color: rgba(22, 109, 103, 0.42);
 }
 
+.memory-score-panel {
+    display: grid;
+    grid-template-columns: 132px minmax(0, 1fr);
+    align-items: center;
+    gap: 18px;
+    margin-bottom: 18px;
+    border: 1px solid rgba(22, 109, 103, 0.3);
+    border-radius: 8px;
+    padding: 18px;
+    background: #f7fbfa;
+    box-shadow: var(--shadow);
+}
+
+.memory-score-meter {
+    display: grid;
+    place-items: center;
+    aspect-ratio: 1;
+    border: 10px solid rgba(22, 109, 103, 0.18);
+    border-radius: 50%;
+    background: #fff;
+    text-align: center;
+}
+
+.memory-score-meter strong {
+    color: var(--primary);
+    font-size: 1.9rem;
+    line-height: 1;
+}
+
+.memory-score-meter span {
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 900;
+}
+
+.memory-score-main {
+    display: grid;
+    gap: 8px;
+}
+
+.memory-score-main h2,
+.memory-score-main p {
+    margin-bottom: 0;
+}
+
+.memory-score-main progress {
+    width: 100%;
+    height: 10px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 999px;
+    background: var(--border);
+}
+
+.memory-score-main progress::-webkit-progress-bar {
+    border-radius: 999px;
+    background: var(--border);
+}
+
+.memory-score-main progress::-webkit-progress-value {
+    border-radius: 999px;
+    background: var(--primary);
+}
+
+.memory-score-main progress::-moz-progress-bar {
+    border-radius: 999px;
+    background: var(--primary);
+}
+
+.memory-score-main p {
+    color: var(--muted);
+    line-height: 1.45;
+}
+
 .review-focus-panel {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -5179,6 +5257,7 @@ details.privacy-toggle-panel {
     .activity-card,
     .timeline-search-card,
     .review-focus-panel,
+    .memory-score-panel,
     .review-issue-header,
     .map-place-card,
     .collections-layout,
@@ -5188,6 +5267,11 @@ details.privacy-toggle-panel {
     .chapter-share-link-card {
         grid-template-columns: 1fr;
         align-items: stretch;
+    }
+
+    .memory-score-meter {
+        width: min(132px, 100%);
+        justify-self: center;
     }
 
     .person-actions,

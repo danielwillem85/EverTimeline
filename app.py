@@ -6026,6 +6026,34 @@ def review_issue_stat(label, count, url):
     }
 
 
+def memory_completeness_score(total_memories, total_checks, missing_checks):
+    if total_memories == 0 or total_checks == 0:
+        percent = 0
+        label = "No memories yet"
+        summary = "Add memories to start building your score."
+    else:
+        completed_checks = max(total_checks - missing_checks, 0)
+        percent = round(completed_checks * 100 / total_checks)
+        if percent >= 90:
+            label = "Polished"
+            summary = "Most memories have the context they need."
+        elif percent >= 65:
+            label = "In progress"
+            summary = "Your timeline has a solid base, with a few gaps to fill."
+        else:
+            label = "Needs context"
+            summary = "Add captions, people, places, and chapters to make memories easier to browse."
+
+    return {
+        "percent": percent,
+        "label": label,
+        "summary": summary,
+        "completed_checks": max(total_checks - missing_checks, 0),
+        "total_checks": total_checks,
+        "missing_checks": missing_checks,
+    }
+
+
 def memory_review_context(row):
     display_date = row["photo_date"] if "photo_date" in row.keys() else row["entry_date"]
     return timeline_search_context(row, format_timeline_date_label(row["year"], row["month"], display_date))
@@ -6239,7 +6267,11 @@ def build_memory_review_queue(db, sample_limit=4):
     issues.sort(key=lambda issue: (issue["priority"], -issue["count"], issue["title"].casefold()))
     total_memories = len(photo_rows) + len(text_rows)
     total_issues = sum(issue["count"] for issue in issues)
+    core_issue_keys = ("captions", "places", "people", "chapters")
+    missing_checks = sum(issue_defs[key]["count"] for key in core_issue_keys)
+    total_checks = (len(photo_rows) * 4) + (len(text_rows) * 3)
     return {
+        "score": memory_completeness_score(total_memories, total_checks, missing_checks),
         "stats": [
             review_issue_stat("Review issues", total_issues, url_for("timeline_review")),
             review_issue_stat("Memories", total_memories, url_for("timeline")),
@@ -8641,7 +8673,13 @@ def timeline():
     preview = current_privacy_preview()
     years = list(user_years())
     year_counts = get_year_counts(db, allowed_tags=privacy_preview_allowed_tags(preview))
-    return render_template("timeline.html", years=years, year_counts=year_counts)
+    review_queue = build_memory_review_queue(db, sample_limit=0) if preview is None else None
+    return render_template(
+        "timeline.html",
+        years=years,
+        year_counts=year_counts,
+        review_queue=review_queue,
+    )
 
 
 @app.route("/timeline/review")

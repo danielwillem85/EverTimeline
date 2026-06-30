@@ -15,6 +15,22 @@
     </div>
 </section>
 
+{% set score = queue["score"] %}
+<section class="memory-score-panel" aria-label="Memory completeness score">
+    <div class="memory-score-meter">
+        <strong>{{ score["percent"] }}%</strong>
+        <span>{{ score["label"] }}</span>
+    </div>
+    <div class="memory-score-main">
+        <div class="progress-card-row">
+            <h2>Memory completeness score</h2>
+            <span>{{ score["completed_checks"] }} of {{ score["total_checks"] }} checks complete</span>
+        </div>
+        <progress max="100" value="{{ score['percent'] }}"></progress>
+        <p>{{ score["summary"] }}</p>
+    </div>
+</section>
+
 <section class="hub-stat-grid" aria-label="Review summary">
     {% for stat in queue["stats"] %}
         <a class="hub-stat review-stat-link" href="{{ stat['url'] }}">

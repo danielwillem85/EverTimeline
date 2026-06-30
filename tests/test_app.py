@@ -2273,10 +2273,16 @@ def test_memory_review_queue_prioritizes_incomplete_memories(client, helpers):
     timeline_response = client.get("/timeline")
     assert timeline_response.status_code == 200
     assert b"Review queue" in timeline_response.data
+    assert b"Memory completeness" in timeline_response.data
+    assert b"14% - Needs context" in timeline_response.data
+    assert b"Timeline coverage" in timeline_response.data
 
     response = client.get("/timeline/review")
     assert response.status_code == 200
     assert b"Review queue" in response.data
+    assert b"Memory completeness score" in response.data
+    assert b"14%" in response.data
+    assert b"1 of 7 checks complete" in response.data
     assert b"Start here" in response.data
     assert b"Photos need captions" in response.data
     assert b"Memories need places" in response.data
@@ -2299,6 +2305,9 @@ def test_memory_review_queue_empty_and_complete_states(client, helpers):
 
     empty_response = client.get("/timeline/review")
     assert empty_response.status_code == 200
+    assert b"Memory completeness score" in empty_response.data
+    assert b"0%" in empty_response.data
+    assert b"Add memories to start building your score." in empty_response.data
     assert b"Add memories to start building your review queue." in empty_response.data
 
     photo_id = helpers.upload_photo(
@@ -2333,6 +2342,9 @@ def test_memory_review_queue_empty_and_complete_states(client, helpers):
 
     complete_response = client.get("/timeline/review")
     assert complete_response.status_code == 200
+    assert b"100%" in complete_response.data
+    assert b"Polished" in complete_response.data
+    assert b"4 of 4 checks complete" in complete_response.data
     assert b"Your timeline has no review issues right now." in complete_response.data
 
 

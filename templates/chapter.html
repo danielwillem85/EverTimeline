@@ -139,6 +139,12 @@
 <section class="timeline-frame year-carousel-actions" aria-label="Chapter playback">
     <button class="button primary view-all-button" id="view-all-button" type="button" data-carousel-title="{{ chapter['title'] }}">Play chapter</button>
     <a class="button secondary view-all-button" href="{{ url_for('chapter_splash', chapter_id=chapter['id']) }}">Splash</a>
+    <a
+        class="button secondary view-all-button"
+        href="{{ url_for('export_chapter_pdf', chapter_id=chapter['id']) }}"
+        data-download-progress
+        data-progress-label="Preparing chapter PDF..."
+    >Export chapter PDF</a>
 </section>
 
 <section class="connection-section">

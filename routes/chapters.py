@@ -15,10 +15,13 @@ def register_chapter_routes(app, core):
     birthday_required = core.birthday_required
     build_chapter_draft = core.build_chapter_draft
     build_chapter_items = core.build_chapter_items
+    build_chapter_pdf_export_items = core.build_chapter_pdf_export_items
     build_chapter_splash_photo_page = core.build_chapter_splash_photo_page
     chapter_cover_exists = core.chapter_cover_exists
     chapter_draft_filters = core.chapter_draft_filters
     chapter_invites_for_chapter = core.chapter_invites_for_chapter
+    chapter_pdf_filename = core.chapter_pdf_filename
+    chapter_pdf_subtitle = core.chapter_pdf_subtitle
     chapter_visibility = core.chapter_visibility
     compact_chapter_positions = core.compact_chapter_positions
     create_timeline_item_message = core.create_timeline_item_message
@@ -39,10 +42,12 @@ def register_chapter_routes(app, core):
     parse_chapter_bulk_photo_ids = core.parse_chapter_bulk_photo_ids
     parse_chapter_cover_ref = core.parse_chapter_cover_ref
     parse_chapter_draft_refs = core.parse_chapter_draft_refs
+    pdf_export_response = core.pdf_export_response
     privacy_payload_for_tags = core.privacy_payload_for_tags
     redirect_back = core.redirect_back
     request_includes_messages = core.request_includes_messages
     selected_chapter_bulk_photos = core.selected_chapter_bulk_photos
+    user_full_name = core.user_full_name
     user_years = core.user_years
 
     @app.route("/chapters", methods=("GET", "POST"))
@@ -363,6 +368,21 @@ def register_chapter_routes(app, core):
                 if chapter.get("cover_item_kind") and chapter.get("cover_item_id")
                 else ""
             ),
+        )
+
+
+    @app.route("/chapters/<int:chapter_id>/export.pdf")
+    @birthday_required
+    def export_chapter_pdf(chapter_id):
+        db = get_db()
+        chapter = dict(get_owned_chapter(chapter_id))
+        owner = user_full_name(g.user) or g.user["username"]
+        items = build_chapter_pdf_export_items(db, chapter_id, g.user["id"])
+        return pdf_export_response(
+            f"EverTimeline Chapter: {chapter['title']}",
+            chapter_pdf_subtitle(chapter, owner),
+            chapter_pdf_filename(chapter),
+            items,
         )
     
     
@@ -814,6 +834,20 @@ def register_chapter_routes(app, core):
             "shared_chapter.html",
             chapter=chapter,
             items=items,
+        )
+
+
+    @app.route("/shared/chapters/<int:chapter_id>/export.pdf")
+    @birthday_required
+    def export_shared_chapter_pdf(chapter_id):
+        db = get_db()
+        chapter = get_shared_chapter(chapter_id)
+        items = build_chapter_pdf_export_items(db, chapter_id, chapter["user_id"])
+        return pdf_export_response(
+            f"EverTimeline Chapter: {chapter['title']}",
+            chapter_pdf_subtitle(chapter, chapter["owner_name"]),
+            chapter_pdf_filename(chapter),
+            items,
         )
     
     

@@ -1770,6 +1770,106 @@ def test_chapter_items_can_be_reordered_with_json_api(client, helpers):
     )
     assert bad_response.status_code == 400
 
+
+def test_chapter_pdf_export_preserves_chapter_access_and_sequence(app, client, helpers):
+    owner_id = helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="chapter-export-photo.png",
+        title="Chapter export photo",
+        caption="A caption for the chapter PDF",
+        photo_date="2020-05-04",
+        tag="private",
+    )
+    text_id = helpers.create_text(
+        client,
+        "A chapter export text memory",
+        entry_date="2020-05-05",
+        tag="private",
+    )
+
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Export Story",
+            "description": "A keepsake chapter",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Export Story",))["id"]
+
+    for item_kind, item_id in (("text", text_id), ("photo", photo_id)):
+        response = client.post(
+            "/chapters/items",
+            data={
+                **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+                "chapter_id": chapter_id,
+                "item_kind": item_kind,
+                "item_id": item_id,
+            },
+        )
+        assert response.status_code == 302
+
+    with app.app_context():
+        export_items = helpers.app_module.build_chapter_pdf_export_items(
+            helpers.app_module.get_db(),
+            chapter_id,
+            owner_id,
+        )
+    assert [(item["kind"], item["id"]) for item in export_items] == [
+        ("text", text_id),
+        ("photo", photo_id),
+    ]
+
+    chapter_page = client.get(f"/chapters/{chapter_id}")
+    assert chapter_page.status_code == 200
+    assert f"/chapters/{chapter_id}/export.pdf".encode() in chapter_page.data
+    assert b"Export chapter PDF" in chapter_page.data
+
+    owner_pdf = client.get(f"/chapters/{chapter_id}/export.pdf")
+    assert owner_pdf.status_code == 200
+    assert owner_pdf.mimetype == "application/pdf"
+    assert owner_pdf.data.startswith(b"%PDF")
+    assert "evertimeline-chapter-Export_Story.pdf" in owner_pdf.headers["Content-Disposition"]
+
+    friend = app.test_client()
+    friend_id = helpers.create_user(friend, "friend")
+    request_id = helpers.request_connection(friend, owner_id, relation="friend")
+    helpers.accept_connection(client, request_id)
+
+    stranger = app.test_client()
+    helpers.create_user(stranger, "stranger")
+    assert stranger.get(f"/shared/chapters/{chapter_id}/export.pdf").status_code == 404
+
+    invite_response = client.post(
+        f"/chapters/{chapter_id}/invites",
+        data={
+            **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+            "recipient_id": friend_id,
+        },
+    )
+    assert invite_response.status_code == 302
+    invite = helpers.row(
+        "SELECT id FROM chapter_invites WHERE chapter_id = ? AND recipient_id = ?",
+        (chapter_id, friend_id),
+    )
+    accept_response = friend.post(
+        f"/chapter-invites/{invite['id']}/accept",
+        data=helpers.csrf_form_data(friend, "/notifications"),
+    )
+    assert accept_response.status_code == 302
+
+    shared_page = friend.get(f"/shared/chapters/{chapter_id}")
+    assert shared_page.status_code == 200
+    assert f"/shared/chapters/{chapter_id}/export.pdf".encode() in shared_page.data
+
+    shared_pdf = friend.get(f"/shared/chapters/{chapter_id}/export.pdf")
+    assert shared_pdf.status_code == 200
+    assert shared_pdf.mimetype == "application/pdf"
+    assert shared_pdf.data.startswith(b"%PDF")
+
 def test_chapter_draft_suggests_filtered_items_and_creates_chapter(client, helpers):
     helpers.create_user(client, "owner")
     photo_id = helpers.upload_photo(

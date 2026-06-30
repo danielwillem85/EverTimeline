@@ -2178,13 +2178,20 @@ def test_memory_review_queue_prioritizes_incomplete_memories(client, helpers):
     assert response.status_code == 200
     assert b"Review queue" in response.data
     assert b"Start here" in response.data
+    assert b"Time capsule questions" in response.data
     assert b"Photos need captions" in response.data
     assert b"Memories need places" in response.data
     assert b"Memories need people" in response.data
     assert b"Memories not in chapters" in response.data
     assert b"Public photos need polish" in response.data
+    assert b"What do you remember most?" in response.data
+    assert b"Add why it mattered" in response.data
     assert b"public-uncaptioned.png" in response.data
     assert b"A short memory without tags or place" in response.data
+    assert b'data-review-action="prompt-caption"' in response.data
+    assert b'data-review-action="prompt-body"' in response.data
+    assert b'data-review-action="prompt-people"' in response.data
+    assert b'data-review-action="prompt-location"' in response.data
     assert b'data-review-action="caption"' in response.data
     assert b'data-review-action="people"' in response.data
     assert b'data-review-action="location"' in response.data
@@ -2234,6 +2241,7 @@ def test_memory_review_queue_empty_and_complete_states(client, helpers):
     complete_response = client.get("/timeline/review")
     assert complete_response.status_code == 200
     assert b"Your timeline has no review issues right now." in complete_response.data
+    assert b"Time capsule questions" not in complete_response.data
 
 
 def test_memory_review_inline_actions_complete_photo(client, helpers):

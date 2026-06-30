@@ -5891,8 +5891,32 @@ def memory_review_context(row):
     return timeline_search_context(row, format_timeline_date_label(row["year"], row["month"], display_date))
 
 
+def review_time_capsule_prompts(kind, row, people):
+    prompts = guided_prompts_for_item(kind, row, people)
+    if kind == "photo":
+        missing_targets = set()
+        if not (row["caption"] or "").strip():
+            missing_targets.add("caption")
+        if not people:
+            missing_targets.add("people")
+        if not timeline_search_has_location(row):
+            missing_targets.add("location")
+        return [prompt for prompt in prompts if prompt["target"] in missing_targets]
+
+    missing_targets = set()
+    if len((row["body"] or "").strip()) < 140:
+        missing_targets.add("body")
+    if not people:
+        missing_targets.add("people")
+    if not timeline_search_has_location(row):
+        missing_targets.add("location")
+    return [prompt for prompt in prompts if prompt["target"] in missing_targets]
+
+
 def memory_review_item(kind, row, tags, people, chapter_membership=None):
     chapter_membership = chapter_membership or {}
+    guided_prompts = guided_prompts_for_item(kind, row, people)
+    review_prompts = review_time_capsule_prompts(kind, row, people)
     if kind == "photo":
         title = photo_display_title(row)
         preview = row["caption"] or "Photo needs a caption."
@@ -5930,6 +5954,8 @@ def memory_review_item(kind, row, tags, people, chapter_membership=None):
         "context": memory_review_context(row),
         "preview": short_preview(preview, 150),
         "meta": timeline_search_meta(row, tags, 0, chapter_membership, people),
+        "guided_prompts": guided_prompts,
+        "review_prompts": review_prompts,
         "image_url": image_url,
         "url": timeline_item_link(g.user["id"], row["year"], row["month"], kind, row["id"]),
         "api_url": api_url,
@@ -5969,6 +5995,16 @@ def build_memory_review_queue(db, sample_limit=4):
     text_chapters = load_timeline_search_chapter_memberships(db, "text", text_ids)
 
     issue_defs = {
+        "prompts": {
+            "key": "prompts",
+            "title": "Time capsule questions",
+            "description": "Answer small prompts to turn sparse memories into stories future readers can understand.",
+            "action_label": "Answer prompts",
+            "url": url_for("timeline_review") + "#time-capsule-questions",
+            "items": [],
+            "count": 0,
+            "priority": 1,
+        },
         "captions": {
             "key": "captions",
             "title": "Photos need captions",
@@ -5977,7 +6013,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "url": url_for("timeline_search", kind="photo", caption="without"),
             "items": [],
             "count": 0,
-            "priority": 1,
+            "priority": 2,
         },
         "places": {
             "key": "places",
@@ -5987,7 +6023,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "url": url_for("timeline_search", location="without"),
             "items": [],
             "count": 0,
-            "priority": 2,
+            "priority": 3,
         },
         "people": {
             "key": "people",
@@ -5997,7 +6033,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "url": url_for("timeline_people"),
             "items": [],
             "count": 0,
-            "priority": 3,
+            "priority": 4,
         },
         "chapters": {
             "key": "chapters",
@@ -6007,7 +6043,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "url": url_for("chapter_draft"),
             "items": [],
             "count": 0,
-            "priority": 4,
+            "priority": 5,
         },
         "public": {
             "key": "public",
@@ -6017,7 +6053,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "url": url_for("timeline_search", kind="photo", visibility="public", caption="without"),
             "items": [],
             "count": 0,
-            "priority": 5,
+            "priority": 6,
         },
     }
 
@@ -6032,6 +6068,8 @@ def build_memory_review_queue(db, sample_limit=4):
         people = photo_people.get(row["id"], [])
         chapter_membership = photo_chapters.get(row["id"], {})
         item = memory_review_item("photo", row, tags, people, chapter_membership)
+        if item["review_prompts"]:
+            add_issue("prompts", item)
         if not (row["caption"] or "").strip():
             add_issue("captions", item)
         if not timeline_search_has_location(row):
@@ -6048,6 +6086,8 @@ def build_memory_review_queue(db, sample_limit=4):
         people = text_people.get(row["id"], [])
         chapter_membership = text_chapters.get(row["id"], {})
         item = memory_review_item("text", row, tags, people, chapter_membership)
+        if item["review_prompts"]:
+            add_issue("prompts", item)
         if not timeline_search_has_location(row):
             add_issue("places", item)
         if not people:

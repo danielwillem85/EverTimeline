@@ -276,12 +276,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 let url = card.dataset.apiUrl;
                 let method = "PATCH";
 
-                if (action === "caption") {
+                if (action === "caption" || action === "prompt-caption") {
                     payload.caption = form.elements.caption.value;
-                } else if (action === "people") {
+                } else if (action === "prompt-body") {
+                    payload.body = form.elements.body.value;
+                } else if (action === "people" || action === "prompt-people") {
                     payload.people = form.elements.people.value;
                     url = card.dataset.peopleUrl;
-                } else if (action === "location") {
+                } else if (action === "location" || action === "prompt-location") {
                     payload.location_name = form.elements.location_name.value;
                     payload.latitude = form.elements.latitude.value;
                     payload.longitude = form.elements.longitude.value;

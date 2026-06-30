@@ -4532,6 +4532,45 @@ details.privacy-toggle-panel {
     grid-template-columns: minmax(150px, 1fr) minmax(72px, 88px) minmax(72px, 88px) auto;
 }
 
+.review-prompt-stack {
+    display: grid;
+    gap: 10px;
+}
+
+.review-prompt-form {
+    grid-template-columns: minmax(120px, 0.7fr) minmax(0, 1fr) auto;
+    align-items: start;
+    border: 1px solid rgba(22, 109, 103, 0.2);
+    border-radius: 8px;
+    padding: 10px;
+    background: #f7fbfa;
+}
+
+.review-prompt-place-form {
+    grid-template-columns: minmax(120px, 0.7fr) minmax(130px, 1fr) minmax(68px, 82px) minmax(68px, 82px) auto;
+}
+
+.review-prompt-copy {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+}
+
+.review-prompt-copy strong {
+    color: var(--ink);
+    font-size: 0.88rem;
+    line-height: 1.25;
+}
+
+.review-prompt-copy small {
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 800;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+}
+
 .review-inline-form label {
     display: grid;
     gap: 4px;
@@ -5128,6 +5167,8 @@ details.privacy-toggle-panel {
     .search-form,
     .review-inline-form,
     .review-place-form,
+    .review-prompt-form,
+    .review-prompt-place-form,
     .collection-filter-form,
     .tags-form,
     .location-form,

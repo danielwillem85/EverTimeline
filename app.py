@@ -7129,6 +7129,123 @@ def build_pdf_export_items(db, owner_id, year, month=None):
     return items
 
 
+def build_chapter_pdf_export_items(db, chapter_id, owner_id):
+    refs = db.execute(
+        """
+        SELECT id, item_kind, item_id, position
+        FROM chapter_items
+        WHERE chapter_id = ?
+        ORDER BY position ASC, id ASC
+        """,
+        (chapter_id,),
+    ).fetchall()
+    if not refs:
+        return []
+
+    photo_ids = [row["item_id"] for row in refs if row["item_kind"] == "photo"]
+    text_ids = [row["item_id"] for row in refs if row["item_kind"] == "text"]
+
+    photo_map = {}
+    if photo_ids:
+        placeholders = ",".join(["?"] * len(photo_ids))
+        photo_rows = db.execute(
+            f"""
+            SELECT id, year, month, original_filename, title, caption, mime_type, image_data, photo_date, created_at
+            FROM photos
+            WHERE user_id = ? AND id IN ({placeholders})
+            """,
+            (owner_id, *photo_ids),
+        ).fetchall()
+        photo_map = {row["id"]: row for row in photo_rows}
+
+    text_map = {}
+    if text_ids:
+        placeholders = ",".join(["?"] * len(text_ids))
+        text_rows = db.execute(
+            f"""
+            SELECT id, year, month, body, entry_date, created_at, updated_at
+            FROM text_entries
+            WHERE user_id = ? AND id IN ({placeholders})
+            """,
+            (owner_id, *text_ids),
+        ).fetchall()
+        text_map = {row["id"]: row for row in text_rows}
+
+    photo_tags = load_tags_for_items(db, "photo", photo_ids, owner_id)
+    text_tags = load_tags_for_items(db, "text", text_ids, owner_id)
+    photo_people = load_people_for_items(db, "photo", photo_ids, owner_id)
+    text_people = load_people_for_items(db, "text", text_ids, owner_id)
+
+    items = []
+    for ref in refs:
+        if ref["item_kind"] == "photo":
+            photo = photo_map.get(ref["item_id"])
+            if photo is None:
+                continue
+            tags = photo_tags.get(photo["id"], [])
+            people = photo_people.get(photo["id"], [])
+            items.append(
+                {
+                    "kind": "photo",
+                    "id": photo["id"],
+                    "year": photo["year"],
+                    "month": photo["month"],
+                    "title": photo_display_title(photo),
+                    "caption": photo["caption"] or "",
+                    "display_date": photo["photo_date"],
+                    "date_label": format_timeline_date_label(photo["year"], photo["month"], photo["photo_date"]),
+                    "created_at": photo["created_at"],
+                    "mime_type": photo["mime_type"],
+                    "image_data": photo["image_data"],
+                    "messages": load_messages_for_timeline_item(db, "photo", photo["id"]),
+                    "tags": tags,
+                    "tags_text": tags_to_text(tags),
+                    **people_payload(people),
+                    **privacy_payload_for_tags(tags),
+                    "guided_prompts": guided_prompts_for_item("photo", photo, people),
+                }
+            )
+        else:
+            entry = text_map.get(ref["item_id"])
+            if entry is None:
+                continue
+            tags = text_tags.get(entry["id"], [])
+            people = text_people.get(entry["id"], [])
+            items.append(
+                {
+                    "kind": "text",
+                    "id": entry["id"],
+                    "year": entry["year"],
+                    "month": entry["month"],
+                    "title": "Text entry",
+                    "display_date": entry["entry_date"],
+                    "date_label": format_timeline_date_label(entry["year"], entry["month"], entry["entry_date"]),
+                    "created_at": entry["created_at"],
+                    "body": entry["body"],
+                    "messages": load_messages_for_timeline_item(db, "text", entry["id"]),
+                    "tags": tags,
+                    "tags_text": tags_to_text(tags),
+                    **people_payload(people),
+                    **privacy_payload_for_tags(tags),
+                    "guided_prompts": guided_prompts_for_item("text", entry, people),
+                }
+            )
+    return items
+
+
+def chapter_pdf_subtitle(chapter, owner_name):
+    exported_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    parts = [f"Owner: {owner_name}", f"Exported: {exported_at}"]
+    if chapter.get("description"):
+        parts.append(chapter["description"])
+    return " | ".join(parts)
+
+
+def chapter_pdf_filename(chapter):
+    slug = secure_filename(chapter["title"]) or f"chapter-{chapter['id']}"
+    return f"evertimeline-chapter-{slug}.pdf"
+
+
 def pdf_paragraph(text):
     return escape(str(text or "")).replace("\n", "<br/>")
 
@@ -9962,6 +10079,21 @@ def chapter_detail(chapter_id):
     )
 
 
+@app.route("/chapters/<int:chapter_id>/export.pdf")
+@birthday_required
+def export_chapter_pdf(chapter_id):
+    db = get_db()
+    chapter = dict(get_owned_chapter(chapter_id))
+    owner = user_full_name(g.user) or g.user["username"]
+    items = build_chapter_pdf_export_items(db, chapter_id, g.user["id"])
+    return pdf_export_response(
+        f"EverTimeline Chapter: {chapter['title']}",
+        chapter_pdf_subtitle(chapter, owner),
+        chapter_pdf_filename(chapter),
+        items,
+    )
+
+
 @app.route("/chapters/<int:chapter_id>/splash")
 @birthday_required
 def chapter_splash(chapter_id):
@@ -10410,6 +10542,20 @@ def shared_chapter_detail(chapter_id):
         "shared_chapter.html",
         chapter=chapter,
         items=items,
+    )
+
+
+@app.route("/shared/chapters/<int:chapter_id>/export.pdf")
+@birthday_required
+def export_shared_chapter_pdf(chapter_id):
+    db = get_db()
+    chapter = get_shared_chapter(chapter_id)
+    items = build_chapter_pdf_export_items(db, chapter_id, chapter["user_id"])
+    return pdf_export_response(
+        f"EverTimeline Chapter: {chapter['title']}",
+        chapter_pdf_subtitle(chapter, chapter["owner_name"]),
+        chapter_pdf_filename(chapter),
+        items,
     )
 
 

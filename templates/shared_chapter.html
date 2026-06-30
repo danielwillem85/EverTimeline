@@ -39,6 +39,12 @@
 {% set carousel_skip_tag_filter = true %}
 <section class="timeline-frame year-carousel-actions" aria-label="Shared chapter playback">
     <button class="button primary view-all-button" id="view-all-button" type="button" data-carousel-title="{{ chapter['title'] }}">Play chapter</button>
+    <a
+        class="button secondary view-all-button"
+        href="{{ url_for('export_shared_chapter_pdf', chapter_id=chapter['id']) }}"
+        data-download-progress
+        data-progress-label="Preparing chapter PDF..."
+    >Export chapter PDF</a>
 </section>
 
 <section class="connection-section">

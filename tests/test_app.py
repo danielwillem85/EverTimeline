@@ -1,6 +1,7 @@
 import io
 import json
 import re
+import warnings
 import zipfile
 import hashlib
 
@@ -1680,6 +1681,129 @@ def test_full_account_backup_export_and_import(client, helpers):
         "SELECT COUNT(*) AS count FROM photos WHERE user_id = ?",
         (importer_id,),
     )["count"] == 1
+
+
+def backup_zip_bytes(manifest, files=None):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("evertimeline-backup.json", json.dumps(manifest).encode("utf-8"))
+        for filename, data in (files or {}).items():
+            archive.writestr(filename, data)
+    return buffer.getvalue()
+
+
+def minimal_backup_manifest(**overrides):
+    manifest = {
+        "format": "evertimeline.account_backup",
+        "format_version": 1,
+        "user": {"birthday": "2000-01-15"},
+        "photos": [],
+        "text_entries": [],
+        "chapters": [],
+    }
+    manifest.update(overrides)
+    return manifest
+
+
+def post_backup_import(client, helpers, backup_bytes, filename="backup.zip"):
+    return client.post(
+        "/account/import",
+        data={
+            **helpers.csrf_form_data(client, "/profile"),
+            "backup": (io.BytesIO(backup_bytes), filename, "application/zip"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+
+def test_backup_import_rejects_archive_metadata_limits(app, client, helpers):
+    helpers.create_user(client, "owner")
+    manifest = minimal_backup_manifest()
+
+    previous_file_count = app.config["MAX_BACKUP_FILE_COUNT"]
+    app.config["MAX_BACKUP_FILE_COUNT"] = 1
+    try:
+        too_many_files = post_backup_import(
+            client,
+            helpers,
+            backup_zip_bytes(manifest, {"extra.txt": b"unused"}),
+        )
+    finally:
+        app.config["MAX_BACKUP_FILE_COUNT"] = previous_file_count
+    assert too_many_files.status_code == 200
+    assert b"Backup contains too many files." in too_many_files.data
+
+    previous_manifest_limit = app.config["MAX_BACKUP_MANIFEST_BYTES"]
+    app.config["MAX_BACKUP_MANIFEST_BYTES"] = 16
+    try:
+        oversized_manifest = post_backup_import(client, helpers, backup_zip_bytes(manifest))
+    finally:
+        app.config["MAX_BACKUP_MANIFEST_BYTES"] = previous_manifest_limit
+    assert oversized_manifest.status_code == 200
+    assert b"Backup manifest is too large." in oversized_manifest.data
+
+    previous_uncompressed_limit = app.config["MAX_BACKUP_UNCOMPRESSED_BYTES"]
+    app.config["MAX_BACKUP_UNCOMPRESSED_BYTES"] = 64
+    try:
+        oversized_archive = post_backup_import(
+            client,
+            helpers,
+            backup_zip_bytes(
+                minimal_backup_manifest(
+                    text_entries=[{"body": "x" * 200, "year": 2020, "month": 5}]
+                )
+            ),
+        )
+    finally:
+        app.config["MAX_BACKUP_UNCOMPRESSED_BYTES"] = previous_uncompressed_limit
+    assert oversized_archive.status_code == 200
+    assert b"Backup is too large to import." in oversized_archive.data
+
+
+def test_backup_import_rejects_duplicate_entries_and_pixel_limit(app, client, helpers):
+    helpers.create_user(client, "owner")
+    duplicate_buffer = io.BytesIO()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        with zipfile.ZipFile(duplicate_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("evertimeline-backup.json", json.dumps(minimal_backup_manifest()))
+            archive.writestr("photos/one.jpg", b"first")
+            archive.writestr("photos/one.jpg", b"second")
+
+    duplicate_response = post_backup_import(client, helpers, duplicate_buffer.getvalue())
+    assert duplicate_response.status_code == 200
+    assert b"Backup contains duplicate file entries." in duplicate_response.data
+
+    manifest = minimal_backup_manifest(
+        photos=[
+            {
+                "id": 1,
+                "year": 2020,
+                "month": 5,
+                "original_filename": "large-pixels.png",
+                "title": "",
+                "caption": "",
+                "mime_type": "image/png",
+                "photo_date": "2020-05-04",
+                "image_path": "photos/large-pixels.png",
+            }
+        ]
+    )
+    previous_pixel_limit = app.config["MAX_IMAGE_PIXELS"]
+    app.config["MAX_IMAGE_PIXELS"] = 3
+    try:
+        pixel_response = post_backup_import(
+            client,
+            helpers,
+            backup_zip_bytes(manifest, {"photos/large-pixels.png": helpers.png_bytes()}),
+        )
+    finally:
+        app.config["MAX_IMAGE_PIXELS"] = previous_pixel_limit
+
+    assert pixel_response.status_code == 200
+    assert b"Backup contains a photo that could not be converted." in pixel_response.data
+    assert helpers.row("SELECT COUNT(*) AS count FROM photos")["count"] == 0
 
 
 def test_chapter_items_can_be_reordered_with_json_api(client, helpers):

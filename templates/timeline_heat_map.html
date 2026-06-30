@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}Heat map - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
+        <h1>Heat map</h1>
+        <p class="muted">One square per year, colored from blue for no photos to red for the most photos.</p>
+    </div>
+    <div class="page-actions">
+        <a class="button secondary" href="{{ url_for('timeline') }}">Timeline</a>
+        <a class="button secondary" href="{{ url_for('timeline_search') }}">Search timeline</a>
+        <a class="button secondary" href="{{ url_for('timeline_review') }}">Review queue</a>
+    </div>
+</section>
+
+<section class="heat-map-frame" aria-label="Timeline photo heat map">
+    <img
+        src="{{ url_for('timeline_heat_map_image') }}"
+        alt="Timeline heat map showing one square per year from blue for no photos to red for many photos"
+    >
+</section>
+{% endblock %}

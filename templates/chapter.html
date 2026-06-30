@@ -89,6 +89,55 @@
     </details>
 </section>
 
+{% include "_legacy_notes.html" %}
+
+<section class="connection-section">
+    <h2>Private sharing links</h2>
+    <form method="post" action="{{ url_for('create_chapter_share_link_route', chapter_id=chapter['id']) }}" class="chapter-share-link-form">
+        {{ csrf_field() }}
+        <label>
+            <span>Expires after</span>
+            <select name="expires_days">
+                {% for days, label in chapter_share_link_durations %}
+                    <option value="{{ days }}" {% if days == 30 %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <button class="button primary" type="submit">Create private link</button>
+    </form>
+    {% if chapter_share_links %}
+        <div class="chapter-share-link-list">
+            {% for link in chapter_share_links %}
+                <article class="chapter-share-link-card">
+                    <div>
+                        <strong>{{ link["status"]|title }} link</strong>
+                        <span>Expires {{ link["expires_at"][:10] }}</span>
+                        {% if link["share_url"] %}
+                            <input class="readonly-input" value="{{ link['share_url'] }}" readonly aria-label="Private chapter link">
+                        {% endif %}
+                    </div>
+                    {% if link["status"] == "active" %}
+                        <form
+                            class="inline-form"
+                            method="post"
+                            action="{{ url_for('revoke_chapter_share_link', chapter_id=chapter['id'], link_id=link['id']) }}"
+                            data-confirm
+                            data-confirm-title="Revoke private link?"
+                            data-confirm-message="Anyone using this link will lose access to this chapter."
+                            data-confirm-action="Revoke link"
+                        >
+                            {{ csrf_field() }}
+                            <button class="button secondary small" type="submit">Revoke</button>
+                        </form>
+                    {% endif %}
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty-state">Create an expiring read-only link for family members who do not have an account.</p>
+    {% endif %}
+</section>
+
 <section class="connection-section">
     <h2>Shared album invites</h2>
     <form method="post" action="{{ url_for('create_chapter_invite', chapter_id=chapter['id']) }}" class="chapter-invite-form">
@@ -139,6 +188,12 @@
 <section class="timeline-frame year-carousel-actions" aria-label="Chapter playback">
     <button class="button primary view-all-button" id="view-all-button" type="button" data-carousel-title="{{ chapter['title'] }}">Play chapter</button>
     <a class="button secondary view-all-button" href="{{ url_for('chapter_splash', chapter_id=chapter['id']) }}">Splash</a>
+    <a
+        class="button secondary view-all-button"
+        href="{{ url_for('export_chapter_pdf', chapter_id=chapter['id']) }}"
+        data-download-progress
+        data-progress-label="Preparing chapter PDF..."
+    >Export chapter PDF</a>
 </section>
 
 <section class="connection-section">

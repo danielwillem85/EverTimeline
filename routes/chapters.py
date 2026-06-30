@@ -10,17 +10,25 @@ from flask import Response, abort, flash, g, jsonify, redirect, render_template,
 
 
 def register_chapter_routes(app, core):
+    CHAPTER_SHARE_LINK_DURATIONS = core.CHAPTER_SHARE_LINK_DURATIONS
     DEFAULT_TAG = core.DEFAULT_TAG
+    MESSAGE_RATE_LIMIT = core.MESSAGE_RATE_LIMIT
     accepted_connection_between = core.accepted_connection_between
     birthday_required = core.birthday_required
     build_chapter_draft = core.build_chapter_draft
     build_chapter_items = core.build_chapter_items
+    build_chapter_pdf_export_items = core.build_chapter_pdf_export_items
     build_chapter_splash_photo_page = core.build_chapter_splash_photo_page
     chapter_cover_exists = core.chapter_cover_exists
     chapter_draft_filters = core.chapter_draft_filters
     chapter_invites_for_chapter = core.chapter_invites_for_chapter
+    chapter_pdf_filename = core.chapter_pdf_filename
+    chapter_pdf_subtitle = core.chapter_pdf_subtitle
+    chapter_share_link_duration = core.chapter_share_link_duration
+    chapter_share_links_for_chapter = core.chapter_share_links_for_chapter
     chapter_visibility = core.chapter_visibility
     compact_chapter_positions = core.compact_chapter_positions
+    create_chapter_share_link = core.create_chapter_share_link
     create_timeline_item_message = core.create_timeline_item_message
     get_chapter_cover = core.get_chapter_cover
     get_chapter_options = core.get_chapter_options
@@ -29,20 +37,27 @@ def register_chapter_routes(app, core):
     get_owned_chapter = core.get_owned_chapter
     get_owned_chapter_item = core.get_owned_chapter_item
     get_owned_timeline_item = core.get_owned_timeline_item
+    get_valid_chapter_share_link = core.get_valid_chapter_share_link
     get_shared_chapter = core.get_shared_chapter
     get_shared_chapter_item_access = core.get_shared_chapter_item_access
     get_shared_chapters = core.get_shared_chapters
     invitable_chapter_connections = core.invitable_chapter_connections
+    limiter = core.limiter
     load_messages_for_timeline_item = core.load_messages_for_timeline_item
+    load_legacy_notes = core.load_legacy_notes
     move_chapter_item = core.move_chapter_item
     next_chapter_position = core.next_chapter_position
     parse_chapter_bulk_photo_ids = core.parse_chapter_bulk_photo_ids
     parse_chapter_cover_ref = core.parse_chapter_cover_ref
     parse_chapter_draft_refs = core.parse_chapter_draft_refs
+    pdf_export_response = core.pdf_export_response
     privacy_payload_for_tags = core.privacy_payload_for_tags
     redirect_back = core.redirect_back
     request_includes_messages = core.request_includes_messages
     selected_chapter_bulk_photos = core.selected_chapter_bulk_photos
+    public_chapter_share_contains_item = core.public_chapter_share_contains_item
+    utc_timestamp = core.utc_timestamp
+    user_full_name = core.user_full_name
     user_years = core.user_years
 
     @app.route("/chapters", methods=("GET", "POST"))
@@ -358,11 +373,31 @@ def register_chapter_routes(app, core):
             cover_options=items,
             invite_connections=invitable_chapter_connections(db, chapter_id),
             chapter_invites=chapter_invites_for_chapter(db, chapter_id),
+            chapter_share_links=chapter_share_links_for_chapter(db, chapter_id),
+            chapter_share_link_durations=CHAPTER_SHARE_LINK_DURATIONS,
+            legacy_notes=load_legacy_notes(db, "chapter", chapter_id),
+            legacy_note_target={"type": "chapter", "key": chapter_id},
+            legacy_note_prompt="Why this chapter mattered",
             selected_cover_ref=(
                 f"{chapter['cover_item_kind']}:{chapter['cover_item_id']}"
                 if chapter.get("cover_item_kind") and chapter.get("cover_item_id")
                 else ""
             ),
+        )
+
+
+    @app.route("/chapters/<int:chapter_id>/export.pdf")
+    @birthday_required
+    def export_chapter_pdf(chapter_id):
+        db = get_db()
+        chapter = dict(get_owned_chapter(chapter_id))
+        owner = user_full_name(g.user) or g.user["username"]
+        items = build_chapter_pdf_export_items(db, chapter_id, g.user["id"])
+        return pdf_export_response(
+            f"EverTimeline Chapter: {chapter['title']}",
+            chapter_pdf_subtitle(chapter, owner),
+            chapter_pdf_filename(chapter),
+            items,
         )
     
     
@@ -473,6 +508,47 @@ def register_chapter_routes(app, core):
         db.commit()
         flash("Chapter invite sent.", "success")
         return redirect(url_for("chapter_detail", chapter_id=chapter_id))
+
+
+    @app.route("/chapters/<int:chapter_id>/share-links", methods=("POST",))
+    @birthday_required
+    def create_chapter_share_link_route(chapter_id):
+        db = get_db()
+        get_owned_chapter(chapter_id)
+        days = chapter_share_link_duration(request.form.get("expires_days"))
+        create_chapter_share_link(db, chapter_id, days)
+        db.commit()
+        flash(f"Private link created. It expires in {days} days.", "success")
+        return redirect(url_for("chapter_detail", chapter_id=chapter_id))
+
+
+    @app.route("/chapters/<int:chapter_id>/share-links/<int:link_id>/revoke", methods=("POST",))
+    @birthday_required
+    def revoke_chapter_share_link(chapter_id, link_id):
+        db = get_db()
+        get_owned_chapter(chapter_id)
+        link = db.execute(
+            """
+            SELECT id
+            FROM chapter_share_links
+            WHERE id = ? AND chapter_id = ?
+            """,
+            (link_id, chapter_id),
+        ).fetchone()
+        if link is None:
+            abort(404)
+
+        db.execute(
+            """
+            UPDATE chapter_share_links
+            SET revoked_at = ?
+            WHERE id = ? AND chapter_id = ?
+            """,
+            (utc_timestamp(), link_id, chapter_id),
+        )
+        db.commit()
+        flash("Private link revoked.", "success")
+        return redirect(url_for("chapter_detail", chapter_id=chapter_id))
     
     
     @app.route("/chapters/<int:chapter_id>/invites/<int:invite_id>/revoke", methods=("POST",))
@@ -561,6 +637,13 @@ def register_chapter_routes(app, core):
     def delete_chapter(chapter_id):
         get_owned_chapter(chapter_id)
         db = get_db()
+        db.execute(
+            """
+            DELETE FROM legacy_notes
+            WHERE user_id = ? AND target_type = 'chapter' AND target_key = ?
+            """,
+            (g.user["id"], str(chapter_id)),
+        )
         db.execute(
             "DELETE FROM chapters WHERE id = ? AND user_id = ?",
             (chapter_id, g.user["id"]),
@@ -815,6 +898,89 @@ def register_chapter_routes(app, core):
             chapter=chapter,
             items=items,
         )
+
+
+    @app.route("/shared/chapters/<int:chapter_id>/export.pdf")
+    @birthday_required
+    def export_shared_chapter_pdf(chapter_id):
+        db = get_db()
+        chapter = get_shared_chapter(chapter_id)
+        items = build_chapter_pdf_export_items(db, chapter_id, chapter["user_id"])
+        return pdf_export_response(
+            f"EverTimeline Chapter: {chapter['title']}",
+            chapter_pdf_subtitle(chapter, chapter["owner_name"]),
+            chapter_pdf_filename(chapter),
+            items,
+        )
+
+
+    @app.route("/share/chapter/<token>")
+    def public_chapter_share(token):
+        db = get_db()
+        chapter = get_valid_chapter_share_link(token)
+        items = build_chapter_items(
+            db,
+            chapter["id"],
+            lambda photo_id: url_for(
+                "public_chapter_share_photo_image",
+                token=token,
+                photo_id=photo_id,
+            ),
+            owner_id=chapter["user_id"],
+            item_url_builder=lambda item_kind, item_id: url_for(
+                "public_chapter_share",
+                token=token,
+                _anchor=f"{item_kind}-{item_id}",
+            ),
+            include_messages=False,
+            include_reactions=False,
+        )
+        chapter["cover"] = get_chapter_cover(
+            db,
+            chapter,
+            lambda photo_id: url_for(
+                "public_chapter_share_photo_image",
+                token=token,
+                photo_id=photo_id,
+            ),
+            owner_id=chapter["user_id"],
+        )
+        return render_template(
+            "public_chapter.html",
+            chapter=chapter,
+            items=items,
+            token=token,
+        )
+
+
+    @app.route("/share/chapter/<token>/export.pdf")
+    def export_public_chapter_pdf(token):
+        db = get_db()
+        chapter = get_valid_chapter_share_link(token)
+        items = build_chapter_pdf_export_items(db, chapter["id"], chapter["user_id"])
+        return pdf_export_response(
+            f"EverTimeline Chapter: {chapter['title']}",
+            chapter_pdf_subtitle(chapter, chapter["owner_name"]),
+            chapter_pdf_filename(chapter),
+            items,
+        )
+
+
+    @app.route("/share/chapter/<token>/photo/<int:photo_id>/image")
+    def public_chapter_share_photo_image(token, photo_id):
+        db = get_db()
+        chapter = public_chapter_share_contains_item(db, token, "photo", photo_id)
+        photo = db.execute(
+            """
+            SELECT image_data, mime_type
+            FROM photos
+            WHERE id = ? AND user_id = ?
+            """,
+            (photo_id, chapter["user_id"]),
+        ).fetchone()
+        if photo is None:
+            abort(404)
+        return Response(photo["image_data"], mimetype=photo["mime_type"])
     
     
     @app.route("/shared/chapters/<int:chapter_id>/photo/<int:photo_id>/image")
@@ -871,8 +1037,9 @@ def register_chapter_routes(app, core):
             )
         )
     
-    
+
     @app.route("/shared/chapters/<int:chapter_id>/api/timeline-item/<item_kind>/<int:item_id>/messages", methods=("GET", "POST"))
+    @limiter.limit(MESSAGE_RATE_LIMIT, methods=["POST"])
     @birthday_required
     def shared_chapter_item_messages(chapter_id, item_kind, item_id):
         get_shared_chapter_item_access(chapter_id, item_kind, item_id)

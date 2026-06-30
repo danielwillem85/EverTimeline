@@ -61,6 +61,9 @@
                             <td><span class="status-badge">{{ connection["relation"] }}</span></td>
                             <td>
                                 <a class="button secondary small" href="{{ url_for('connection_timeline', connection_id=connection['id']) }}">Visit</a>
+                                {% if is_admin_user() %}
+                                    <a class="button primary small" href="{{ url_for('admin_connection_full_splash', connection_id=connection['id']) }}">Visit full</a>
+                                {% endif %}
                             </td>
                             <td>
                                 <details class="connection-actions-menu">

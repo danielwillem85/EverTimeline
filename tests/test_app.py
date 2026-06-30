@@ -54,6 +54,31 @@ def test_csrf_token_required_for_unsafe_requests(client, helpers):
     assert response.status_code == 400
 
 
+def test_security_headers_and_secure_session_cookie_can_be_enabled(app, client):
+    previous_headers = app.config["PRODUCTION_SECURITY_HEADERS"]
+    previous_secure_cookie = app.config["SESSION_COOKIE_SECURE"]
+    app.config.update(
+        PRODUCTION_SECURITY_HEADERS=True,
+        SESSION_COOKIE_SECURE=True,
+    )
+    try:
+        response = client.get("/login")
+    finally:
+        app.config.update(
+            PRODUCTION_SECURITY_HEADERS=previous_headers,
+            SESSION_COOKIE_SECURE=previous_secure_cookie,
+        )
+
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+    assert "default-src 'self'" in response.headers["Content-Security-Policy"]
+    assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"
+    assert "Secure" in response.headers["Set-Cookie"]
+    assert "HttpOnly" in response.headers["Set-Cookie"]
+    assert "SameSite=Lax" in response.headers["Set-Cookie"]
+
+
 def test_oversized_upload_redirects_with_flash(app, client, helpers):
     helpers.create_user(client, "owner")
     previous_limit = app.config["MAX_CONTENT_LENGTH"]
@@ -76,6 +101,30 @@ def test_oversized_upload_redirects_with_flash(app, client, helpers):
     assert response.status_code == 200
     assert b"That upload is too large." in response.data
     assert b"The current limit is 1 KB per request." in response.data
+
+
+def test_upload_rejects_images_over_pixel_limit(app, client, helpers):
+    helpers.create_user(client, "owner")
+    previous_pixel_limit = app.config["MAX_IMAGE_PIXELS"]
+    app.config["MAX_IMAGE_PIXELS"] = 3
+    try:
+        response = client.post(
+            "/year/2020/5",
+            data={
+                **helpers.csrf_form_data(client, "/year/2020/5"),
+                "photo": (io.BytesIO(helpers.png_bytes()), "too-many-pixels.png", "image/png"),
+                "photo_date": "2020-05-04",
+                "tags": "private",
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+    finally:
+        app.config["MAX_IMAGE_PIXELS"] = previous_pixel_limit
+
+    assert response.status_code == 200
+    assert b"No photos uploaded." in response.data
+    assert helpers.row("SELECT COUNT(*) AS count FROM photos")["count"] == 0
 
 
 def test_password_reset_link_is_local_dev_only(app, client, helpers):

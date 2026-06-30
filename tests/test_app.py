@@ -3221,6 +3221,187 @@ def test_memory_review_inline_actions_complete_photo(client, helpers):
     assert b"Your timeline has no review issues right now." in fixed_response.data
 
 
+def test_memory_review_inline_actions_complete_text_entry(client, helpers):
+    helpers.create_user(client, "owner")
+    text_id = helpers.create_text(
+        client,
+        "Short review note",
+        entry_date="2020-05-05",
+        tag="private",
+    )
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Text fixes",
+            "description": "",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Text fixes",))["id"]
+
+    review_response = client.get("/timeline/review")
+    assert review_response.status_code == 200
+    assert b"Short review note" in review_response.data
+    assert b"Add why it mattered" in review_response.data
+    assert b"Save people" in review_response.data
+    assert b"Save place" in review_response.data
+    assert b"Choose chapter" in review_response.data
+
+    long_body = (
+        "This reviewed text entry now includes enough detail about what happened, "
+        "who was there, why it mattered, and the context a future reader would need "
+        "to understand the memory without asking for more background."
+    )
+    headers = helpers.csrf_headers(client, "/timeline/review")
+    text_update = client.patch(
+        f"/api/text-entry/{text_id}",
+        headers=headers,
+        json={
+            "body": long_body,
+            "entry_date": "2020-05-05",
+            "tags": "private",
+            "people": "Taylor Text",
+            "location_name": "Review Library",
+            "latitude": "",
+            "longitude": "",
+        },
+    )
+    assert text_update.status_code == 200
+    assert text_update.get_json()["people"] == ["Taylor Text"]
+
+    chapter_item_response = client.post(
+        f"/api/timeline-review/text/{text_id}/chapter",
+        headers=headers,
+        json={"chapter_id": chapter_id},
+    )
+    assert chapter_item_response.status_code == 200
+
+    fixed_response = client.get("/timeline/review")
+    assert fixed_response.status_code == 200
+    assert b"Your timeline has no review issues right now." in fixed_response.data
+    assert b"Time capsule questions" not in fixed_response.data
+
+
+def test_memory_review_chapter_action_rejects_invalid_duplicate_and_foreign_chapters(app, client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="chapter-action.png",
+        caption="Ready for a chapter",
+        people="Casey Chapter",
+        location_name="Chapter Room",
+    )
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Allowed chapter",
+            "description": "",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Allowed chapter",))["id"]
+    headers = helpers.csrf_headers(client, "/timeline/review")
+
+    missing_response = client.post(
+        f"/api/timeline-review/photo/{photo_id}/chapter",
+        headers=headers,
+        json={},
+    )
+    assert missing_response.status_code == 400
+    assert missing_response.get_json()["error"] == "Choose a chapter."
+
+    first_response = client.post(
+        f"/api/timeline-review/photo/{photo_id}/chapter",
+        headers=headers,
+        json={"chapter_id": chapter_id},
+    )
+    assert first_response.status_code == 200
+
+    duplicate_response = client.post(
+        f"/api/timeline-review/photo/{photo_id}/chapter",
+        headers=headers,
+        json={"chapter_id": chapter_id},
+    )
+    assert duplicate_response.status_code == 409
+    assert duplicate_response.get_json()["error"] == "That item is already in this chapter."
+
+    other = app.test_client()
+    helpers.create_user(other, "other")
+    assert other.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(other, "/chapters"),
+            "title": "Other chapter",
+            "description": "",
+            "visibility": "private",
+        },
+    ).status_code == 302
+    other_chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Other chapter",))["id"]
+    assert client.post(
+        f"/api/timeline-review/photo/{photo_id}/chapter",
+        headers=headers,
+        json={"chapter_id": other_chapter_id},
+    ).status_code == 404
+
+
+def test_memory_review_duplicate_photo_delete_keeps_original(app, client, helpers):
+    user_id = helpers.create_user(client, "owner")
+    buffer = io.BytesIO()
+    Image.new("RGB", (12, 12), color=(90, 90, 180)).save(buffer, format="JPEG")
+    image_data = buffer.getvalue()
+    image_hash = hashlib.sha256(image_data).hexdigest()
+    with app.app_context():
+        db = helpers.app_module.get_db()
+        original_id = db.execute(
+            """
+            INSERT INTO photos (
+                user_id, year, month, original_filename, title, caption,
+                image_hash, mime_type, image_data, photo_date,
+                location_name
+            )
+            VALUES (?, 2020, 5, 'original-dup.jpg', '', 'Original copy',
+                    ?, 'image/jpeg', ?, '2020-05-04', 'Archive')
+            """,
+            (user_id, image_hash, image_data),
+        ).lastrowid
+        duplicate_id = db.execute(
+            """
+            INSERT INTO photos (
+                user_id, year, month, original_filename, title, caption,
+                image_hash, mime_type, image_data, photo_date,
+                location_name
+            )
+            VALUES (?, 2020, 5, 'copy-dup.jpg', '', 'Duplicate copy',
+                    ?, 'image/jpeg', ?, '2020-05-05', 'Archive')
+            """,
+            (user_id, image_hash, image_data),
+        ).lastrowid
+        db.commit()
+
+    review_response = client.get("/timeline/review")
+    assert review_response.status_code == 200
+    assert b"Possible duplicate photos" in review_response.data
+    assert b"copy-dup.jpg" in review_response.data
+    assert b"Open original" in review_response.data
+    assert b"Delete duplicate" in review_response.data
+
+    delete_response = client.delete(
+        f"/api/photo/{duplicate_id}",
+        headers=helpers.csrf_headers(client, "/timeline/review"),
+    )
+    assert delete_response.status_code == 204
+    assert helpers.row("SELECT COUNT(*) AS count FROM photos WHERE id = ?", (original_id,))["count"] == 1
+    assert helpers.row("SELECT COUNT(*) AS count FROM photos WHERE id = ?", (duplicate_id,))["count"] == 0
+
+    refreshed_response = client.get("/timeline/review")
+    assert refreshed_response.status_code == 200
+    assert b"Possible duplicate photos" not in refreshed_response.data
+
+
 def test_saved_timeline_collections_filter_save_and_delete(app, client, helpers):
     helpers.create_user(client, "owner")
     helpers.create_text(

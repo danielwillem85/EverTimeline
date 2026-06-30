@@ -158,6 +158,43 @@ def test_password_reset_link_is_local_dev_only(app, client, helpers):
     assert helpers.row("SELECT COUNT(*) AS token_count FROM password_reset_tokens")["token_count"] == 1
 
 
+def test_password_reset_sends_resend_email_when_configured(app, client, helpers, monkeypatch):
+    helpers.create_user(client, "alice")
+    app.config.update(
+        LOCAL_PASSWORD_RESET_LINKS=False,
+        PASSWORD_RESET_EMAIL_ENABLED=True,
+        RESEND_API_KEY="test-resend-key",
+        RESEND_FROM_EMAIL="EverTimeline <reset@example.com>",
+    )
+    sent_messages = []
+
+    def fake_send(payload):
+        sent_messages.append(payload)
+        return {"id": "email_123"}
+
+    monkeypatch.setattr(helpers.app_module.resend.Emails, "send", fake_send)
+
+    response = client.post(
+        "/forgot-password",
+        data={
+            **helpers.csrf_form_data(client, "/forgot-password"),
+            "identifier": "alice@example.com",
+        },
+    )
+
+    assert response.status_code == 200
+    assert b"/reset-password/" not in response.data
+    assert helpers.app_module.resend.api_key == "test-resend-key"
+    assert len(sent_messages) == 1
+    payload = sent_messages[0]
+    assert payload["from"] == "EverTimeline <reset@example.com>"
+    assert payload["to"] == ["alice@example.com"]
+    assert payload["subject"] == "Reset your EverTimeline password"
+    assert "/reset-password/" in payload["text"]
+    assert "/reset-password/" in payload["html"]
+    assert helpers.row("SELECT COUNT(*) AS token_count FROM password_reset_tokens")["token_count"] == 1
+
+
 def test_password_reset_token_changes_password_and_cannot_be_reused(app, client, helpers):
     helpers.create_user(client, "alice", password="old-password")
     app.config["LOCAL_PASSWORD_RESET_LINKS"] = True
@@ -205,6 +242,76 @@ def test_password_reset_token_changes_password_and_cannot_be_reused(app, client,
     reused = client.get(f"/reset-password/{token}", follow_redirects=True)
     assert reused.status_code == 200
     assert b"invalid or expired" in reused.data
+
+
+def test_login_posts_are_rate_limited_with_form_error(app, client, helpers):
+    helpers.create_user(client, "alice")
+    assert client.post(
+        "/logout",
+        data=helpers.csrf_form_data(client, "/timeline"),
+    ).status_code == 302
+
+    app.config["RATELIMIT_ENABLED"] = True
+    helpers.app_module.limiter.enabled = True
+    helpers.app_module.limiter.reset()
+    try:
+        for _ in range(10):
+            response = client.post(
+                "/login",
+                data={
+                    **helpers.csrf_form_data(client, "/login"),
+                    "username": "alice",
+                    "password": "wrong-password",
+                },
+            )
+            assert response.status_code == 200
+
+        limited = client.post(
+            "/login",
+            data={
+                **helpers.csrf_form_data(client, "/login"),
+                "username": "alice",
+                "password": "wrong-password",
+            },
+            follow_redirects=True,
+        )
+    finally:
+        app.config["RATELIMIT_ENABLED"] = False
+        helpers.app_module.limiter.enabled = False
+        helpers.app_module.limiter.reset()
+
+    assert limited.status_code == 200
+    assert b"Too many requests. Please wait and try again." in limited.data
+
+
+def test_message_posts_are_rate_limited_with_json_error(app, client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(client)
+
+    app.config["RATELIMIT_ENABLED"] = True
+    helpers.app_module.limiter.enabled = True
+    helpers.app_module.limiter.reset()
+    try:
+        for index in range(30):
+            response = client.post(
+                f"/api/timeline-item/photo/{photo_id}/messages",
+                headers=helpers.csrf_headers(client, "/timeline"),
+                json={"body": f"Message {index}"},
+            )
+            assert response.status_code == 201
+
+        limited = client.post(
+            f"/api/timeline-item/photo/{photo_id}/messages",
+            headers=helpers.csrf_headers(client, "/timeline"),
+            json={"body": "One too many"},
+        )
+    finally:
+        app.config["RATELIMIT_ENABLED"] = False
+        helpers.app_module.limiter.enabled = False
+        helpers.app_module.limiter.reset()
+
+    assert limited.status_code == 429
+    assert limited.get_json() == {"error": "Too many requests. Please wait and try again."}
 
 
 def test_uploads_text_entries_and_pdf_exports(client, helpers):

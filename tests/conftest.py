@@ -19,11 +19,19 @@ def app(tmp_path):
         TESTING=True,
         SECRET_KEY="test-secret",
         RUN_JOBS_INLINE=True,
+        RATELIMIT_ENABLED=False,
+        PASSWORD_RESET_EMAIL_ENABLED=False,
+        RESEND_API_KEY="",
+        RESEND_FROM_EMAIL="",
     )
+    app_module.limiter.enabled = False
+    app_module.limiter.reset()
     app_module.init_db()
 
     yield app_module.app
 
+    app_module.limiter.enabled = False
+    app_module.limiter.reset()
     app_module.DATABASE = previous_database
 
 

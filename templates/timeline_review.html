@@ -15,6 +15,22 @@
     </div>
 </section>
 
+{% set score = queue["score"] %}
+<section class="memory-score-panel" aria-label="Memory completeness score">
+    <div class="memory-score-meter">
+        <strong>{{ score["percent"] }}%</strong>
+        <span>{{ score["label"] }}</span>
+    </div>
+    <div class="memory-score-main">
+        <div class="progress-card-row">
+            <h2>Memory completeness score</h2>
+            <span>{{ score["completed_checks"] }} of {{ score["total_checks"] }} checks complete</span>
+        </div>
+        <progress max="100" value="{{ score['percent'] }}"></progress>
+        <p>{{ score["summary"] }}</p>
+    </div>
+</section>
+
 <section class="hub-stat-grid" aria-label="Review summary">
     {% for stat in queue["stats"] %}
         <a class="hub-stat review-stat-link" href="{{ stat['url'] }}">
@@ -38,7 +54,7 @@
 <section class="review-queue-list" aria-label="Review issues">
     {% if queue["issues"] %}
         {% for issue in queue["issues"] %}
-            <article class="review-issue-card">
+            <article class="review-issue-card" {% if issue["key"] == "prompts" %}id="time-capsule-questions"{% endif %}>
                 <header class="review-issue-header">
                     <div>
                         <span class="status-badge">{{ issue["count"] }}</span>
@@ -68,6 +84,7 @@
                                 data-location-name="{{ item['location_name'] }}"
                                 data-latitude="{{ item['latitude'] if item['latitude'] is not none else '' }}"
                                 data-longitude="{{ item['longitude'] if item['longitude'] is not none else '' }}"
+                                data-guided-prompts="{{ item['guided_prompts']|tojson|forceescape }}"
                             >
                                 <div class="timeline-search-content">
                                     {% if item.get("image_url") %}
@@ -88,7 +105,73 @@
                                     </div>
                                 </div>
                                 <div class="review-card-actions">
-                                    {% if issue["key"] in ("captions", "public") and item["kind_key"] == "photo" %}
+                                    {% if issue["key"] == "prompts" %}
+                                        <div class="review-prompt-stack">
+                                            {% for prompt in item["review_prompts"] %}
+                                                {% if prompt["target"] == "caption" %}
+                                                    <form class="review-inline-form review-prompt-form" data-review-action="prompt-caption">
+                                                        <div class="review-prompt-copy">
+                                                            <span>Time capsule question</span>
+                                                            <strong>{{ prompt["label"] }}</strong>
+                                                            <small>{{ prompt["text"] }}</small>
+                                                        </div>
+                                                        <label>
+                                                            <span>Answer</span>
+                                                            <textarea name="caption" rows="2" maxlength="2000" placeholder="{{ prompt['text'] }}">{{ item["caption"] }}</textarea>
+                                                        </label>
+                                                        <button class="button primary small" type="submit">Save answer</button>
+                                                    </form>
+                                                {% elif prompt["target"] == "body" %}
+                                                    <form class="review-inline-form review-prompt-form" data-review-action="prompt-body">
+                                                        <div class="review-prompt-copy">
+                                                            <span>Time capsule question</span>
+                                                            <strong>{{ prompt["label"] }}</strong>
+                                                            <small>{{ prompt["text"] }}</small>
+                                                        </div>
+                                                        <label>
+                                                            <span>Answer</span>
+                                                            <textarea name="body" rows="3" placeholder="{{ prompt['text'] }}">{{ item["body"] }}</textarea>
+                                                        </label>
+                                                        <button class="button primary small" type="submit">Save answer</button>
+                                                    </form>
+                                                {% elif prompt["target"] == "people" %}
+                                                    <form class="review-inline-form review-prompt-form" data-review-action="prompt-people">
+                                                        <div class="review-prompt-copy">
+                                                            <span>Time capsule question</span>
+                                                            <strong>{{ prompt["label"] }}</strong>
+                                                            <small>{{ prompt["text"] }}</small>
+                                                        </div>
+                                                        <label>
+                                                            <span>People</span>
+                                                            <input name="people" value="{{ item['people_text'] }}" placeholder="Alice, Sam" maxlength="500" autocomplete="off">
+                                                        </label>
+                                                        <button class="button primary small" type="submit">Save people</button>
+                                                    </form>
+                                                {% elif prompt["target"] == "location" %}
+                                                    <form class="review-inline-form review-prompt-form review-prompt-place-form" data-review-action="prompt-location">
+                                                        <div class="review-prompt-copy">
+                                                            <span>Time capsule question</span>
+                                                            <strong>{{ prompt["label"] }}</strong>
+                                                            <small>{{ prompt["text"] }}</small>
+                                                        </div>
+                                                        <label>
+                                                            <span>Place</span>
+                                                            <input name="location_name" value="{{ item['location_name'] }}" placeholder="City, venue, or address" autocomplete="off">
+                                                        </label>
+                                                        <label>
+                                                            <span>Lat</span>
+                                                            <input name="latitude" value="{{ item['latitude'] if item['latitude'] is not none else '' }}" inputmode="decimal">
+                                                        </label>
+                                                        <label>
+                                                            <span>Long</span>
+                                                            <input name="longitude" value="{{ item['longitude'] if item['longitude'] is not none else '' }}" inputmode="decimal">
+                                                        </label>
+                                                        <button class="button primary small" type="submit">Save place</button>
+                                                    </form>
+                                                {% endif %}
+                                            {% endfor %}
+                                        </div>
+                                    {% elif issue["key"] in ("captions", "public") and item["kind_key"] == "photo" %}
                                         <form class="review-inline-form review-caption-form" data-review-action="caption">
                                             <label>
                                                 <span>Caption</span>

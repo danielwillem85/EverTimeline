@@ -1,6 +1,7 @@
 import io
 import json
 import re
+import warnings
 import zipfile
 import hashlib
 from datetime import date
@@ -55,6 +56,31 @@ def test_csrf_token_required_for_unsafe_requests(client, helpers):
     assert response.status_code == 400
 
 
+def test_security_headers_and_secure_session_cookie_can_be_enabled(app, client):
+    previous_headers = app.config["PRODUCTION_SECURITY_HEADERS"]
+    previous_secure_cookie = app.config["SESSION_COOKIE_SECURE"]
+    app.config.update(
+        PRODUCTION_SECURITY_HEADERS=True,
+        SESSION_COOKIE_SECURE=True,
+    )
+    try:
+        response = client.get("/login")
+    finally:
+        app.config.update(
+            PRODUCTION_SECURITY_HEADERS=previous_headers,
+            SESSION_COOKIE_SECURE=previous_secure_cookie,
+        )
+
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["X-Frame-Options"] == "DENY"
+    assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+    assert "default-src 'self'" in response.headers["Content-Security-Policy"]
+    assert response.headers["Strict-Transport-Security"] == "max-age=31536000; includeSubDomains"
+    assert "Secure" in response.headers["Set-Cookie"]
+    assert "HttpOnly" in response.headers["Set-Cookie"]
+    assert "SameSite=Lax" in response.headers["Set-Cookie"]
+
+
 def test_oversized_upload_redirects_with_flash(app, client, helpers):
     helpers.create_user(client, "owner")
     previous_limit = app.config["MAX_CONTENT_LENGTH"]
@@ -77,6 +103,30 @@ def test_oversized_upload_redirects_with_flash(app, client, helpers):
     assert response.status_code == 200
     assert b"That upload is too large." in response.data
     assert b"The current limit is 1 KB per request." in response.data
+
+
+def test_upload_rejects_images_over_pixel_limit(app, client, helpers):
+    helpers.create_user(client, "owner")
+    previous_pixel_limit = app.config["MAX_IMAGE_PIXELS"]
+    app.config["MAX_IMAGE_PIXELS"] = 3
+    try:
+        response = client.post(
+            "/year/2020/5",
+            data={
+                **helpers.csrf_form_data(client, "/year/2020/5"),
+                "photo": (io.BytesIO(helpers.png_bytes()), "too-many-pixels.png", "image/png"),
+                "photo_date": "2020-05-04",
+                "tags": "private",
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+    finally:
+        app.config["MAX_IMAGE_PIXELS"] = previous_pixel_limit
+
+    assert response.status_code == 200
+    assert b"No photos uploaded." in response.data
+    assert helpers.row("SELECT COUNT(*) AS count FROM photos")["count"] == 0
 
 
 def test_password_reset_link_is_local_dev_only(app, client, helpers):
@@ -106,6 +156,43 @@ def test_password_reset_link_is_local_dev_only(app, client, helpers):
 
     assert response.status_code == 200
     assert b"/reset-password/" in response.data
+    assert helpers.row("SELECT COUNT(*) AS token_count FROM password_reset_tokens")["token_count"] == 1
+
+
+def test_password_reset_sends_resend_email_when_configured(app, client, helpers, monkeypatch):
+    helpers.create_user(client, "alice")
+    app.config.update(
+        LOCAL_PASSWORD_RESET_LINKS=False,
+        PASSWORD_RESET_EMAIL_ENABLED=True,
+        RESEND_API_KEY="test-resend-key",
+        RESEND_FROM_EMAIL="EverTimeline <reset@example.com>",
+    )
+    sent_messages = []
+
+    def fake_send(payload):
+        sent_messages.append(payload)
+        return {"id": "email_123"}
+
+    monkeypatch.setattr(helpers.app_module.resend.Emails, "send", fake_send)
+
+    response = client.post(
+        "/forgot-password",
+        data={
+            **helpers.csrf_form_data(client, "/forgot-password"),
+            "identifier": "alice@example.com",
+        },
+    )
+
+    assert response.status_code == 200
+    assert b"/reset-password/" not in response.data
+    assert helpers.app_module.resend.api_key == "test-resend-key"
+    assert len(sent_messages) == 1
+    payload = sent_messages[0]
+    assert payload["from"] == "EverTimeline <reset@example.com>"
+    assert payload["to"] == ["alice@example.com"]
+    assert payload["subject"] == "Reset your EverTimeline password"
+    assert "/reset-password/" in payload["text"]
+    assert "/reset-password/" in payload["html"]
     assert helpers.row("SELECT COUNT(*) AS token_count FROM password_reset_tokens")["token_count"] == 1
 
 
@@ -156,6 +243,76 @@ def test_password_reset_token_changes_password_and_cannot_be_reused(app, client,
     reused = client.get(f"/reset-password/{token}", follow_redirects=True)
     assert reused.status_code == 200
     assert b"invalid or expired" in reused.data
+
+
+def test_login_posts_are_rate_limited_with_form_error(app, client, helpers):
+    helpers.create_user(client, "alice")
+    assert client.post(
+        "/logout",
+        data=helpers.csrf_form_data(client, "/timeline"),
+    ).status_code == 302
+
+    app.config["RATELIMIT_ENABLED"] = True
+    helpers.app_module.limiter.enabled = True
+    helpers.app_module.limiter.reset()
+    try:
+        for _ in range(10):
+            response = client.post(
+                "/login",
+                data={
+                    **helpers.csrf_form_data(client, "/login"),
+                    "username": "alice",
+                    "password": "wrong-password",
+                },
+            )
+            assert response.status_code == 200
+
+        limited = client.post(
+            "/login",
+            data={
+                **helpers.csrf_form_data(client, "/login"),
+                "username": "alice",
+                "password": "wrong-password",
+            },
+            follow_redirects=True,
+        )
+    finally:
+        app.config["RATELIMIT_ENABLED"] = False
+        helpers.app_module.limiter.enabled = False
+        helpers.app_module.limiter.reset()
+
+    assert limited.status_code == 200
+    assert b"Too many requests. Please wait and try again." in limited.data
+
+
+def test_message_posts_are_rate_limited_with_json_error(app, client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(client)
+
+    app.config["RATELIMIT_ENABLED"] = True
+    helpers.app_module.limiter.enabled = True
+    helpers.app_module.limiter.reset()
+    try:
+        for index in range(30):
+            response = client.post(
+                f"/api/timeline-item/photo/{photo_id}/messages",
+                headers=helpers.csrf_headers(client, "/timeline"),
+                json={"body": f"Message {index}"},
+            )
+            assert response.status_code == 201
+
+        limited = client.post(
+            f"/api/timeline-item/photo/{photo_id}/messages",
+            headers=helpers.csrf_headers(client, "/timeline"),
+            json={"body": "One too many"},
+        )
+    finally:
+        app.config["RATELIMIT_ENABLED"] = False
+        helpers.app_module.limiter.enabled = False
+        helpers.app_module.limiter.reset()
+
+    assert limited.status_code == 429
+    assert limited.get_json() == {"error": "Too many requests. Please wait and try again."}
 
 
 def test_uploads_text_entries_and_pdf_exports(client, helpers):
@@ -1715,6 +1872,129 @@ def test_full_account_backup_export_and_import(client, helpers):
     )["count"] == 1
 
 
+def backup_zip_bytes(manifest, files=None):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("evertimeline-backup.json", json.dumps(manifest).encode("utf-8"))
+        for filename, data in (files or {}).items():
+            archive.writestr(filename, data)
+    return buffer.getvalue()
+
+
+def minimal_backup_manifest(**overrides):
+    manifest = {
+        "format": "evertimeline.account_backup",
+        "format_version": 1,
+        "user": {"birthday": "2000-01-15"},
+        "photos": [],
+        "text_entries": [],
+        "chapters": [],
+    }
+    manifest.update(overrides)
+    return manifest
+
+
+def post_backup_import(client, helpers, backup_bytes, filename="backup.zip"):
+    return client.post(
+        "/account/import",
+        data={
+            **helpers.csrf_form_data(client, "/profile"),
+            "backup": (io.BytesIO(backup_bytes), filename, "application/zip"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+
+def test_backup_import_rejects_archive_metadata_limits(app, client, helpers):
+    helpers.create_user(client, "owner")
+    manifest = minimal_backup_manifest()
+
+    previous_file_count = app.config["MAX_BACKUP_FILE_COUNT"]
+    app.config["MAX_BACKUP_FILE_COUNT"] = 1
+    try:
+        too_many_files = post_backup_import(
+            client,
+            helpers,
+            backup_zip_bytes(manifest, {"extra.txt": b"unused"}),
+        )
+    finally:
+        app.config["MAX_BACKUP_FILE_COUNT"] = previous_file_count
+    assert too_many_files.status_code == 200
+    assert b"Backup contains too many files." in too_many_files.data
+
+    previous_manifest_limit = app.config["MAX_BACKUP_MANIFEST_BYTES"]
+    app.config["MAX_BACKUP_MANIFEST_BYTES"] = 16
+    try:
+        oversized_manifest = post_backup_import(client, helpers, backup_zip_bytes(manifest))
+    finally:
+        app.config["MAX_BACKUP_MANIFEST_BYTES"] = previous_manifest_limit
+    assert oversized_manifest.status_code == 200
+    assert b"Backup manifest is too large." in oversized_manifest.data
+
+    previous_uncompressed_limit = app.config["MAX_BACKUP_UNCOMPRESSED_BYTES"]
+    app.config["MAX_BACKUP_UNCOMPRESSED_BYTES"] = 64
+    try:
+        oversized_archive = post_backup_import(
+            client,
+            helpers,
+            backup_zip_bytes(
+                minimal_backup_manifest(
+                    text_entries=[{"body": "x" * 200, "year": 2020, "month": 5}]
+                )
+            ),
+        )
+    finally:
+        app.config["MAX_BACKUP_UNCOMPRESSED_BYTES"] = previous_uncompressed_limit
+    assert oversized_archive.status_code == 200
+    assert b"Backup is too large to import." in oversized_archive.data
+
+
+def test_backup_import_rejects_duplicate_entries_and_pixel_limit(app, client, helpers):
+    helpers.create_user(client, "owner")
+    duplicate_buffer = io.BytesIO()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        with zipfile.ZipFile(duplicate_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("evertimeline-backup.json", json.dumps(minimal_backup_manifest()))
+            archive.writestr("photos/one.jpg", b"first")
+            archive.writestr("photos/one.jpg", b"second")
+
+    duplicate_response = post_backup_import(client, helpers, duplicate_buffer.getvalue())
+    assert duplicate_response.status_code == 200
+    assert b"Backup contains duplicate file entries." in duplicate_response.data
+
+    manifest = minimal_backup_manifest(
+        photos=[
+            {
+                "id": 1,
+                "year": 2020,
+                "month": 5,
+                "original_filename": "large-pixels.png",
+                "title": "",
+                "caption": "",
+                "mime_type": "image/png",
+                "photo_date": "2020-05-04",
+                "image_path": "photos/large-pixels.png",
+            }
+        ]
+    )
+    previous_pixel_limit = app.config["MAX_IMAGE_PIXELS"]
+    app.config["MAX_IMAGE_PIXELS"] = 3
+    try:
+        pixel_response = post_backup_import(
+            client,
+            helpers,
+            backup_zip_bytes(manifest, {"photos/large-pixels.png": helpers.png_bytes()}),
+        )
+    finally:
+        app.config["MAX_IMAGE_PIXELS"] = previous_pixel_limit
+
+    assert pixel_response.status_code == 200
+    assert b"Backup contains a photo that could not be converted." in pixel_response.data
+    assert helpers.row("SELECT COUNT(*) AS count FROM photos")["count"] == 0
+
+
 def test_chapter_items_can_be_reordered_with_json_api(client, helpers):
     helpers.create_user(client, "owner")
     photo_id = helpers.upload_photo(
@@ -1801,6 +2081,106 @@ def test_chapter_items_can_be_reordered_with_json_api(client, helpers):
         json={"item_ids": reordered_ids[:-1]},
     )
     assert bad_response.status_code == 400
+
+
+def test_chapter_pdf_export_preserves_chapter_access_and_sequence(app, client, helpers):
+    owner_id = helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="chapter-export-photo.png",
+        title="Chapter export photo",
+        caption="A caption for the chapter PDF",
+        photo_date="2020-05-04",
+        tag="private",
+    )
+    text_id = helpers.create_text(
+        client,
+        "A chapter export text memory",
+        entry_date="2020-05-05",
+        tag="private",
+    )
+
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Export Story",
+            "description": "A keepsake chapter",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Export Story",))["id"]
+
+    for item_kind, item_id in (("text", text_id), ("photo", photo_id)):
+        response = client.post(
+            "/chapters/items",
+            data={
+                **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+                "chapter_id": chapter_id,
+                "item_kind": item_kind,
+                "item_id": item_id,
+            },
+        )
+        assert response.status_code == 302
+
+    with app.app_context():
+        export_items = helpers.app_module.build_chapter_pdf_export_items(
+            helpers.app_module.get_db(),
+            chapter_id,
+            owner_id,
+        )
+    assert [(item["kind"], item["id"]) for item in export_items] == [
+        ("text", text_id),
+        ("photo", photo_id),
+    ]
+
+    chapter_page = client.get(f"/chapters/{chapter_id}")
+    assert chapter_page.status_code == 200
+    assert f"/chapters/{chapter_id}/export.pdf".encode() in chapter_page.data
+    assert b"Export chapter PDF" in chapter_page.data
+
+    owner_pdf = client.get(f"/chapters/{chapter_id}/export.pdf")
+    assert owner_pdf.status_code == 200
+    assert owner_pdf.mimetype == "application/pdf"
+    assert owner_pdf.data.startswith(b"%PDF")
+    assert "evertimeline-chapter-Export_Story.pdf" in owner_pdf.headers["Content-Disposition"]
+
+    friend = app.test_client()
+    friend_id = helpers.create_user(friend, "friend")
+    request_id = helpers.request_connection(friend, owner_id, relation="friend")
+    helpers.accept_connection(client, request_id)
+
+    stranger = app.test_client()
+    helpers.create_user(stranger, "stranger")
+    assert stranger.get(f"/shared/chapters/{chapter_id}/export.pdf").status_code == 404
+
+    invite_response = client.post(
+        f"/chapters/{chapter_id}/invites",
+        data={
+            **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+            "recipient_id": friend_id,
+        },
+    )
+    assert invite_response.status_code == 302
+    invite = helpers.row(
+        "SELECT id FROM chapter_invites WHERE chapter_id = ? AND recipient_id = ?",
+        (chapter_id, friend_id),
+    )
+    accept_response = friend.post(
+        f"/chapter-invites/{invite['id']}/accept",
+        data=helpers.csrf_form_data(friend, "/notifications"),
+    )
+    assert accept_response.status_code == 302
+
+    shared_page = friend.get(f"/shared/chapters/{chapter_id}")
+    assert shared_page.status_code == 200
+    assert f"/shared/chapters/{chapter_id}/export.pdf".encode() in shared_page.data
+
+    shared_pdf = friend.get(f"/shared/chapters/{chapter_id}/export.pdf")
+    assert shared_pdf.status_code == 200
+    assert shared_pdf.mimetype == "application/pdf"
+    assert shared_pdf.data.startswith(b"%PDF")
 
 def test_chapter_draft_suggests_filtered_items_and_creates_chapter(client, helpers):
     helpers.create_user(client, "owner")
@@ -2385,18 +2765,31 @@ def test_memory_review_queue_prioritizes_incomplete_memories(client, helpers):
     timeline_response = client.get("/timeline")
     assert timeline_response.status_code == 200
     assert b"Review queue" in timeline_response.data
+    assert b"Memory completeness" in timeline_response.data
+    assert b"14% - Needs context" in timeline_response.data
+    assert b"Timeline coverage" in timeline_response.data
 
     response = client.get("/timeline/review")
     assert response.status_code == 200
     assert b"Review queue" in response.data
+    assert b"Memory completeness score" in response.data
+    assert b"14%" in response.data
+    assert b"1 of 7 checks complete" in response.data
     assert b"Start here" in response.data
+    assert b"Time capsule questions" in response.data
     assert b"Photos need captions" in response.data
     assert b"Memories need places" in response.data
     assert b"Memories need people" in response.data
     assert b"Memories not in chapters" in response.data
     assert b"Public photos need polish" in response.data
+    assert b"What do you remember most?" in response.data
+    assert b"Add why it mattered" in response.data
     assert b"public-uncaptioned.png" in response.data
     assert b"A short memory without tags or place" in response.data
+    assert b'data-review-action="prompt-caption"' in response.data
+    assert b'data-review-action="prompt-body"' in response.data
+    assert b'data-review-action="prompt-people"' in response.data
+    assert b'data-review-action="prompt-location"' in response.data
     assert b'data-review-action="caption"' in response.data
     assert b'data-review-action="people"' in response.data
     assert b'data-review-action="location"' in response.data
@@ -2411,6 +2804,9 @@ def test_memory_review_queue_empty_and_complete_states(client, helpers):
 
     empty_response = client.get("/timeline/review")
     assert empty_response.status_code == 200
+    assert b"Memory completeness score" in empty_response.data
+    assert b"0%" in empty_response.data
+    assert b"Add memories to start building your score." in empty_response.data
     assert b"Add memories to start building your review queue." in empty_response.data
 
     photo_id = helpers.upload_photo(
@@ -2445,7 +2841,11 @@ def test_memory_review_queue_empty_and_complete_states(client, helpers):
 
     complete_response = client.get("/timeline/review")
     assert complete_response.status_code == 200
+    assert b"100%" in complete_response.data
+    assert b"Polished" in complete_response.data
+    assert b"4 of 4 checks complete" in complete_response.data
     assert b"Your timeline has no review issues right now." in complete_response.data
+    assert b"Time capsule questions" not in complete_response.data
 
 
 def test_memory_review_inline_actions_complete_photo(client, helpers):
@@ -2965,6 +3365,112 @@ def test_shared_chapter_invite_allows_album_comments_without_timeline_access(app
     notifications = client.get("/notifications")
     assert b"I can see just this album." in notifications.data
     assert b"loved your text entry" in notifications.data
+
+
+def test_private_chapter_share_link_is_expiring_read_only_access(app, client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="share-link-photo.png",
+        title="Shared link photo",
+        caption="Caption visible through the private link",
+        tag="private",
+    )
+    text_id = helpers.create_text(
+        client,
+        "Read-only link text memory",
+        tag="private",
+    )
+
+    chapter_response = client.post(
+        "/chapters",
+        data={
+            **helpers.csrf_form_data(client, "/chapters"),
+            "title": "Link-only chapter",
+            "description": "No account needed",
+            "visibility": "private",
+        },
+    )
+    assert chapter_response.status_code == 302
+    chapter_id = helpers.row("SELECT id FROM chapters WHERE title = ?", ("Link-only chapter",))["id"]
+
+    for item_kind, item_id in (("photo", photo_id), ("text", text_id)):
+        response = client.post(
+            "/chapters/items",
+            data={
+                **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+                "chapter_id": chapter_id,
+                "item_kind": item_kind,
+                "item_id": item_id,
+            },
+        )
+        assert response.status_code == 302
+
+    chapter_page = client.get(f"/chapters/{chapter_id}")
+    assert chapter_page.status_code == 200
+    assert b"Private sharing links" in chapter_page.data
+    assert b"Create private link" in chapter_page.data
+
+    create_link_response = client.post(
+        f"/chapters/{chapter_id}/share-links",
+        data={
+            **helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+            "expires_days": "7",
+        },
+    )
+    assert create_link_response.status_code == 302
+    link = helpers.row(
+        "SELECT id, token, expires_at, revoked_at FROM chapter_share_links WHERE chapter_id = ?",
+        (chapter_id,),
+    )
+    assert link["token"]
+    assert link["revoked_at"] is None
+
+    updated_chapter_page = client.get(f"/chapters/{chapter_id}")
+    assert updated_chapter_page.status_code == 200
+    assert f"/share/chapter/{link['token']}".encode() in updated_chapter_page.data
+    assert b"Active link" in updated_chapter_page.data
+
+    public = app.test_client()
+    public_page = public.get(f"/share/chapter/{link['token']}")
+    assert public_page.status_code == 200
+    assert b"Link-only chapter" in public_page.data
+    assert b"Read-only link text memory" in public_page.data
+    assert b"Caption visible through the private link" in public_page.data
+    assert b"Export chapter PDF" in public_page.data
+    assert b"chapter-reactions" not in public_page.data
+    assert b"api/timeline-item" not in public_page.data
+
+    image_response = public.get(f"/share/chapter/{link['token']}/photo/{photo_id}/image")
+    assert image_response.status_code == 200
+    assert image_response.mimetype == "image/jpeg"
+
+    assert public.get(f"/share/chapter/{link['token']}/photo/{photo_id + 999}/image").status_code == 404
+
+    pdf_response = public.get(f"/share/chapter/{link['token']}/export.pdf")
+    assert pdf_response.status_code == 200
+    assert pdf_response.mimetype == "application/pdf"
+    assert pdf_response.data.startswith(b"%PDF")
+
+    revoke_response = client.post(
+        f"/chapters/{chapter_id}/share-links/{link['id']}/revoke",
+        data=helpers.csrf_form_data(client, f"/chapters/{chapter_id}"),
+    )
+    assert revoke_response.status_code == 302
+    assert public.get(f"/share/chapter/{link['token']}").status_code == 404
+
+    expired_token = "expired-test-token"
+    with app.app_context():
+        db = helpers.app_module.get_db()
+        db.execute(
+            """
+            INSERT INTO chapter_share_links (chapter_id, token, expires_at)
+            VALUES (?, ?, ?)
+            """,
+            (chapter_id, expired_token, "2000-01-01T00:00:00+00:00"),
+        )
+        db.commit()
+    assert public.get(f"/share/chapter/{expired_token}").status_code == 404
 
 
 def test_reactions_messages_and_notifications_for_connection(app, client, helpers):

@@ -1418,6 +1418,10 @@ details.privacy-toggle-panel {
     margin-top: 0;
 }
 
+.memory-completeness-card .button {
+    justify-self: start;
+}
+
 .submit-progress {
     margin-top: 4px;
 }
@@ -3914,7 +3918,8 @@ details.privacy-toggle-panel {
     font-size: 0.84rem;
     font-weight: 800;
 }
-.chapter-invite-form {
+.chapter-invite-form,
+.chapter-share-link-form {
     display: grid;
     grid-template-columns: minmax(220px, 360px) auto;
     align-items: end;
@@ -3922,12 +3927,14 @@ details.privacy-toggle-panel {
     margin-bottom: 14px;
 }
 
-.chapter-invite-list {
+.chapter-invite-list,
+.chapter-share-link-list {
     display: grid;
     gap: 10px;
 }
 
-.chapter-invite-card {
+.chapter-invite-card,
+.chapter-share-link-card {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
@@ -3938,13 +3945,15 @@ details.privacy-toggle-panel {
     background: #fff;
 }
 
-.chapter-invite-card div {
+.chapter-invite-card div,
+.chapter-share-link-card div {
     display: grid;
     min-width: 0;
     gap: 4px;
 }
 
-.chapter-invite-card span {
+.chapter-invite-card span,
+.chapter-share-link-card span {
     overflow: hidden;
     color: var(--muted);
     font-size: 0.84rem;
@@ -4503,6 +4512,80 @@ details.privacy-toggle-panel {
     border-color: rgba(22, 109, 103, 0.42);
 }
 
+.memory-score-panel {
+    display: grid;
+    grid-template-columns: 132px minmax(0, 1fr);
+    align-items: center;
+    gap: 18px;
+    margin-bottom: 18px;
+    border: 1px solid rgba(22, 109, 103, 0.3);
+    border-radius: 8px;
+    padding: 18px;
+    background: #f7fbfa;
+    box-shadow: var(--shadow);
+}
+
+.memory-score-meter {
+    display: grid;
+    place-items: center;
+    aspect-ratio: 1;
+    border: 10px solid rgba(22, 109, 103, 0.18);
+    border-radius: 50%;
+    background: #fff;
+    text-align: center;
+}
+
+.memory-score-meter strong {
+    color: var(--primary);
+    font-size: 1.9rem;
+    line-height: 1;
+}
+
+.memory-score-meter span {
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 900;
+}
+
+.memory-score-main {
+    display: grid;
+    gap: 8px;
+}
+
+.memory-score-main h2,
+.memory-score-main p {
+    margin-bottom: 0;
+}
+
+.memory-score-main progress {
+    width: 100%;
+    height: 10px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 999px;
+    background: var(--border);
+}
+
+.memory-score-main progress::-webkit-progress-bar {
+    border-radius: 999px;
+    background: var(--border);
+}
+
+.memory-score-main progress::-webkit-progress-value {
+    border-radius: 999px;
+    background: var(--primary);
+}
+
+.memory-score-main progress::-moz-progress-bar {
+    border-radius: 999px;
+    background: var(--primary);
+}
+
+.memory-score-main p {
+    color: var(--muted);
+    line-height: 1.45;
+}
+
 .review-focus-panel {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -4577,6 +4660,45 @@ details.privacy-toggle-panel {
 
 .review-place-form {
     grid-template-columns: minmax(150px, 1fr) minmax(72px, 88px) minmax(72px, 88px) auto;
+}
+
+.review-prompt-stack {
+    display: grid;
+    gap: 10px;
+}
+
+.review-prompt-form {
+    grid-template-columns: minmax(120px, 0.7fr) minmax(0, 1fr) auto;
+    align-items: start;
+    border: 1px solid rgba(22, 109, 103, 0.2);
+    border-radius: 8px;
+    padding: 10px;
+    background: #f7fbfa;
+}
+
+.review-prompt-place-form {
+    grid-template-columns: minmax(120px, 0.7fr) minmax(130px, 1fr) minmax(68px, 82px) minmax(68px, 82px) auto;
+}
+
+.review-prompt-copy {
+    display: grid;
+    min-width: 0;
+    gap: 3px;
+}
+
+.review-prompt-copy strong {
+    color: var(--ink);
+    font-size: 0.88rem;
+    line-height: 1.25;
+}
+
+.review-prompt-copy small {
+    overflow: hidden;
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 800;
+    line-height: 1.35;
+    text-overflow: ellipsis;
 }
 
 .review-inline-form label {
@@ -5288,6 +5410,8 @@ details.privacy-toggle-panel {
     .search-form,
     .review-inline-form,
     .review-place-form,
+    .review-prompt-form,
+    .review-prompt-place-form,
     .legacy-note-form,
     .collection-filter-form,
     .tags-form,
@@ -5296,7 +5420,8 @@ details.privacy-toggle-panel {
     .chapter-form,
     .chapter-draft-filter-form,
     .chapter-bulk-review-form,
-    .chapter-invite-form {
+    .chapter-invite-form,
+    .chapter-share-link-form {
         grid-template-columns: 1fr;
     }
 
@@ -5334,15 +5459,22 @@ details.privacy-toggle-panel {
     .activity-card,
     .timeline-search-card,
     .review-focus-panel,
+    .memory-score-panel,
     .review-issue-header,
     .legacy-note-card,
     .map-place-card,
     .collections-layout,
     .saved-view-card,
     .collection-result-card,
-    .chapter-invite-card {
+    .chapter-invite-card,
+    .chapter-share-link-card {
         grid-template-columns: 1fr;
         align-items: stretch;
+    }
+
+    .memory-score-meter {
+        width: min(132px, 100%);
+        justify-self: center;
     }
 
     .person-actions,
@@ -5359,6 +5491,7 @@ details.privacy-toggle-panel {
     .saved-view-card .button,
     .collection-result-card .button,
     .chapter-invite-card .button,
+    .chapter-share-link-card .button,
     .inline-form {
         width: 100%;
     }
@@ -5372,7 +5505,8 @@ details.privacy-toggle-panel {
     .collection-result-main span,
     .map-place-main span:not(.status-badge),
     .map-place-main small,
-    .chapter-invite-card span {
+    .chapter-invite-card span,
+    .chapter-share-link-card span {
         white-space: normal;
     }
 

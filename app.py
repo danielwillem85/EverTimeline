@@ -17,6 +17,7 @@ import traceback
 import zipfile
 from xml.sax.saxutils import escape
 
+import resend
 from flask import (
     Flask,
     Response,
@@ -31,6 +32,9 @@ from flask import (
     url_for,
 )
 from markupsafe import Markup, escape as html_escape
+from flask_limiter import Limiter
+from flask_limiter.errors import RateLimitExceeded
+from flask_limiter.util import get_remote_address
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
@@ -65,6 +69,12 @@ PRIVACY_AUDIENCE_HELP = {
     "public": "All accepted connections can see this item.",
 }
 CONNECTION_RELATIONS = ("friend", "family")
+CHAPTER_SHARE_LINK_DURATIONS = (
+    (7, "7 days"),
+    (30, "30 days"),
+    (90, "90 days"),
+    (365, "1 year"),
+)
 CONNECTION_VISIBLE_TAGS = {
     "friend": ("friends", "public"),
     "family": ("family", "friends", "public"),
@@ -111,7 +121,17 @@ MONTH_NAMES = [
 BACKUP_FORMAT = "evertimeline.account_backup"
 BACKUP_FORMAT_VERSION = 1
 BACKUP_MANIFEST_NAME = "evertimeline-backup.json"
-DEFAULT_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
+DEFAULT_MAX_UPLOAD_BYTES = 256 * 1024 * 1024
+DEFAULT_MAX_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024
+DEFAULT_MAX_IMAGE_PIXELS = 50_000_000
+DEFAULT_MAX_BACKUP_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
+DEFAULT_MAX_BACKUP_MANIFEST_BYTES = 10 * 1024 * 1024
+DEFAULT_MAX_BACKUP_FILE_COUNT = 5_000
+LOGIN_RATE_LIMIT = "10 per minute"
+REGISTER_RATE_LIMIT = "5 per hour"
+PASSWORD_RESET_REQUEST_RATE_LIMIT = "5 per hour"
+PASSWORD_RESET_SUBMIT_RATE_LIMIT = "10 per hour"
+MESSAGE_RATE_LIMIT = "30 per minute"
 ADMIN_USERNAME = "Daniel"
 SQLITE_BUSY_TIMEOUT_MS = 30000
 IMAGE_CONVERSION_COMMIT_INTERVAL = 5
@@ -161,16 +181,75 @@ def run_debug_enabled():
 
 
 def configured_max_upload_bytes():
-    value = os.environ.get("EVERTIMELINE_MAX_UPLOAD_MB")
+    return configured_megabyte_limit("EVERTIMELINE_MAX_UPLOAD_MB", DEFAULT_MAX_UPLOAD_BYTES)
+
+
+def configured_max_image_upload_bytes():
+    return configured_megabyte_limit(
+        "EVERTIMELINE_MAX_IMAGE_MB",
+        DEFAULT_MAX_IMAGE_UPLOAD_BYTES,
+    )
+
+
+def configured_max_backup_uncompressed_bytes():
+    return configured_megabyte_limit(
+        "EVERTIMELINE_MAX_BACKUP_UNCOMPRESSED_MB",
+        DEFAULT_MAX_BACKUP_UNCOMPRESSED_BYTES,
+    )
+
+
+def configured_max_backup_manifest_bytes():
+    return configured_megabyte_limit(
+        "EVERTIMELINE_MAX_BACKUP_MANIFEST_MB",
+        DEFAULT_MAX_BACKUP_MANIFEST_BYTES,
+    )
+
+
+def configured_megabyte_limit(env_name, default_bytes):
+    value = os.environ.get(env_name)
     if not value:
-        return DEFAULT_MAX_UPLOAD_BYTES
+        return default_bytes
     try:
         megabytes = int(value)
     except ValueError:
-        return DEFAULT_MAX_UPLOAD_BYTES
+        return default_bytes
     if megabytes <= 0:
-        return DEFAULT_MAX_UPLOAD_BYTES
+        return default_bytes
     return megabytes * 1024 * 1024
+
+
+def configured_max_image_pixels():
+    value = os.environ.get("EVERTIMELINE_MAX_IMAGE_PIXELS")
+    if not value:
+        return DEFAULT_MAX_IMAGE_PIXELS
+    try:
+        pixels = int(value)
+    except ValueError:
+        return DEFAULT_MAX_IMAGE_PIXELS
+    if pixels <= 0:
+        return DEFAULT_MAX_IMAGE_PIXELS
+    return pixels
+
+
+def configured_max_backup_file_count():
+    value = os.environ.get("EVERTIMELINE_MAX_BACKUP_FILES")
+    if not value:
+        return DEFAULT_MAX_BACKUP_FILE_COUNT
+    try:
+        file_count = int(value)
+    except ValueError:
+        return DEFAULT_MAX_BACKUP_FILE_COUNT
+    if file_count <= 0:
+        return DEFAULT_MAX_BACKUP_FILE_COUNT
+    return file_count
+
+
+def configured_resend_api_key():
+    return os.environ.get("RESEND_API_KEY", "").strip()
+
+
+def configured_resend_from_email():
+    return os.environ.get("RESEND_FROM_EMAIL", "").strip()
 
 
 def human_readable_bytes(byte_count):
@@ -184,12 +263,32 @@ def human_readable_bytes(byte_count):
 
 
 app = Flask(__name__)
+PRODUCTION_SECURITY_ENABLED = not is_local_development()
 app.config.update(
     SECRET_KEY=configured_secret_key(),
     MAX_CONTENT_LENGTH=configured_max_upload_bytes(),
+    MAX_IMAGE_UPLOAD_BYTES=configured_max_image_upload_bytes(),
+    MAX_IMAGE_PIXELS=configured_max_image_pixels(),
+    MAX_BACKUP_UNCOMPRESSED_BYTES=configured_max_backup_uncompressed_bytes(),
+    MAX_BACKUP_MANIFEST_BYTES=configured_max_backup_manifest_bytes(),
+    MAX_BACKUP_FILE_COUNT=configured_max_backup_file_count(),
     CSRF_PROTECT=True,
     LOCAL_PASSWORD_RESET_LINKS=is_local_development(),
+    PASSWORD_RESET_EMAIL_ENABLED=bool(configured_resend_api_key() and configured_resend_from_email()),
+    RESEND_API_KEY=configured_resend_api_key(),
+    RESEND_FROM_EMAIL=configured_resend_from_email(),
+    PRODUCTION_SECURITY_HEADERS=PRODUCTION_SECURITY_ENABLED,
     RUN_JOBS_INLINE=False,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=PRODUCTION_SECURITY_ENABLED,
+)
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    storage_uri=os.environ.get("RATELIMIT_STORAGE_URI", "memory://"),
+    default_limits=[],
 )
 
 
@@ -204,6 +303,51 @@ def csrf_token():
 def csrf_field():
     token = html_escape(csrf_token())
     return Markup(f'<input type="hidden" name="csrf_token" value="{token}">')
+
+
+def wants_json_rate_limit_response():
+    return (
+        request.path.startswith("/api/")
+        or "/api/" in request.path
+        or request.path.endswith("/messages")
+        or request.accept_mimetypes.best == "application/json"
+    )
+
+
+@app.errorhandler(RateLimitExceeded)
+def handle_rate_limit_exceeded(error):
+    message = "Too many requests. Please wait and try again."
+    if wants_json_rate_limit_response():
+        return jsonify({"error": message}), 429
+
+    flash(message, "error")
+    if request.method in SAFE_METHODS:
+        return render_template("login.html"), 429
+    target = request.path if request.path.startswith("/") else url_for("index")
+    return redirect(target), 303
+
+
+@app.after_request
+def add_security_headers(response):
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        (
+            "default-src 'self'; "
+            "base-uri 'self'; "
+            "object-src 'none'; "
+            "frame-ancestors 'none'; "
+            "img-src 'self' data:; "
+            "style-src 'self' 'unsafe-inline'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "connect-src 'self'"
+        ),
+    )
+    if app.config.get("PRODUCTION_SECURITY_HEADERS"):
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
 
 
 @app.errorhandler(RequestEntityTooLarge)
@@ -582,6 +726,16 @@ def init_db():
                 FOREIGN KEY (recipient_id) REFERENCES users (id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS chapter_share_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chapter_id INTEGER NOT NULL,
+                token TEXT NOT NULL UNIQUE,
+                expires_at TEXT NOT NULL,
+                revoked_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (chapter_id) REFERENCES chapters (id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
@@ -714,6 +868,18 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS chapter_invites_chapter_status
             ON chapter_invites (chapter_id, status, recipient_id)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS chapter_share_links_chapter_created
+            ON chapter_share_links (chapter_id, created_at, id)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS chapter_share_links_token_active
+            ON chapter_share_links (token, revoked_at, expires_at)
             """
         )
         db.execute(
@@ -1272,6 +1438,29 @@ def photo_image_hash(image_data):
     return hashlib.sha256(image_data).hexdigest()
 
 
+def validate_image_upload_bytes(image_data):
+    max_bytes = app.config["MAX_IMAGE_UPLOAD_BYTES"]
+    if len(image_data) > max_bytes:
+        raise ValueError(f"Image exceeds the per-photo limit of {human_readable_bytes(max_bytes)}.")
+
+
+def validate_image_pixels(image):
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        raise ValueError("Image has invalid dimensions.")
+    max_pixels = app.config["MAX_IMAGE_PIXELS"]
+    if width * height > max_pixels:
+        raise ValueError(f"Image exceeds the pixel limit of {max_pixels:,} pixels.")
+
+
+def read_uploaded_image_data(image):
+    image_data = image.read()
+    if not image_data:
+        raise ValueError("Image is empty.")
+    validate_image_upload_bytes(image_data)
+    return image_data
+
+
 def storage_jpeg_from_image(
     image_data,
     quality=JPEG_STORAGE_QUALITY,
@@ -1280,7 +1469,9 @@ def storage_jpeg_from_image(
     progressive=True,
 ):
     try:
+        validate_image_upload_bytes(image_data)
         with Image.open(io.BytesIO(image_data)) as image:
+            validate_image_pixels(image)
             image = ImageOps.exif_transpose(image)
             if image.mode in ("RGBA", "LA") or "transparency" in image.info:
                 rgba_image = image.convert("RGBA")
@@ -1972,6 +2163,70 @@ def create_password_reset_token(db, user_id):
         (user_id, hash_reset_token(token), expires_at),
     )
     return token
+
+
+def password_reset_email_configured():
+    return bool(
+        app.config.get("PASSWORD_RESET_EMAIL_ENABLED")
+        and app.config.get("RESEND_API_KEY")
+        and app.config.get("RESEND_FROM_EMAIL")
+    )
+
+
+def password_reset_email_payload(user, reset_url):
+    display_name = user_full_name(user) or user["username"]
+    escaped_name = html_escape(display_name)
+    escaped_url = html_escape(reset_url)
+    text = (
+        f"Hi {display_name},\n\n"
+        "Use this link to reset your EverTimeline password:\n"
+        f"{reset_url}\n\n"
+        "This link expires in 1 hour. If you did not request a password reset, you can ignore this email."
+    )
+    html = (
+        f"<p>Hi {escaped_name},</p>"
+        "<p>Use this link to reset your EverTimeline password:</p>"
+        f'<p><a href="{escaped_url}">Reset your password</a></p>'
+        "<p>This link expires in 1 hour. If you did not request a password reset, you can ignore this email.</p>"
+    )
+    return {
+        "from": app.config["RESEND_FROM_EMAIL"],
+        "to": [user["email"]],
+        "subject": "Reset your EverTimeline password",
+        "html": html,
+        "text": text,
+    }
+
+
+def send_password_reset_email(user, reset_url):
+    if not password_reset_email_configured() or not user["email"]:
+        raise ValueError("Password reset email delivery is not configured.")
+
+    resend.api_key = app.config["RESEND_API_KEY"]
+    return resend.Emails.send(password_reset_email_payload(user, reset_url))
+
+
+def prepare_password_reset_delivery(db, user):
+    if user is None:
+        return None
+
+    local_links_enabled = app.config.get("LOCAL_PASSWORD_RESET_LINKS", False)
+    email_delivery_enabled = password_reset_email_configured() and user["email"]
+    if not local_links_enabled and not email_delivery_enabled:
+        return None
+
+    token = create_password_reset_token(db, user["id"])
+    reset_url = url_for("reset_password", token=token, _external=True)
+
+    if local_links_enabled:
+        db.commit()
+        return reset_url
+
+    if email_delivery_enabled:
+        send_password_reset_email(user, reset_url)
+        db.commit()
+
+    return None
 
 
 def get_valid_password_reset(db, token):
@@ -4285,6 +4540,116 @@ def chapter_invites_for_chapter(db, chapter_id):
     ).fetchall()
 
 
+def chapter_share_link_duration(value):
+    allowed_days = {days for days, _label in CHAPTER_SHARE_LINK_DURATIONS}
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        return 30
+    return days if days in allowed_days else 30
+
+
+def parse_stored_datetime(value):
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def chapter_share_link_status(row):
+    if row["revoked_at"]:
+        return "revoked"
+    expires_at = parse_stored_datetime(row["expires_at"])
+    if expires_at is None or expires_at <= utc_now():
+        return "expired"
+    return "active"
+
+
+def chapter_share_link_url(token):
+    return url_for("public_chapter_share", token=token, _external=True)
+
+
+def chapter_share_links_for_chapter(db, chapter_id):
+    rows = db.execute(
+        """
+        SELECT *
+        FROM chapter_share_links
+        WHERE chapter_id = ?
+        ORDER BY created_at DESC, id DESC
+        """,
+        (chapter_id,),
+    ).fetchall()
+    links = []
+    for row in rows:
+        link = dict(row)
+        link["status"] = chapter_share_link_status(row)
+        link["share_url"] = chapter_share_link_url(row["token"]) if link["status"] == "active" else ""
+        links.append(link)
+    return links
+
+
+def create_chapter_share_link(db, chapter_id, days):
+    token = secrets.token_urlsafe(32)
+    expires_at = (utc_now() + timedelta(days=days)).isoformat()
+    db.execute(
+        """
+        INSERT INTO chapter_share_links (chapter_id, token, expires_at)
+        VALUES (?, ?, ?)
+        """,
+        (chapter_id, token, expires_at),
+    )
+    return token
+
+
+def get_valid_chapter_share_link(token):
+    row = get_db().execute(
+        """
+        SELECT
+            csl.*,
+            c.user_id,
+            c.title,
+            c.description,
+            c.visibility,
+            c.cover_item_kind,
+            c.cover_item_id,
+            u.username,
+            u.first_name,
+            u.last_name
+        FROM chapter_share_links csl
+        JOIN chapters c ON c.id = csl.chapter_id
+        JOIN users u ON u.id = c.user_id
+        WHERE csl.token = ?
+        """,
+        (token or "",),
+    ).fetchone()
+    if row is None or chapter_share_link_status(row) != "active":
+        abort(404)
+
+    chapter = dict(row)
+    chapter["id"] = row["chapter_id"]
+    chapter["owner_name"] = user_full_name(row) or row["username"]
+    return chapter
+
+
+def public_chapter_share_contains_item(db, token, item_kind, item_id):
+    if item_kind not in ("photo", "text"):
+        abort(404)
+    chapter = get_valid_chapter_share_link(token)
+    row = db.execute(
+        """
+        SELECT id
+        FROM chapter_items
+        WHERE chapter_id = ? AND item_kind = ? AND item_id = ?
+        """,
+        (chapter["id"], item_kind, item_id),
+    ).fetchone()
+    if row is None:
+        abort(404)
+    return chapter
+
+
 def invitable_chapter_connections(db, chapter_id):
     invited_ids = {
         row["recipient_id"]
@@ -4527,6 +4892,7 @@ def build_chapter_items(
     item_url_builder=None,
     reaction_url_builder=None,
     include_messages=True,
+    include_reactions=True,
 ):
     owner_id = owner_id if owner_id is not None else g.user["id"]
     refs = db.execute(
@@ -4649,8 +5015,9 @@ def build_chapter_items(
             if include_messages:
                 item["messages"] = load_messages_for_timeline_item(db, "text", entry["id"]) if message_url_builder else []
             items.append(item)
-    attach_reactions(db, items)
-    if reaction_url_builder:
+    if include_reactions:
+        attach_reactions(db, items)
+    if include_reactions and reaction_url_builder:
         for item in items:
             item["reactions"]["reaction_url"] = reaction_url_builder(item["kind"], item["id"])
     return items
@@ -6051,13 +6418,65 @@ def review_issue_stat(label, count, url):
     }
 
 
+def memory_completeness_score(total_memories, total_checks, missing_checks):
+    if total_memories == 0 or total_checks == 0:
+        percent = 0
+        label = "No memories yet"
+        summary = "Add memories to start building your score."
+    else:
+        completed_checks = max(total_checks - missing_checks, 0)
+        percent = round(completed_checks * 100 / total_checks)
+        if percent >= 90:
+            label = "Polished"
+            summary = "Most memories have the context they need."
+        elif percent >= 65:
+            label = "In progress"
+            summary = "Your timeline has a solid base, with a few gaps to fill."
+        else:
+            label = "Needs context"
+            summary = "Add captions, people, places, and chapters to make memories easier to browse."
+
+    return {
+        "percent": percent,
+        "label": label,
+        "summary": summary,
+        "completed_checks": max(total_checks - missing_checks, 0),
+        "total_checks": total_checks,
+        "missing_checks": missing_checks,
+    }
+
+
 def memory_review_context(row):
     display_date = row["photo_date"] if "photo_date" in row.keys() else row["entry_date"]
     return timeline_search_context(row, format_timeline_date_label(row["year"], row["month"], display_date))
 
 
+def review_time_capsule_prompts(kind, row, people):
+    prompts = guided_prompts_for_item(kind, row, people)
+    if kind == "photo":
+        missing_targets = set()
+        if not (row["caption"] or "").strip():
+            missing_targets.add("caption")
+        if not people:
+            missing_targets.add("people")
+        if not timeline_search_has_location(row):
+            missing_targets.add("location")
+        return [prompt for prompt in prompts if prompt["target"] in missing_targets]
+
+    missing_targets = set()
+    if len((row["body"] or "").strip()) < 140:
+        missing_targets.add("body")
+    if not people:
+        missing_targets.add("people")
+    if not timeline_search_has_location(row):
+        missing_targets.add("location")
+    return [prompt for prompt in prompts if prompt["target"] in missing_targets]
+
+
 def memory_review_item(kind, row, tags, people, chapter_membership=None):
     chapter_membership = chapter_membership or {}
+    guided_prompts = guided_prompts_for_item(kind, row, people)
+    review_prompts = review_time_capsule_prompts(kind, row, people)
     if kind == "photo":
         title = photo_display_title(row)
         preview = row["caption"] or "Photo needs a caption."
@@ -6095,6 +6514,8 @@ def memory_review_item(kind, row, tags, people, chapter_membership=None):
         "context": memory_review_context(row),
         "preview": short_preview(preview, 150),
         "meta": timeline_search_meta(row, tags, 0, chapter_membership, people),
+        "guided_prompts": guided_prompts,
+        "review_prompts": review_prompts,
         "image_url": image_url,
         "url": timeline_item_link(g.user["id"], row["year"], row["month"], kind, row["id"]),
         "api_url": api_url,
@@ -6134,6 +6555,16 @@ def build_memory_review_queue(db, sample_limit=4):
     text_chapters = load_timeline_search_chapter_memberships(db, "text", text_ids)
 
     issue_defs = {
+        "prompts": {
+            "key": "prompts",
+            "title": "Time capsule questions",
+            "description": "Answer small prompts to turn sparse memories into stories future readers can understand.",
+            "action_label": "Answer prompts",
+            "url": url_for("timeline_review") + "#time-capsule-questions",
+            "items": [],
+            "count": 0,
+            "priority": 1,
+        },
         "captions": {
             "key": "captions",
             "title": "Photos need captions",
@@ -6142,7 +6573,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "url": url_for("timeline_search", kind="photo", caption="without"),
             "items": [],
             "count": 0,
-            "priority": 1,
+            "priority": 2,
         },
         "places": {
             "key": "places",
@@ -6152,7 +6583,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "url": url_for("timeline_search", location="without"),
             "items": [],
             "count": 0,
-            "priority": 2,
+            "priority": 3,
         },
         "people": {
             "key": "people",
@@ -6162,7 +6593,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "url": url_for("timeline_people"),
             "items": [],
             "count": 0,
-            "priority": 3,
+            "priority": 4,
         },
         "chapters": {
             "key": "chapters",
@@ -6172,7 +6603,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "url": url_for("chapter_draft"),
             "items": [],
             "count": 0,
-            "priority": 4,
+            "priority": 5,
         },
         "public": {
             "key": "public",
@@ -6182,7 +6613,7 @@ def build_memory_review_queue(db, sample_limit=4):
             "url": url_for("timeline_search", kind="photo", visibility="public", caption="without"),
             "items": [],
             "count": 0,
-            "priority": 5,
+            "priority": 6,
         },
     }
 
@@ -6197,6 +6628,8 @@ def build_memory_review_queue(db, sample_limit=4):
         people = photo_people.get(row["id"], [])
         chapter_membership = photo_chapters.get(row["id"], {})
         item = memory_review_item("photo", row, tags, people, chapter_membership)
+        if item["review_prompts"]:
+            add_issue("prompts", item)
         if not (row["caption"] or "").strip():
             add_issue("captions", item)
         if not timeline_search_has_location(row):
@@ -6213,6 +6646,8 @@ def build_memory_review_queue(db, sample_limit=4):
         people = text_people.get(row["id"], [])
         chapter_membership = text_chapters.get(row["id"], {})
         item = memory_review_item("text", row, tags, people, chapter_membership)
+        if item["review_prompts"]:
+            add_issue("prompts", item)
         if not timeline_search_has_location(row):
             add_issue("places", item)
         if not people:
@@ -6264,7 +6699,11 @@ def build_memory_review_queue(db, sample_limit=4):
     issues.sort(key=lambda issue: (issue["priority"], -issue["count"], issue["title"].casefold()))
     total_memories = len(photo_rows) + len(text_rows)
     total_issues = sum(issue["count"] for issue in issues)
+    core_issue_keys = ("captions", "places", "people", "chapters")
+    missing_checks = sum(issue_defs[key]["count"] for key in core_issue_keys)
+    total_checks = (len(photo_rows) * 4) + (len(text_rows) * 3)
     return {
+        "score": memory_completeness_score(total_memories, total_checks, missing_checks),
         "stats": [
             review_issue_stat("Review issues", total_issues, url_for("timeline_review")),
             review_issue_stat("Memories", total_memories, url_for("timeline")),
@@ -7504,6 +7943,123 @@ def build_pdf_export_items(db, owner_id, year, month=None):
     return items
 
 
+def build_chapter_pdf_export_items(db, chapter_id, owner_id):
+    refs = db.execute(
+        """
+        SELECT id, item_kind, item_id, position
+        FROM chapter_items
+        WHERE chapter_id = ?
+        ORDER BY position ASC, id ASC
+        """,
+        (chapter_id,),
+    ).fetchall()
+    if not refs:
+        return []
+
+    photo_ids = [row["item_id"] for row in refs if row["item_kind"] == "photo"]
+    text_ids = [row["item_id"] for row in refs if row["item_kind"] == "text"]
+
+    photo_map = {}
+    if photo_ids:
+        placeholders = ",".join(["?"] * len(photo_ids))
+        photo_rows = db.execute(
+            f"""
+            SELECT id, year, month, original_filename, title, caption, mime_type, image_data, photo_date, created_at
+            FROM photos
+            WHERE user_id = ? AND id IN ({placeholders})
+            """,
+            (owner_id, *photo_ids),
+        ).fetchall()
+        photo_map = {row["id"]: row for row in photo_rows}
+
+    text_map = {}
+    if text_ids:
+        placeholders = ",".join(["?"] * len(text_ids))
+        text_rows = db.execute(
+            f"""
+            SELECT id, year, month, body, entry_date, created_at, updated_at
+            FROM text_entries
+            WHERE user_id = ? AND id IN ({placeholders})
+            """,
+            (owner_id, *text_ids),
+        ).fetchall()
+        text_map = {row["id"]: row for row in text_rows}
+
+    photo_tags = load_tags_for_items(db, "photo", photo_ids, owner_id)
+    text_tags = load_tags_for_items(db, "text", text_ids, owner_id)
+    photo_people = load_people_for_items(db, "photo", photo_ids, owner_id)
+    text_people = load_people_for_items(db, "text", text_ids, owner_id)
+
+    items = []
+    for ref in refs:
+        if ref["item_kind"] == "photo":
+            photo = photo_map.get(ref["item_id"])
+            if photo is None:
+                continue
+            tags = photo_tags.get(photo["id"], [])
+            people = photo_people.get(photo["id"], [])
+            items.append(
+                {
+                    "kind": "photo",
+                    "id": photo["id"],
+                    "year": photo["year"],
+                    "month": photo["month"],
+                    "title": photo_display_title(photo),
+                    "caption": photo["caption"] or "",
+                    "display_date": photo["photo_date"],
+                    "date_label": format_timeline_date_label(photo["year"], photo["month"], photo["photo_date"]),
+                    "created_at": photo["created_at"],
+                    "mime_type": photo["mime_type"],
+                    "image_data": photo["image_data"],
+                    "messages": load_messages_for_timeline_item(db, "photo", photo["id"]),
+                    "tags": tags,
+                    "tags_text": tags_to_text(tags),
+                    **people_payload(people),
+                    **privacy_payload_for_tags(tags),
+                    "guided_prompts": guided_prompts_for_item("photo", photo, people),
+                }
+            )
+        else:
+            entry = text_map.get(ref["item_id"])
+            if entry is None:
+                continue
+            tags = text_tags.get(entry["id"], [])
+            people = text_people.get(entry["id"], [])
+            items.append(
+                {
+                    "kind": "text",
+                    "id": entry["id"],
+                    "year": entry["year"],
+                    "month": entry["month"],
+                    "title": "Text entry",
+                    "display_date": entry["entry_date"],
+                    "date_label": format_timeline_date_label(entry["year"], entry["month"], entry["entry_date"]),
+                    "created_at": entry["created_at"],
+                    "body": entry["body"],
+                    "messages": load_messages_for_timeline_item(db, "text", entry["id"]),
+                    "tags": tags,
+                    "tags_text": tags_to_text(tags),
+                    **people_payload(people),
+                    **privacy_payload_for_tags(tags),
+                    "guided_prompts": guided_prompts_for_item("text", entry, people),
+                }
+            )
+    return items
+
+
+def chapter_pdf_subtitle(chapter, owner_name):
+    exported_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    parts = [f"Owner: {owner_name}", f"Exported: {exported_at}"]
+    if chapter.get("description"):
+        parts.append(chapter["description"])
+    return " | ".join(parts)
+
+
+def chapter_pdf_filename(chapter):
+    slug = secure_filename(chapter["title"]) or f"chapter-{chapter['id']}"
+    return f"evertimeline-chapter-{slug}.pdf"
+
+
 def pdf_paragraph(text):
     return escape(str(text or "")).replace("\n", "<br/>")
 
@@ -7995,6 +8551,20 @@ def backup_created_at(value):
     return text or utc_now().isoformat()
 
 
+def backup_upload_stream(backup_file):
+    stream = getattr(backup_file, "stream", backup_file)
+    try:
+        stream.seek(0, os.SEEK_END)
+        if stream.tell() == 0:
+            raise ValueError("Choose a backup zip to import.")
+        stream.seek(0)
+    except ValueError:
+        raise
+    except (AttributeError, OSError):
+        pass
+    return stream
+
+
 def read_backup_manifest(archive):
     try:
         manifest_data = archive.read(BACKUP_MANIFEST_NAME)
@@ -8013,6 +8583,34 @@ def read_backup_manifest(archive):
     if manifest.get("format_version") != BACKUP_FORMAT_VERSION:
         raise ValueError("This backup format is not supported by this version of EverTimeline.")
     return manifest
+
+
+def validate_backup_archive(archive):
+    entries = archive.infolist()
+    max_files = app.config["MAX_BACKUP_FILE_COUNT"]
+    if len(entries) > max_files:
+        raise ValueError(f"Backup contains too many files. The limit is {max_files:,} files.")
+
+    max_uncompressed = app.config["MAX_BACKUP_UNCOMPRESSED_BYTES"]
+    total_uncompressed = 0
+    seen_names = set()
+    manifest_info = None
+    for info in entries:
+        if info.filename in seen_names:
+            raise ValueError("Backup contains duplicate file entries.")
+        seen_names.add(info.filename)
+        if info.filename == BACKUP_MANIFEST_NAME:
+            manifest_info = info
+        total_uncompressed += info.file_size
+        if total_uncompressed > max_uncompressed:
+            raise ValueError("Backup is too large to import.")
+    if manifest_info is None:
+        raise ValueError("Choose an EverTimeline backup zip.")
+    max_manifest_bytes = app.config["MAX_BACKUP_MANIFEST_BYTES"]
+    if manifest_info.file_size > max_manifest_bytes:
+        raise ValueError(
+            f"Backup manifest is too large. The limit is {human_readable_bytes(max_manifest_bytes)}."
+        )
 
 
 def restore_backup_birthday(db, manifest):
@@ -8048,10 +8646,11 @@ def import_photo_from_backup(db, archive, photo):
     except KeyError as exc:
         raise ValueError("Backup photo image is missing from the zip.") from exc
 
-    if info.file_size > app.config["MAX_CONTENT_LENGTH"]:
+    if info.file_size > app.config["MAX_IMAGE_UPLOAD_BYTES"]:
         raise ValueError("Backup contains a photo that is too large.")
 
     original_image_data = archive.read(info)
+    validate_image_upload_bytes(original_image_data)
     mime_type = backup_text(photo.get("mime_type"), "image/png", 64)
     if mime_type not in ALLOWED_IMAGE_MIMES:
         raise ValueError("Backup contains an unsupported photo type.")
@@ -8260,12 +8859,9 @@ def import_chapters_from_backup(db, chapters, photo_id_map, text_id_map):
 
 
 def import_account_backup(backup_file):
-    data = backup_file.read()
-    if not data:
-        raise ValueError("Choose a backup zip to import.")
-
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        with zipfile.ZipFile(backup_upload_stream(backup_file)) as archive:
+            validate_backup_archive(archive)
             manifest = read_backup_manifest(archive)
             db = get_db()
             restore_backup_birthday(db, manifest)
@@ -8384,6 +8980,7 @@ def splash_photo_thumbnail(photo_id):
 
 
 @app.route("/register", methods=("GET", "POST"))
+@limiter.limit(REGISTER_RATE_LIMIT, methods=["POST"])
 def register():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
@@ -8622,6 +9219,7 @@ def admin_full_splash_photo_thumbnail(connection_id, photo_id):
 
 
 @app.route("/login", methods=("GET", "POST"))
+@limiter.limit(LOGIN_RATE_LIMIT, methods=["POST"])
 def login():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
@@ -8643,6 +9241,7 @@ def login():
 
 
 @app.route("/forgot-password", methods=("GET", "POST"))
+@limiter.limit(PASSWORD_RESET_REQUEST_RATE_LIMIT, methods=["POST"])
 def forgot_password():
     reset_url = None
     identifier = ""
@@ -8659,10 +9258,11 @@ def forgot_password():
 
         db = get_db()
         user = find_user_for_password_reset(db, identifier)
-        if user is not None and app.config.get("LOCAL_PASSWORD_RESET_LINKS", False):
-            token = create_password_reset_token(db, user["id"])
-            db.commit()
-            reset_url = url_for("reset_password", token=token, _external=True)
+        try:
+            reset_url = prepare_password_reset_delivery(db, user)
+        except Exception:
+            db.rollback()
+            app.logger.exception("Password reset email delivery failed.")
 
         flash(
             "If an account matches that information and reset delivery is configured, reset instructions will be available.",
@@ -8677,6 +9277,7 @@ def forgot_password():
 
 
 @app.route("/reset-password/<token>", methods=("GET", "POST"))
+@limiter.limit(PASSWORD_RESET_SUBMIT_RATE_LIMIT, methods=["POST"])
 def reset_password(token):
     db = get_db()
     reset_row = get_valid_password_reset(db, token)
@@ -8800,7 +9401,13 @@ def timeline():
     preview = current_privacy_preview()
     years = list(user_years())
     year_counts = get_year_counts(db, allowed_tags=privacy_preview_allowed_tags(preview))
-    return render_template("timeline.html", years=years, year_counts=year_counts)
+    review_queue = build_memory_review_queue(db, sample_limit=0) if preview is None else None
+    return render_template(
+        "timeline.html",
+        years=years,
+        year_counts=year_counts,
+        review_queue=review_queue,
+    )
 
 
 @app.route("/timeline/anniversaries")
@@ -8900,8 +9507,9 @@ def timeline_import():
                 skipped_count += 1
                 continue
 
-            original_image_data = image.read()
-            if not original_image_data:
+            try:
+                original_image_data = read_uploaded_image_data(image)
+            except ValueError:
                 skipped_count += 1
                 continue
 
@@ -9769,8 +10377,9 @@ def month_view(year, month):
                 skipped_count += 1
                 continue
 
-            original_image_data = image.read()
-            if not original_image_data:
+            try:
+                original_image_data = read_uploaded_image_data(image)
+            except ValueError:
                 skipped_count += 1
                 continue
 
@@ -10284,6 +10893,7 @@ def connection_photo_messages(connection_id, photo_id):
 
 
 @app.route("/connections/<int:connection_id>/api/timeline-item/<item_kind>/<int:item_id>/messages", methods=("GET", "POST"))
+@limiter.limit(MESSAGE_RATE_LIMIT, methods=["POST"])
 @login_required
 def connection_timeline_item_messages(connection_id, item_kind, item_id):
     get_connection_timeline_item(connection_id, item_kind, item_id)
@@ -10542,6 +11152,7 @@ def public_photo_image(photo_id):
 
 
 @app.route("/public/photo/<int:photo_id>/messages", methods=("GET", "POST"))
+@limiter.limit(MESSAGE_RATE_LIMIT, methods=["POST"])
 @birthday_required
 def public_photo_messages(photo_id):
     get_public_photo(photo_id)
@@ -10795,6 +11406,7 @@ def text_entry(entry_id):
 
 
 @app.route("/api/timeline-item/<item_kind>/<int:item_id>/messages", methods=("GET", "POST"))
+@limiter.limit(MESSAGE_RATE_LIMIT, methods=["POST"])
 @birthday_required
 def timeline_item_messages(item_kind, item_id):
     get_owned_timeline_item(item_kind, item_id)
@@ -10855,6 +11467,7 @@ def timeline_item_reaction_response(db, item_kind, item_id):
 
 
 @app.route("/api/photo/<int:photo_id>/messages", methods=("GET", "POST"))
+@limiter.limit(MESSAGE_RATE_LIMIT, methods=["POST"])
 @birthday_required
 def photo_messages(photo_id):
     get_owned_photo(photo_id)

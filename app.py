@@ -6774,6 +6774,19 @@ def build_memory_review_queue(db, sample_limit=4):
     }
 
 
+def guided_review_steps(queue):
+    steps = []
+    for issue in queue["issues"]:
+        for item in issue["items"]:
+            steps.append(
+                {
+                    "issue": issue,
+                    "item": item,
+                }
+            )
+    return steps
+
+
 COLLECTION_KIND_CHOICES = ("", "photo", "text")
 
 
@@ -9417,6 +9430,19 @@ def timeline_review():
     return render_template(
         "timeline_review.html",
         queue=build_memory_review_queue(get_db()),
+    )
+
+
+@app.route("/timeline/review/guided")
+@birthday_required
+def timeline_guided_review():
+    queue = build_memory_review_queue(get_db(), sample_limit=24)
+    steps = guided_review_steps(queue)
+    return render_template(
+        "timeline_guided_review.html",
+        queue=queue,
+        steps=steps,
+        current=steps[0] if steps else None,
     )
 
 

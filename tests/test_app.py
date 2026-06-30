@@ -2861,9 +2861,20 @@ def test_memory_review_queue_prioritizes_incomplete_memories(client, helpers):
     timeline_response = client.get("/timeline")
     assert timeline_response.status_code == 200
     assert b"Review queue" in timeline_response.data
+    assert b"Start guided review" in timeline_response.data
+    assert b"/timeline/review/guided" in timeline_response.data
     assert b"Memory completeness" in timeline_response.data
     assert b"14% - Needs context" in timeline_response.data
     assert b"Timeline coverage" in timeline_response.data
+
+    guided_response = client.get("/timeline/review/guided")
+    assert guided_response.status_code == 200
+    assert b"Guided memory review" in guided_response.data
+    assert b"Step 1 of" in guided_response.data
+    assert b"Time capsule questions" in guided_response.data
+    assert b"public-uncaptioned.png" in guided_response.data
+    assert b'data-review-action="prompt-caption"' in guided_response.data
+    assert b"Review queue" in guided_response.data
 
     response = client.get("/timeline/review")
     assert response.status_code == 200

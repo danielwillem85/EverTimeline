@@ -2739,29 +2739,71 @@ details.privacy-toggle-panel {
 }
 
 .privacy-preview-panel {
+    margin-bottom: 18px;
+}
+
+.privacy-preview-toggle {
+    width: fit-content;
+    gap: 10px;
+    list-style: none;
+}
+
+.privacy-preview-toggle::-webkit-details-marker {
+    display: none;
+}
+
+.privacy-preview-toggle::marker {
+    content: "";
+}
+
+.privacy-preview-toggle::after {
+    content: "+";
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: #fff;
+    color: var(--primary);
+    font-size: 0.9rem;
+    font-weight: 900;
+}
+
+.privacy-preview-panel[open] .privacy-preview-toggle::after {
+    content: "-";
+}
+
+.privacy-preview-toggle small {
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 900;
+}
+
+.privacy-preview-body {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 14px;
-    margin-bottom: 18px;
+    margin-top: 10px;
     border: 1px solid rgba(22, 109, 103, 0.26);
     border-radius: 8px;
     padding: 12px 14px;
     background: #f7fbfa;
 }
 
-.privacy-preview-panel > div {
+.privacy-preview-copy {
     display: grid;
     min-width: 0;
     gap: 3px;
 }
 
-.privacy-preview-panel strong {
+.privacy-preview-copy strong {
     color: var(--ink);
     font-size: 0.96rem;
 }
 
-.privacy-preview-panel span {
+.privacy-preview-copy span {
     color: var(--muted);
     font-size: 0.88rem;
     font-weight: 700;
@@ -5288,6 +5330,15 @@ details.privacy-toggle-panel {
     .shell.splash-shell {
         width: 100%;
         padding: 0;
+    }
+
+    .privacy-preview-body {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .privacy-preview-actions {
+        justify-content: flex-start;
     }
 
     .splash-page {

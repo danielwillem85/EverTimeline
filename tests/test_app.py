@@ -2512,6 +2512,9 @@ def test_privacy_preview_filters_owner_timeline_views(client, helpers):
 
     timeline = client.get("/timeline?preview=friend")
     assert timeline.status_code == 200
+    assert b'<details class="privacy-preview-panel"' in timeline.data
+    assert b'<summary class="button secondary privacy-preview-toggle">' in timeline.data
+    assert b"<span>Privacy preview</span>" in timeline.data
     assert b"Friend view" in timeline.data
     assert b'href="/year/2020?preview=friend"' in timeline.data
     assert b'<span class="count-badge">2</span>' in timeline.data

@@ -1087,6 +1087,87 @@ def test_admin_maintenance_compacts_existing_jpegs_and_vacuums_database(app, cli
     assert client.get(f"/admin/jobs/{vacuum_job['id']}").get_json()["progress_percent"] == 100
 
 
+def test_admin_connection_visit_full_shows_all_photos_regardless_visibility(app, client, helpers):
+    helpers.create_user(client, "Daniel")
+    other = app.test_client()
+    other_id = helpers.create_user(other, "bob")
+    request_id = helpers.request_connection(client, other_id, relation="friend")
+    helpers.accept_connection(other, request_id)
+
+    with app.app_context():
+        db = helpers.app_module.get_db()
+        tag_ids = {}
+        for tag in ("private", "family", "public"):
+            db.execute(
+                "INSERT INTO tags (user_id, name) VALUES (?, ?)",
+                (other_id, tag),
+            )
+            tag_ids[tag] = db.execute(
+                "SELECT id FROM tags WHERE user_id = ? AND name = ?",
+                (other_id, tag),
+            ).fetchone()["id"]
+
+        for index, (tag, title, color) in enumerate(
+            (
+                ("private", "Private full photo", (220, 60, 70)),
+                ("family", "Family full photo", (50, 150, 90)),
+                ("public", "Public full photo", (45, 100, 210)),
+            ),
+            start=1,
+        ):
+            image = io.BytesIO()
+            Image.new("RGB", (16, 16), color=color).save(image, format="JPEG")
+            image_data = image.getvalue()
+            cursor = db.execute(
+                """
+                INSERT INTO photos (
+                    user_id, year, month, original_filename, title, caption,
+                    mime_type, image_data, image_hash, photo_date
+                )
+                VALUES (?, 2020, 5, ?, ?, '', ?, ?, ?, ?)
+                """,
+                (
+                    other_id,
+                    f"{tag}-full.jpg",
+                    title,
+                    "image/jpeg",
+                    image_data,
+                    helpers.app_module.photo_image_hash(image_data),
+                    f"2020-05-0{index}",
+                ),
+            )
+            db.execute(
+                "INSERT INTO photo_tags (photo_id, tag_id) VALUES (?, ?)",
+                (cursor.lastrowid, tag_ids[tag]),
+            )
+        db.commit()
+
+    connections_page = client.get("/connections")
+    assert connections_page.status_code == 200
+    assert b"Visit full" in connections_page.data
+    assert b"/admin/connections/" in connections_page.data
+
+    full_page = client.get(f"/admin/connections/{other_id}/full-splash")
+    assert full_page.status_code == 200
+    assert b"All photos, regardless of visibility" in full_page.data
+    assert f"/admin/connections/{other_id}/api/full-splash-photos".encode() in full_page.data
+
+    payload = client.get(
+        f"/admin/connections/{other_id}/api/full-splash-photos?seed=test&page=0&page_size=10"
+    ).get_json()
+    assert payload["total"] == 3
+    assert {photo["title"] for photo in payload["photos"]} == {
+        "Private full photo",
+        "Family full photo",
+        "Public full photo",
+    }
+    private_photo = next(photo for photo in payload["photos"] if photo["title"] == "Private full photo")
+    assert client.get(private_photo["thumbnail_url"]).status_code == 200
+    assert client.get(private_photo["full_url"]).status_code == 200
+
+    assert other.get(f"/admin/connections/{other_id}/full-splash").status_code == 404
+
+
 def test_manual_people_tagging_for_items_search_and_updates(app, client, helpers):
     helpers.create_user(client, "owner")
     photo_id = helpers.upload_photo(

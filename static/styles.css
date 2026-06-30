@@ -1804,6 +1804,17 @@ details.privacy-toggle-panel {
     transform: none;
 }
 
+.admin-full-splash-page .splash-size-controls {
+    right: 10px;
+    left: auto;
+}
+
+.admin-full-splash-meta span {
+    color: rgba(255, 255, 255, 0.82);
+    font-size: 0.82rem;
+    font-weight: 900;
+}
+
 .chapter-splash-page .splash-grid {
     padding-top: 64px;
 }

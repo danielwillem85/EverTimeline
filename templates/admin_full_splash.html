@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Full photo wall - {{ connection["username"] }} - EverTimeline{% endblock %}
+{% block shell_class %}splash-shell{% endblock %}
+
+{% block content %}
+<section
+    class="splash-page has-splash-size-controls admin-full-splash-page"
+    data-splash
+    data-splash-url="{{ url_for('admin_full_splash_photos', connection_id=connection['id']) }}"
+    data-splash-seed="{{ seed }}"
+    aria-label="Full photo wall for {{ connection['username'] }}"
+>
+    <div class="splash-page-meta admin-full-splash-meta">
+        <a class="button secondary small" href="{{ url_for('connections') }}">Connections</a>
+        <strong>{{ connection["full_name"] or connection["username"] }}</strong>
+        <span>All photos, regardless of visibility</span>
+    </div>
+    <div class="splash-size-controls" aria-label="Thumbnail size">
+        <button type="button" data-splash-size="0.5" aria-pressed="false">50%</button>
+        <button type="button" data-splash-size="1" aria-pressed="true">100%</button>
+        <button type="button" data-splash-size="1.5" aria-pressed="false">150%</button>
+    </div>
+    <div class="splash-grid" data-splash-grid aria-live="polite"></div>
+    <p class="splash-status" data-splash-status>Loading photos...</p>
+    <button class="splash-page-button splash-page-prev" type="button" data-splash-prev aria-label="Previous thumbnails">&lt;</button>
+    <button class="splash-page-button splash-page-next" type="button" data-splash-next aria-label="Next thumbnails">&gt;</button>
+    <div class="splash-page-count" data-splash-count></div>
+</section>
+
+<div class="modal" id="splash-photo-modal" hidden>
+    <div class="modal-backdrop" data-close-splash-photo-modal></div>
+    <section class="modal-panel photo-modal-panel splash-photo-modal-panel" role="dialog" aria-modal="true" aria-labelledby="splash-photo-modal-title">
+        <header class="modal-header">
+            <div>
+                <h2 id="splash-photo-modal-title">Picture</h2>
+                <p id="splash-photo-modal-date" class="muted"></p>
+            </div>
+            <button class="icon-button" type="button" data-close-splash-photo-modal aria-label="Close popup">x</button>
+        </header>
+        <div class="splash-photo-modal-body">
+            <img id="splash-photo-modal-image" class="modal-image" alt="Selected full splash picture">
+        </div>
+    </section>
+</div>
+{% endblock %}

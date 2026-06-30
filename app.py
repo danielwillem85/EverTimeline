@@ -3586,6 +3586,75 @@ def build_splash_photo_page(db, *, year=None, no_date_only=False):
     }
 
 
+def get_admin_full_splash_user(connection_id):
+    connected_user = get_connected_user(connection_id)
+    if not current_user_is_admin():
+        abort(404)
+    return connected_user
+
+
+def get_admin_full_splash_photo(connection_id, photo_id):
+    connected_user = get_admin_full_splash_user(connection_id)
+    photo = get_db().execute(
+        """
+        SELECT *
+        FROM photos
+        WHERE id = ? AND user_id = ?
+        """,
+        (photo_id, connected_user["id"]),
+    ).fetchone()
+    if photo is None:
+        abort(404)
+    return photo
+
+
+def build_admin_full_splash_photo_page(db, connection_id):
+    connected_user = get_admin_full_splash_user(connection_id)
+    page_size = request.args.get("page_size", default=80, type=int)
+    if page_size is None:
+        page_size = 80
+    page_size = max(1, min(page_size, 240))
+
+    page = request.args.get("page", default=0, type=int)
+    if page is None:
+        page = 0
+
+    seed = (request.args.get("seed") or "").strip()[:80] or secrets.token_hex(8)
+    rows = db.execute(
+        """
+        SELECT id, year, month, original_filename, title, caption, photo_date, created_at
+        FROM photos
+        WHERE user_id = ?
+        ORDER BY id ASC
+        """,
+        (connected_user["id"],),
+    ).fetchall()
+    photos = [dict(row) for row in rows]
+    random.Random(seed).shuffle(photos)
+    payloads = [
+        {
+            "id": photo["id"],
+            "year": photo["year"],
+            "month": photo["month"],
+            "title": photo_display_title(photo),
+            "caption": photo["caption"] or "",
+            "display_date": photo["photo_date"] or "",
+            "thumbnail_url": url_for(
+                "admin_full_splash_photo_thumbnail",
+                connection_id=connection_id,
+                photo_id=photo["id"],
+            ),
+            "full_url": url_for(
+                "admin_full_splash_photo_image",
+                connection_id=connection_id,
+                photo_id=photo["id"],
+            ),
+        }
+        for photo in photos
+    ]
+    return paginated_splash_payload(payloads, page, page_size, seed)
+
+
 def build_month_splash_photo_page(db, year, month):
     page, page_size = splash_page_args()
     rows = db.execute(
@@ -8509,6 +8578,47 @@ def admin_job_status(job_id):
     if job is None:
         abort(404)
     return jsonify(job_row_to_dict(job))
+
+
+@app.route("/admin/connections/<int:connection_id>/full-splash")
+@admin_required
+def admin_connection_full_splash(connection_id):
+    connected_user = get_admin_full_splash_user(connection_id)
+    return render_template(
+        "admin_full_splash.html",
+        connection=public_user_payload(connected_user),
+        seed=secrets.token_hex(8),
+    )
+
+
+@app.route("/admin/connections/<int:connection_id>/api/full-splash-photos")
+@admin_required
+def admin_full_splash_photos(connection_id):
+    return jsonify(build_admin_full_splash_photo_page(get_db(), connection_id))
+
+
+@app.route("/admin/connections/<int:connection_id>/photo/<int:photo_id>/image")
+@admin_required
+def admin_full_splash_photo_image(connection_id, photo_id):
+    photo = get_admin_full_splash_photo(connection_id, photo_id)
+    return Response(photo["image_data"], mimetype=photo["mime_type"])
+
+
+@app.route("/admin/connections/<int:connection_id>/photo/<int:photo_id>/thumbnail")
+@admin_required
+def admin_full_splash_photo_thumbnail(connection_id, photo_id):
+    photo = get_admin_full_splash_photo(connection_id, photo_id)
+    try:
+        thumbnail_data = storage_jpeg_from_image(
+            photo["image_data"],
+            quality=46,
+            max_edge=260,
+        )
+    except ValueError:
+        abort(404)
+    response = Response(thumbnail_data, mimetype=JPEG_STORAGE_MIME)
+    response.headers["Cache-Control"] = "private, max-age=86400"
+    return response
 
 
 @app.route("/login", methods=("GET", "POST"))

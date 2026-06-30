@@ -21,6 +21,70 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         return fetch(url, options);
     };
+    const actionLogUrl = document.body.dataset.actionLogUrl || "";
+    const recentlyTrackedSubmitters = new WeakMap();
+    const textFromElement = (element) => {
+        if (!element) {
+            return "";
+        }
+        return (
+            element.dataset.actionName ||
+            element.getAttribute("aria-label") ||
+            element.getAttribute("title") ||
+            element.textContent ||
+            element.value ||
+            element.name ||
+            ""
+        ).replace(/\s+/g, " ").trim();
+    };
+    const contextFromElement = (element) => {
+        const explicitContext = element.closest("[data-action-context]")?.dataset.actionContext;
+        if (explicitContext) {
+            return explicitContext;
+        }
+        const section = element.closest("section, article, dialog, form, main, nav");
+        const heading = section?.querySelector("h1, h2, h3, legend, [aria-label]") || document.querySelector("h1");
+        const label = textFromElement(heading) || document.title || "EverTimeline";
+        return `${label} (${window.location.pathname})`;
+    };
+    const trackActionEntry = (element) => {
+        if (!actionLogUrl || !element || element.closest("[data-action-tracking='off']")) {
+            return;
+        }
+        const buttonName = textFromElement(element);
+        if (!buttonName) {
+            return;
+        }
+        csrfFetch(actionLogUrl, {
+            method: "POST",
+            keepalive: true,
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                button_name: buttonName,
+                context: contextFromElement(element),
+                path: window.location.pathname,
+            }),
+        }).catch(() => {});
+    };
+    document.addEventListener("click", (event) => {
+        const actionElement = event.target.closest("button, a.button, summary");
+        if (!actionElement || actionElement.disabled) {
+            return;
+        }
+        recentlyTrackedSubmitters.set(actionElement, Date.now());
+        trackActionEntry(actionElement);
+    }, true);
+    document.addEventListener("submit", (event) => {
+        const submitter = event.submitter;
+        if (!submitter) {
+            return;
+        }
+        const lastTrackedAt = recentlyTrackedSubmitters.get(submitter) || 0;
+        if (Date.now() - lastTrackedAt < 800) {
+            return;
+        }
+        trackActionEntry(submitter);
+    }, true);
     const privacyLabelFromTag = (tag) => privacyLabels[tag] || privacyLabels.private;
     const privacyHelpFromTag = (tag) => privacyHelp[tag] || privacyHelp.private;
     const setPrivacySummary = (summary, label, help) => {

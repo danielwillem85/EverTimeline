@@ -588,6 +588,16 @@ def init_db():
                 updated_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS action_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                button_name TEXT NOT NULL,
+                context TEXT NOT NULL,
+                path TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
+            );
             """
         )
         ensure_user_profile_columns(db)
@@ -726,6 +736,12 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS jobs_status_created
             ON jobs (status, created_at, id)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS action_entries_name_context
+            ON action_entries (button_name, context, created_at)
             """
         )
         db.commit()
@@ -1348,6 +1364,35 @@ def admin_image_storage_summary(db):
         "reclaimable_size": reclaimable_size,
         "reclaimable_size_label": format_file_size(reclaimable_size),
     }
+
+
+def admin_action_entry_summary(db):
+    rows = db.execute(
+        """
+        SELECT
+            button_name,
+            context,
+            COUNT(*) AS frequency,
+            MAX(created_at) AS last_used_at
+        FROM action_entries
+        GROUP BY button_name, context
+        ORDER BY frequency DESC, last_used_at DESC, button_name COLLATE NOCASE, context COLLATE NOCASE
+        """
+    ).fetchall()
+    total_count = db.execute(
+        "SELECT COUNT(*) AS total_count FROM action_entries"
+    ).fetchone()["total_count"]
+    return {
+        "rows": rows,
+        "total_count": total_count or 0,
+    }
+
+
+def normalize_action_entry_text(value, fallback):
+    value = " ".join(str(value or "").split())
+    if not value:
+        value = fallback
+    return value[:160]
 
 
 def convert_image_rows_to_jpeg(
@@ -7740,8 +7785,27 @@ def admin():
     return render_template(
         "admin.html",
         image_summary=admin_image_storage_summary(db),
+        action_summary=admin_action_entry_summary(db),
         admin_jobs=recent_admin_jobs(db),
     )
+
+
+@app.route("/api/action-entry", methods=("POST",))
+@login_required
+def create_action_entry():
+    payload = request.get_json(silent=True) or request.form
+    button_name = normalize_action_entry_text(payload.get("button_name"), "Unnamed action")
+    context = normalize_action_entry_text(payload.get("context"), "Unknown context")
+    path = normalize_action_entry_text(payload.get("path"), request.path)
+    get_db().execute(
+        """
+        INSERT INTO action_entries (user_id, button_name, context, path)
+        VALUES (?, ?, ?, ?)
+        """,
+        (g.user["id"], button_name, context, path),
+    )
+    get_db().commit()
+    return ("", 204)
 
 
 @app.route("/admin/images/convert-jpeg", methods=("POST",))

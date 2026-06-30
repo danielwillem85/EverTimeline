@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css', v=static_version('styles.css')) }}">
     <script src="{{ url_for('static', filename='app.js', v=static_version('app.js')) }}" defer></script>
 </head>
-<body>
+<body data-action-log-url="{% if g.user %}{{ url_for('create_action_entry') }}{% endif %}">
     <header class="topbar">
         <div class="topbar-main">
             <a class="brand" href="{{ url_for('index') }}">EverTimeline</a>

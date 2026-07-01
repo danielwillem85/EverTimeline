@@ -331,6 +331,61 @@ body.nav-open {
     gap: 10px;
 }
 
+.premium-hero-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 18px;
+    margin-bottom: 18px;
+    border: 1px solid rgba(22, 109, 103, 0.28);
+    border-radius: 8px;
+    padding: 18px;
+    background: #f7fbfa;
+}
+
+.premium-hero-panel h2 {
+    margin: 8px 0 6px;
+    color: var(--ink);
+    font-size: 1.3rem;
+}
+
+.premium-hero-panel p {
+    margin-bottom: 0;
+    color: var(--muted);
+    line-height: 1.45;
+}
+
+.premium-status {
+    font-weight: 900;
+}
+
+.premium-feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+}
+
+.premium-feature-grid article {
+    display: grid;
+    gap: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    background: var(--surface);
+    box-shadow: 0 8px 22px rgba(24, 31, 28, 0.08);
+}
+
+.premium-feature-grid strong {
+    color: var(--ink);
+    font-size: 1rem;
+}
+
+.premium-feature-grid p {
+    margin-bottom: 0;
+    color: var(--muted);
+    line-height: 1.45;
+}
+
 .admin-panel {
     display: grid;
     gap: 18px;
@@ -6092,6 +6147,7 @@ details.privacy-toggle-panel {
     .activity-card,
     .conversation-card,
     .timeline-search-card,
+    .premium-hero-panel,
     .review-focus-panel,
     .memory-score-panel,
     .review-issue-header,
@@ -6122,6 +6178,7 @@ details.privacy-toggle-panel {
     .activity-card .button,
     .conversation-card .button,
     .timeline-search-card .button,
+    .premium-hero-panel .button,
     .review-focus-panel .button,
     .review-issue-header .button,
     .review-card-actions,

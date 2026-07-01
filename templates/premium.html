@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Premium - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('timeline') }}">Timeline</a>
+        <h1>Premium</h1>
+    </div>
+    {% if g.user["is_premium"] %}
+        <span class="status-badge">Active</span>
+    {% endif %}
+</section>
+
+<section class="premium-hero-panel">
+    <div>
+        <span class="status-badge">EverTimeline Premium</span>
+        <h2>Build a richer, longer-lasting family archive.</h2>
+        <p>Premium is for larger archives, family collaboration, deeper privacy controls, and legacy-grade preservation.</p>
+    </div>
+    {% if g.user["is_premium"] %}
+        <p class="premium-status">Premium is active for your account.</p>
+    {% else %}
+        <form method="post">
+            {{ csrf_field() }}
+            <button class="button primary" type="submit">Go premium</button>
+        </form>
+    {% endif %}
+</section>
+
+<section class="premium-feature-grid" aria-label="Premium features">
+    <article>
+        <strong>Larger batch uploads</strong>
+        <p>Import bigger groups of photos at once, including larger upload batches for serious archive work.</p>
+    </article>
+    <article>
+        <strong>Original image quality</strong>
+        <p>Retain original image quality for premium archives instead of keeping only optimized versions.</p>
+    </article>
+    <article>
+        <strong>Family collaboration</strong>
+        <p>Invite family members to contribute memories, captions, comments, corrections, and photos to the same archive.</p>
+    </article>
+    <article>
+        <strong>Advanced privacy and sharing</strong>
+        <p>Create more precise sharing views, expiring links, protected chapters, and family-only collections.</p>
+    </article>
+    <article>
+        <strong>Legacy vault</strong>
+        <p>Prepare trusted-contact access, legacy notes, family handoff instructions, and future-facing memory bundles.</p>
+    </article>
+</section>
+{% endblock %}

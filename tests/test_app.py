@@ -99,6 +99,41 @@ def test_csrf_token_required_for_unsafe_requests(client, helpers):
     assert response.status_code == 400
 
 
+def test_premium_page_can_activate_account(client, helpers):
+    helpers.create_user(client, "owner")
+
+    columns = {row["name"] for row in helpers.rows("PRAGMA table_info(users)")}
+    assert "is_premium" in columns
+
+    timeline = client.get("/timeline")
+    assert timeline.status_code == 200
+    assert b">Premium</a>" in timeline.data
+
+    page = client.get("/premium")
+    assert page.status_code == 200
+    assert b"EverTimeline Premium" in page.data
+    assert b"Larger batch uploads" in page.data
+    assert b"Original image quality" in page.data
+    assert b"Family collaboration" in page.data
+    assert b"Advanced privacy and sharing" in page.data
+    assert b"Legacy vault" in page.data
+    assert b"Go premium" in page.data
+    assert helpers.row("SELECT is_premium FROM users WHERE username = ?", ("owner",))["is_premium"] == 0
+
+    upgrade = client.post(
+        "/premium",
+        data=helpers.csrf_form_data(client, "/premium"),
+    )
+    assert upgrade.status_code == 302
+    assert upgrade.headers["Location"].endswith("/premium")
+    assert helpers.row("SELECT is_premium FROM users WHERE username = ?", ("owner",))["is_premium"] == 1
+
+    active_page = client.get("/premium")
+    assert active_page.status_code == 200
+    assert b"Premium is active for your account." in active_page.data
+    assert b"Go premium" not in active_page.data
+
+
 def test_button_actions_are_recorded_with_user_context_and_ip(client, helpers):
     helpers.create_user(client, "owner")
 

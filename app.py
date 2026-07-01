@@ -465,6 +465,7 @@ def init_db():
                 email TEXT,
                 password_hash TEXT NOT NULL,
                 birthday TEXT,
+                is_premium INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -961,6 +962,7 @@ def ensure_user_profile_columns(db):
         "first_name": "ALTER TABLE users ADD COLUMN first_name TEXT NOT NULL DEFAULT ''",
         "last_name": "ALTER TABLE users ADD COLUMN last_name TEXT NOT NULL DEFAULT ''",
         "email": "ALTER TABLE users ADD COLUMN email TEXT",
+        "is_premium": "ALTER TABLE users ADD COLUMN is_premium INTEGER NOT NULL DEFAULT 0",
     }
     for column_name, statement in migrations.items():
         if column_name not in columns:
@@ -9471,6 +9473,24 @@ def profile():
         return redirect(url_for("profile"))
 
     return render_template("profile.html", form=form_values)
+
+
+@app.route("/premium", methods=("GET", "POST"))
+@login_required
+def premium():
+    if request.method == "POST":
+        if not g.user["is_premium"]:
+            db = get_db()
+            db.execute(
+                "UPDATE users SET is_premium = 1 WHERE id = ?",
+                (g.user["id"],),
+            )
+            db.commit()
+            g.user = db.execute("SELECT * FROM users WHERE id = ?", (g.user["id"],)).fetchone()
+            flash("Premium is now active for your account.", "success")
+        return redirect(url_for("premium"))
+
+    return render_template("premium.html")
 
 
 @app.route("/account/export.zip")

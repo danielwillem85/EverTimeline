@@ -5166,6 +5166,7 @@ details.privacy-toggle-panel {
 
 .guided-review-card {
     align-items: stretch;
+    grid-template-columns: minmax(0, 1fr);
 }
 
 .guided-review-thumb {
@@ -5174,7 +5175,24 @@ details.privacy-toggle-panel {
 }
 
 .guided-review-actions {
-    min-width: min(100%, 420px);
+    width: 100%;
+    min-width: 0;
+}
+
+.guided-review-card .timeline-search-content {
+    align-items: start;
+}
+
+.guided-review-card .review-prompt-form {
+    grid-template-columns: minmax(140px, 0.45fr) minmax(0, 1fr) auto;
+}
+
+.guided-review-card .review-prompt-place-form {
+    grid-template-columns: minmax(140px, 0.45fr) minmax(150px, 1fr) minmax(68px, 82px) minmax(68px, 82px) auto;
+}
+
+.guided-review-card .review-prompt-stack {
+    width: 100%;
 }
 
 .review-issue-card {

@@ -1297,6 +1297,8 @@ def test_splash_page_api_and_thumbnails_are_owned(app, client, helpers):
     assert b'data-splash-size="1.5"' in page.data
     assert b"data-splash-photo-prev" in page.data
     assert b"data-splash-photo-next" in page.data
+    assert b"data-splash-delete-url" in page.data
+    assert b"data-splash-photo-delete" in page.data
 
     response = client.get("/api/splash-photos?seed=test-seed&page=0&page_size=1")
     assert response.status_code == 200
@@ -1312,6 +1314,26 @@ def test_splash_page_api_and_thumbnails_are_owned(app, client, helpers):
     assert thumbnail.mimetype == "image/jpeg"
     assert thumbnail.data.startswith(b"\xff\xd8")
     assert client.get(f"/photo/{other_photo_id}/thumbnail").status_code == 404
+
+    missing_delete = client.post(
+        "/api/splash-photos/delete",
+        headers=helpers.csrf_headers(client, "/splash"),
+        json={"photo_id": other_photo_id},
+    )
+    assert missing_delete.status_code == 404
+
+    delete_response = client.post(
+        "/api/splash-photos/delete",
+        headers=helpers.csrf_headers(client, "/splash"),
+        json={"photo_id": photo_id},
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.get_json()["deleted_photo_id"] == photo_id
+    assert helpers.row("SELECT COUNT(*) AS count FROM photos WHERE id = ?", (photo_id,))["count"] == 0
+    assert helpers.row("SELECT COUNT(*) AS count FROM photos WHERE id = ?", (other_photo_id,))["count"] == 1
+
+    refreshed = client.get("/api/splash-photos?seed=test-seed&page=0&page_size=1").get_json()
+    assert refreshed["total"] == 0
 
 
 def test_splash_modal_can_add_photo_to_existing_chapter(client, helpers):

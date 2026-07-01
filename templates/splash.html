@@ -8,6 +8,7 @@
     class="splash-page has-splash-size-controls"
     data-splash
     data-splash-url="{{ url_for('splash_photos') }}"
+    data-splash-delete-url="{{ url_for('api_splash_delete_photo') }}"
     data-splash-seed="{{ seed }}"
     aria-label="Random photo wall"
 >
@@ -58,6 +59,15 @@
                 {% else %}
                     <a class="button secondary small" href="{{ url_for('chapters') }}">Create chapter</a>
                 {% endif %}
+                <button
+                    class="button danger small"
+                    type="button"
+                    data-splash-photo-delete
+                    data-confirm-title="Delete photo?"
+                    data-confirm-message="This permanently removes this photo, including messages, chapter placements, tags, and reactions."
+                    data-confirm-action="Delete photo"
+                    data-confirm-danger="true"
+                >Delete</button>
                 <button class="button secondary small splash-photo-modal-nav-button" type="button" data-splash-photo-prev aria-label="Previous picture">&lsaquo;</button>
                 <button class="button secondary small splash-photo-modal-nav-button" type="button" data-splash-photo-next aria-label="Next picture">&rsaquo;</button>
                 <button class="icon-button" type="button" data-close-splash-photo-modal aria-label="Close popup">x</button>

@@ -9336,6 +9336,25 @@ def splash_photos():
     return jsonify(build_splash_photo_page(get_db()))
 
 
+@app.route("/api/splash-photos/delete", methods=("POST",))
+@birthday_required
+def api_splash_delete_photo():
+    payload = request.get_json(silent=True) or request.form
+    try:
+        photo_id = int(payload.get("photo_id") or 0)
+    except (TypeError, ValueError, AttributeError):
+        photo_id = 0
+    if photo_id <= 0:
+        return jsonify({"error": "Choose a photo to delete."}), 400
+
+    db = get_db()
+    deleted_ids = delete_owned_photos(db, [photo_id], g.user["id"])
+    if not deleted_ids:
+        return jsonify({"error": "Photo was not found."}), 404
+    db.commit()
+    return jsonify({"deleted_photo_id": deleted_ids[0]})
+
+
 @app.route("/photo/<int:photo_id>/thumbnail")
 @birthday_required
 def splash_photo_thumbnail(photo_id):

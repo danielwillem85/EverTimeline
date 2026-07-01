@@ -1178,12 +1178,14 @@ document.addEventListener("DOMContentLoaded", () => {
         const splashPhotoDate = document.getElementById("splash-photo-modal-date");
         const splashPhotoPrevButton = splashPhotoModal ? splashPhotoModal.querySelector("[data-splash-photo-prev]") : null;
         const splashPhotoNextButton = splashPhotoModal ? splashPhotoModal.querySelector("[data-splash-photo-next]") : null;
+        const splashPhotoDeleteButton = splashPhotoModal ? splashPhotoModal.querySelector("[data-splash-photo-delete]") : null;
         const splashChapterPhotoInput = document.querySelector("[data-splash-chapter-photo-id]");
         const splashChapterForm = document.querySelector("[data-splash-chapter-form]");
         const splashChapterSelect = document.querySelector("[data-splash-chapter-select]");
         const splashChapterStatus = document.querySelector("[data-splash-chapter-status]");
         const splashSeed = splashPage.dataset.splashSeed || String(Date.now());
         const splashUrl = splashPage.dataset.splashUrl || "/api/splash-photos";
+        const splashDeleteUrl = splashPage.dataset.splashDeleteUrl || "";
         const splashSelectable = splashPage.hasAttribute("data-splash-selectable");
         const splashAssignUrl = splashPage.dataset.splashAssignUrl || "";
         const splashAcceptSuggestionsUrl = splashPage.dataset.splashAcceptSuggestionsUrl || "";
@@ -1206,6 +1208,7 @@ document.addEventListener("DOMContentLoaded", () => {
         let splashResizeTimer = null;
         let splashOpenPhotos = [];
         let splashOpenPhotoIndex = -1;
+        let splashOpenPhotoId = null;
         const selectedSplashPhotoIds = new Set();
         const splashSuggestions = new Map();
 
@@ -1289,6 +1292,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 delete splashChapterForm.dataset.submitting;
             }
             splashOpenPhotoIndex = -1;
+            splashOpenPhotoId = null;
             syncModalOpenState();
         };
 
@@ -1309,6 +1313,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 return;
             }
             splashOpenPhotoIndex = index;
+            splashOpenPhotoId = Number(photo.id) || null;
             if (splashPhotoTitle) {
                 splashPhotoTitle.textContent = photo.title || "Picture";
             }
@@ -1330,6 +1335,9 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             if (splashChapterForm) {
                 delete splashChapterForm.dataset.submitting;
+            }
+            if (splashPhotoDeleteButton) {
+                splashPhotoDeleteButton.disabled = !splashDeleteUrl || !splashOpenPhotoId;
             }
             splashPhotoModal.hidden = false;
             updateSplashPhotoNavigation();
@@ -1353,6 +1361,70 @@ document.addEventListener("DOMContentLoaded", () => {
             const nextPhoto = splashOpenPhotos[nextPhotoIndex];
             if (nextPhoto) {
                 showSplashPhotoInModal(nextPhoto, nextPhotoIndex);
+            }
+        };
+
+        const removeSplashPhotoFromCurrentPage = (photoId) => {
+            const normalizedId = Number(photoId);
+            const removedIndex = splashOpenPhotos.findIndex((photo) => Number(photo.id) === normalizedId);
+            if (removedIndex < 0) {
+                return null;
+            }
+            splashOpenPhotos.splice(removedIndex, 1);
+            const tile = splashGrid.querySelector(`[data-photo-id="${normalizedId}"]`);
+            if (tile) {
+                const wrapper = tile.closest(".splash-thumb-wrap");
+                (wrapper || tile).remove();
+            }
+            selectedSplashPhotoIds.delete(normalizedId);
+            splashSuggestions.delete(normalizedId);
+            updateSplashSelectionState();
+            return removedIndex;
+        };
+
+        const deleteOpenSplashPhoto = async () => {
+            if (!splashDeleteUrl || !splashOpenPhotoId || !splashPhotoDeleteButton) {
+                return;
+            }
+            const photoId = splashOpenPhotoId;
+            const confirmed = await requestConfirmation({
+                title: splashPhotoDeleteButton.dataset.confirmTitle || "Delete photo?",
+                message: splashPhotoDeleteButton.dataset.confirmMessage || "This permanently removes this photo.",
+                confirmLabel: splashPhotoDeleteButton.dataset.confirmAction || "Delete photo",
+                danger: splashPhotoDeleteButton.dataset.confirmDanger === "true",
+            });
+            if (!confirmed) {
+                return;
+            }
+            splashPhotoDeleteButton.disabled = true;
+            setSplashStatus("Deleting photo...");
+            try {
+                const response = await csrfFetch(splashDeleteUrl, {
+                    method: "POST",
+                    headers: {
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({photo_id: photoId}),
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    throw new Error(payload.error || "Photo could not be deleted.");
+                }
+                const removedIndex = removeSplashPhotoFromCurrentPage(payload.deleted_photo_id || photoId);
+                if (!splashOpenPhotos.length) {
+                    closeSplashPhotoModal();
+                    setSplashStatus("Photo deleted.");
+                    await loadSplashPage(splashPageIndex);
+                    return;
+                }
+                const nextIndex = Math.min(removedIndex ?? 0, splashOpenPhotos.length - 1);
+                showSplashPhotoInModal(splashOpenPhotos[nextIndex], nextIndex);
+                setSplashStatus("Photo deleted.");
+                updateSplashControls();
+            } catch (error) {
+                setSplashStatus(error.message || "Photo could not be deleted.");
+                splashPhotoDeleteButton.disabled = false;
             }
         };
 
@@ -1542,6 +1614,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (splashPhotoNextButton) {
             splashPhotoNextButton.addEventListener("click", () => moveSplashPhoto(1));
+        }
+        if (splashPhotoDeleteButton) {
+            splashPhotoDeleteButton.addEventListener("click", deleteOpenSplashPhoto);
         }
 
         const updateSplashSizeButtons = (selectedScale) => {

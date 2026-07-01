@@ -1802,6 +1802,8 @@ def test_timeline_import_assistant_reviews_detected_dates_before_saving(client, 
     assert import_page.status_code == 200
     assert b"data-upload-progress" in import_page.data
     assert b"data-upload-progress-bar" in import_page.data
+    assert b'name="photo" type="file" accept="image/*" multiple required' in import_page.data
+    assert b"Select one or more photos." in import_page.data
 
     upload_response = client.post(
         "/timeline/import",
@@ -1864,6 +1866,40 @@ def test_timeline_import_assistant_reviews_detected_dates_before_saving(client, 
     )["name"] == "friends"
     assert helpers.row("SELECT COUNT(*) AS count FROM photo_import_batches")["count"] == 0
     assert helpers.row("SELECT COUNT(*) AS count FROM photo_import_items")["count"] == 0
+
+
+def test_timeline_import_accepts_multiple_selected_files(client, helpers):
+    helpers.create_user(client, "owner")
+
+    upload_response = client.post(
+        "/timeline/import",
+        data={
+            **helpers.csrf_form_data(client, "/timeline/import"),
+            "photo": [
+                (
+                    io.BytesIO(helpers.png_bytes()),
+                    "first-memory-20200504.png",
+                    "image/png",
+                ),
+                (
+                    io.BytesIO(helpers.png_bytes()),
+                    "second-memory-20200607.png",
+                    "image/png",
+                ),
+            ],
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert upload_response.status_code == 302
+    items = helpers.rows("SELECT * FROM photo_import_items ORDER BY id")
+    assert len(items) == 2
+    assert [item["original_filename"] for item in items] == [
+        "first-memory-20200504.png",
+        "second-memory-20200607.png",
+    ]
+    assert [item["detected_date"] for item in items] == ["2020-05-04", "2020-06-07"]
+    assert items[1]["duplicate_import_item_id"] == items[0]["id"]
 
 
 def test_timeline_import_review_is_paginated_and_saves_page_edits(client, helpers):

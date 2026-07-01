@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Messages - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('connections') }}">Connections</a>
+        <h1>Messages</h1>
+    </div>
+</section>
+
+<section class="connection-section">
+    <h2>Private messages</h2>
+    {% if conversations %}
+        <div class="conversation-list">
+            {% for conversation in conversations %}
+                <a class="conversation-card{% if conversation['unread_count'] %} is-unread{% endif %}" href="{{ url_for('private_message_thread', connection_id=conversation['id']) }}">
+                    <div class="conversation-main">
+                        <div class="activity-title-row">
+                            <strong>{{ conversation["full_name"] or conversation["username"] }}</strong>
+                            <span class="status-badge">{{ conversation["relation"] }}</span>
+                            {% if conversation["unread_count"] %}
+                                <span class="notification-badge">{{ conversation["unread_count"] }}</span>
+                            {% endif %}
+                        </div>
+                        {% if conversation["latest_message"] %}
+                            <span>{{ conversation["latest_message"]["sender_name"] }} &middot; {{ conversation["latest_message"]["created_at"] }}</span>
+                            <p>{{ conversation["latest_message"]["preview"] }}</p>
+                        {% else %}
+                            <span>No messages yet.</span>
+                        {% endif %}
+                    </div>
+                    <span class="button secondary small">Open</span>
+                </a>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty-state">Connect with someone to start private messages.</p>
+    {% endif %}
+</section>
+{% endblock %}

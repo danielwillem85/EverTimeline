@@ -55,6 +55,17 @@
                     {% if request.endpoint == 'connections' %}aria-current="page"{% endif %}
                 >Connections</a>
                 <a
+                    class="topbar-link notification-link{% if request.endpoint in ('private_messages', 'private_message_thread') %} is-active{% endif %}"
+                    href="{{ url_for('private_messages') }}"
+                    {% if request.endpoint in ('private_messages', 'private_message_thread') %}aria-current="page"{% endif %}
+                >
+                    <span>Messages</span>
+                    <span
+                        class="notification-badge{% if private_message_count == 0 %} is-empty{% endif %}"
+                        aria-label="{{ private_message_count }} unread private messages"
+                    >{{ private_message_count }}</span>
+                </a>
+                <a
                     class="topbar-link{% if request.endpoint == 'activity' %} is-active{% endif %}"
                     href="{{ url_for('activity') }}"
                     {% if request.endpoint == 'activity' %}aria-current="page"{% endif %}

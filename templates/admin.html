@@ -74,7 +74,63 @@
     </form>
 </section>
 
-<section class="auth-panel admin-panel">
+<section class="auth-panel admin-panel admin-stats-panel">
+    <div class="section-title-row">
+        <div>
+            <h2>Site statistics</h2>
+            <p class="muted">Unique visitors are based on recorded action identities from email, name, or IP address.</p>
+        </div>
+    </div>
+    <div class="admin-stat-grid admin-site-stat-grid">
+        <article>
+            <strong>{{ site_stats["unique_action_visitor_count"] }}</strong>
+            <span>Unique visitors</span>
+            <small>{{ site_stats["actions_last_7_days"] }} actions in 7 days</small>
+        </article>
+        <article>
+            <strong>{{ site_stats["user_count"] }}</strong>
+            <span>Accounts</span>
+            <small>{{ site_stats["users_last_30_days"] }} new in 30 days</small>
+        </article>
+        <article>
+            <strong>{{ site_stats["timeline_item_count"] }}</strong>
+            <span>Timeline items</span>
+            <small>{{ site_stats["photo_count"] }} photos, {{ site_stats["text_entry_count"] }} text entries</small>
+        </article>
+        <article>
+            <strong>{{ site_stats["recent_item_count"] }}</strong>
+            <span>New timeline items</span>
+            <small>Added in the last 30 days</small>
+        </article>
+        <article>
+            <strong>{{ site_stats["message_count"] }}</strong>
+            <span>Messages</span>
+            <small>{{ site_stats["reaction_count"] }} reactions</small>
+        </article>
+        <article>
+            <strong>{{ site_stats["accepted_connection_count"] }}</strong>
+            <span>Accepted connections</span>
+            <small>{{ site_stats["pending_connection_count"] }} pending requests</small>
+        </article>
+        <article>
+            <strong>{{ site_stats["chapter_count"] }}</strong>
+            <span>Chapters</span>
+            <small>{{ site_stats["collection_count"] }} saved collections</small>
+        </article>
+        <article>
+            <strong>{{ site_stats["people_count"] }}</strong>
+            <span>People tags</span>
+            <small>{{ site_stats["import_item_count"] }} import items</small>
+        </article>
+        <article>
+            <strong>{{ site_stats["job_count"] }}</strong>
+            <span>Background jobs</span>
+            <small>All recorded admin jobs</small>
+        </article>
+    </div>
+</section>
+
+<section class="auth-panel admin-panel admin-action-panel">
     <div class="section-title-row">
         <div>
             <h2>Action overview</h2>

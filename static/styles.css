@@ -336,10 +336,22 @@ body.nav-open {
     gap: 18px;
 }
 
+.admin-action-panel {
+    width: 100%;
+}
+
+.admin-stats-panel {
+    width: 100%;
+}
+
 .admin-stat-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
+}
+
+.admin-site-stat-grid {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
 .admin-stat-grid article {
@@ -3893,6 +3905,11 @@ details.privacy-toggle-panel {
     gap: 10px;
 }
 
+.conversation-list {
+    display: grid;
+    gap: 10px;
+}
+
 .activity-card {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -3906,12 +3923,37 @@ details.privacy-toggle-panel {
     box-shadow: 0 8px 20px rgba(24, 31, 28, 0.08);
 }
 
+.conversation-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: 0 8px 20px rgba(24, 31, 28, 0.08);
+    text-decoration: none;
+}
+
 .activity-card.is-unread {
     border-color: rgba(22, 109, 103, 0.38);
     background: #f7fbfa;
 }
 
+.conversation-card.is-unread {
+    border-color: rgba(22, 109, 103, 0.38);
+    background: #f7fbfa;
+}
+
 .activity-main {
+    display: grid;
+    min-width: 0;
+    gap: 5px;
+}
+
+.conversation-main {
     display: grid;
     min-width: 0;
     gap: 5px;
@@ -3929,7 +3971,18 @@ details.privacy-toggle-panel {
     font-size: 1rem;
 }
 
+.conversation-main strong {
+    color: var(--ink);
+    font-size: 1rem;
+}
+
 .activity-main span {
+    color: var(--muted);
+    font-size: 0.86rem;
+    font-weight: 800;
+}
+
+.conversation-main span {
     color: var(--muted);
     font-size: 0.86rem;
     font-weight: 800;
@@ -3937,6 +3990,12 @@ details.privacy-toggle-panel {
 
 .activity-main p {
     margin-bottom: 0;
+    line-height: 1.4;
+}
+
+.conversation-main p {
+    margin-bottom: 0;
+    color: var(--ink);
     line-height: 1.4;
 }
 
@@ -4020,6 +4079,53 @@ details.privacy-toggle-panel {
 
 .connection-section h2 {
     margin-bottom: 0;
+}
+
+.private-message-thread {
+    gap: 18px;
+}
+
+.private-message-list {
+    display: grid;
+    gap: 10px;
+}
+
+.private-message-bubble {
+    display: grid;
+    justify-self: start;
+    width: min(620px, 86%);
+    gap: 5px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    background: var(--surface-strong);
+}
+
+.private-message-bubble.is-mine {
+    justify-self: end;
+    border-color: rgba(22, 109, 103, 0.34);
+    background: #f7fbfa;
+}
+
+.private-message-bubble strong {
+    color: var(--ink);
+    font-size: 0.9rem;
+}
+
+.private-message-bubble p {
+    margin: 0;
+    line-height: 1.42;
+}
+
+.private-message-bubble time {
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 800;
+}
+
+.private-message-form {
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
 }
 
 .collections-layout {
@@ -5966,6 +6072,7 @@ details.privacy-toggle-panel {
     .person-row,
     .request-card,
     .activity-card,
+    .conversation-card,
     .timeline-search-card,
     .review-focus-panel,
     .memory-score-panel,
@@ -5995,6 +6102,7 @@ details.privacy-toggle-panel {
     .person-actions,
     .request-card .button,
     .activity-card .button,
+    .conversation-card .button,
     .timeline-search-card .button,
     .review-focus-panel .button,
     .review-issue-header .button,

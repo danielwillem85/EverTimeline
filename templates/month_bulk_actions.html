@@ -19,6 +19,9 @@
         <a class="button secondary small" href="{{ url_for('month_view', year=year, month=month) }}">{{ month_name }}</a>
         <strong>Bulk actions</strong>
         <div class="month-bulk-action-controls">
+            <button class="button secondary small" type="button" data-month-bulk-select-all disabled>
+                Select all photos
+            </button>
             <label class="month-bulk-control">
                 <span>Visibility</span>
                 <select class="chapter-bulk-chapter-select" data-month-bulk-visibility-select disabled>

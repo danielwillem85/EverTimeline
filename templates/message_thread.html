@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}Messages with {{ connection["username"] }} - EverTimeline{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+    <div>
+        <a class="back-link" href="{{ url_for('private_messages') }}">Messages</a>
+        <h1>{{ connection["full_name"] or connection["username"] }}</h1>
+        <p class="muted">Private messages with your {{ connection["relation"] }} connection.</p>
+    </div>
+    <a class="button secondary" href="{{ url_for('connection_timeline', connection_id=connection['id']) }}">Visit timeline</a>
+</section>
+
+<section class="connection-section private-message-thread">
+    <div class="private-message-list" aria-label="Private conversation">
+        {% if messages %}
+            {% for message in messages %}
+                <article class="private-message-bubble{% if message['is_mine'] %} is-mine{% endif %}">
+                    <strong>{{ message["sender_name"] }}</strong>
+                    <p>{{ message["body"] }}</p>
+                    <time>{{ message["created_at"] }}</time>
+                </article>
+            {% endfor %}
+        {% else %}
+            <p class="empty-state">No private messages yet.</p>
+        {% endif %}
+    </div>
+    <form class="message-form private-message-form" method="post">
+        {{ csrf_field() }}
+        <label>
+            <span>Message</span>
+            <textarea name="body" rows="4" required maxlength="2000"></textarea>
+        </label>
+        <button class="button primary" type="submit">Send message</button>
+    </form>
+</section>
+{% endblock %}

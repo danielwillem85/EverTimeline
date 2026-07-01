@@ -2172,6 +2172,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const monthBulkSelectedProgress = monthBulkActionsPage.querySelector("[data-month-bulk-selected-progress]");
         const monthBulkForm = monthBulkActionsPage.querySelector("[data-month-bulk-delete-form]");
         const monthBulkDeleteButton = monthBulkActionsPage.querySelector("[data-month-bulk-delete-button]");
+        const monthBulkSelectAllButton = monthBulkActionsPage.querySelector("[data-month-bulk-select-all]");
         const monthBulkVisibilitySelect = monthBulkActionsPage.querySelector("[data-month-bulk-visibility-select]");
         const monthBulkChapterSelect = monthBulkActionsPage.querySelector("[data-month-bulk-chapter-select]");
         const monthBulkActionStatus = monthBulkActionsPage.querySelector("[data-month-bulk-action-status]");
@@ -2191,6 +2192,7 @@ document.addEventListener("DOMContentLoaded", () => {
         let monthBulkPageSize = 0;
         let monthBulkTotalPages = 0;
         let monthBulkTotalPhotos = 0;
+        let monthBulkSelectingAll = false;
         let monthBulkResizeTimer = null;
 
         const setMonthBulkStatus = (message) => {
@@ -2220,7 +2222,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const updateMonthBulkSelection = () => {
             const count = selectedMonthPhotoIds.length;
-            const submitting = monthBulkActionsPage.dataset.submitting === "true";
+            const submitting = monthBulkActionsPage.dataset.submitting === "true" || monthBulkSelectingAll;
+            const allSelected = monthBulkTotalPhotos > 0 && count >= monthBulkTotalPhotos;
             if (monthBulkSelectedCount) {
                 monthBulkSelectedCount.textContent = `${count} selected`;
             }
@@ -2233,6 +2236,11 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             if (monthBulkDeleteButton) {
                 monthBulkDeleteButton.disabled = count === 0 || submitting;
+            }
+            if (monthBulkSelectAllButton) {
+                monthBulkSelectAllButton.disabled = monthBulkTotalPhotos === 0 || submitting;
+                monthBulkSelectAllButton.textContent = allSelected ? "Deselect all photos" : "Select all photos";
+                monthBulkSelectAllButton.setAttribute("aria-pressed", allSelected ? "true" : "false");
             }
             if (monthBulkVisibilitySelect) {
                 monthBulkVisibilitySelect.disabled = count === 0 || submitting;
@@ -2304,6 +2312,72 @@ document.addEventListener("DOMContentLoaded", () => {
                 monthBulkChapterSelect.value = "";
             }
             updateMonthBulkSelection();
+        };
+
+        const selectMonthBulkPhotoIds = (photoIds) => {
+            photoIds.forEach((photoId) => {
+                const normalizedId = String(photoId);
+                if (!selectedMonthPhotoSet.has(normalizedId)) {
+                    selectedMonthPhotoSet.add(normalizedId);
+                    selectedMonthPhotoIds.push(normalizedId);
+                }
+            });
+            monthBulkGrid.querySelectorAll(".chapter-bulk-thumb").forEach((button) => {
+                setMonthBulkThumbSelected(button, selectedMonthPhotoSet.has(button.dataset.photoId));
+            });
+            updateMonthBulkSelection();
+        };
+
+        const loadAllMonthBulkPhotoIds = async () => {
+            const allPhotoIds = [];
+            const seenPhotoIds = new Set();
+            const pageSize = 240;
+            let page = 0;
+            let totalPages = 1;
+            while (page < totalPages) {
+                const url = new URL(monthBulkUrl, window.location.href);
+                url.searchParams.set("page", String(page));
+                url.searchParams.set("page_size", String(pageSize));
+                const response = await csrfFetch(url.toString());
+                if (!response.ok) {
+                    throw new Error("Photos could not be loaded.");
+                }
+                const payload = await response.json();
+                totalPages = payload.total_pages || 0;
+                (payload.photos || []).forEach((photo) => {
+                    const photoId = String(photo.id);
+                    if (!seenPhotoIds.has(photoId)) {
+                        seenPhotoIds.add(photoId);
+                        allPhotoIds.push(photoId);
+                    }
+                });
+                page += 1;
+            }
+            return allPhotoIds;
+        };
+
+        const toggleAllMonthBulkPhotos = async () => {
+            if (!monthBulkTotalPhotos || monthBulkSelectingAll) {
+                return;
+            }
+            if (selectedMonthPhotoIds.length >= monthBulkTotalPhotos) {
+                setMonthBulkActionStatus("");
+                clearMonthBulkSelection();
+                return;
+            }
+            monthBulkSelectingAll = true;
+            setMonthBulkActionStatus("Selecting all photos...");
+            updateMonthBulkSelection();
+            try {
+                const allPhotoIds = await loadAllMonthBulkPhotoIds();
+                selectMonthBulkPhotoIds(allPhotoIds);
+                setMonthBulkActionStatus(allPhotoIds.length === 1 ? "1 photo selected." : `${allPhotoIds.length} photos selected.`);
+            } catch (error) {
+                setMonthBulkActionStatus(error.message || "Could not select all photos.", true);
+            } finally {
+                monthBulkSelectingAll = false;
+                updateMonthBulkSelection();
+            }
         };
 
         const renderMonthBulkPhotos = (photos) => {
@@ -2507,6 +2581,9 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (monthBulkNextButton) {
             monthBulkNextButton.addEventListener("click", () => moveMonthBulkPage(1));
+        }
+        if (monthBulkSelectAllButton) {
+            monthBulkSelectAllButton.addEventListener("click", toggleAllMonthBulkPhotos);
         }
 
         if (monthBulkVisibilitySelect) {

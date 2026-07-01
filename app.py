@@ -405,8 +405,11 @@ def configure_db_connection(db):
 @app.context_processor
 def inject_tag_choices():
     notification_count = 0
+    private_message_count = 0
     if getattr(g, "user", None) is not None:
-        notification_count = get_notification_count(get_db())
+        db = get_db()
+        notification_count = get_notification_count(db)
+        private_message_count = get_unread_connection_message_count(db)
 
     def static_version(filename):
         try:
@@ -440,6 +443,7 @@ def inject_tag_choices():
         "preview_url": preview_url,
         "preview_mode_url": preview_mode_url,
         "notification_count": notification_count,
+        "private_message_count": private_message_count,
         "static_version": static_version,
         "is_admin_user": current_user_is_admin,
         "csrf_token": csrf_token,
@@ -527,6 +531,26 @@ def init_db():
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (entry_id) REFERENCES text_entries (id) ON DELETE CASCADE,
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS connection_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sender_id INTEGER NOT NULL,
+                recipient_id INTEGER NOT NULL,
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CHECK (sender_id <> recipient_id),
+                FOREIGN KEY (sender_id) REFERENCES users (id) ON DELETE CASCADE,
+                FOREIGN KEY (recipient_id) REFERENCES users (id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS connection_message_reads (
+                user_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                read_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, message_id),
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+                FOREIGN KEY (message_id) REFERENCES connection_messages (id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS item_reactions (
@@ -791,6 +815,18 @@ def init_db():
             """
             CREATE INDEX IF NOT EXISTS text_entry_messages_entry_created
             ON text_entry_messages (entry_id, created_at)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS connection_messages_participants_created
+            ON connection_messages (sender_id, recipient_id, created_at)
+            """
+        )
+        db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS connection_messages_recipient_created
+            ON connection_messages (recipient_id, created_at)
             """
         )
         db.execute(
@@ -1633,6 +1669,82 @@ def admin_action_summary(db):
     return {
         "rows": rows,
         "total_count": total_count or 0,
+    }
+
+
+def admin_site_statistics(db):
+    counts = db.execute(
+        """
+        SELECT
+            (SELECT COUNT(*) FROM users) AS user_count,
+            (SELECT COUNT(*) FROM photos) AS photo_count,
+            (SELECT COUNT(*) FROM text_entries) AS text_entry_count,
+            (SELECT COUNT(*) FROM messages) AS photo_message_count,
+            (SELECT COUNT(*) FROM text_entry_messages) AS text_message_count,
+            (SELECT COUNT(*) FROM item_reactions) AS reaction_count,
+            (SELECT COUNT(*) FROM chapters) AS chapter_count,
+            (SELECT COUNT(*) FROM people) AS people_count,
+            (SELECT COUNT(*) FROM saved_timeline_views) AS collection_count,
+            (SELECT COUNT(*) FROM photo_import_items) AS import_item_count,
+            (SELECT COUNT(*) FROM jobs) AS job_count,
+            (
+                SELECT COUNT(*)
+                FROM connection_requests
+                WHERE status = 'accepted'
+            ) AS accepted_connection_count,
+            (
+                SELECT COUNT(*)
+                FROM connection_requests
+                WHERE status = 'pending'
+            ) AS pending_connection_count,
+            (
+                SELECT COUNT(DISTINCT COALESCE(NULLIF(email, ''), NULLIF(first_name || ' ' || last_name, ' '), NULLIF(ip_address, '')))
+                FROM actions
+                WHERE COALESCE(NULLIF(email, ''), NULLIF(first_name || ' ' || last_name, ' '), NULLIF(ip_address, '')) IS NOT NULL
+            ) AS unique_action_visitor_count,
+            (
+                SELECT COUNT(*)
+                FROM actions
+                WHERE created_at >= datetime('now', '-7 days')
+            ) AS actions_last_7_days,
+            (
+                SELECT COUNT(*)
+                FROM users
+                WHERE created_at >= datetime('now', '-30 days')
+            ) AS users_last_30_days,
+            (
+                SELECT COUNT(*)
+                FROM photos
+                WHERE created_at >= datetime('now', '-30 days')
+            ) AS photos_last_30_days,
+            (
+                SELECT COUNT(*)
+                FROM text_entries
+                WHERE created_at >= datetime('now', '-30 days')
+            ) AS text_entries_last_30_days
+        """
+    ).fetchone()
+    message_count = (counts["photo_message_count"] or 0) + (counts["text_message_count"] or 0)
+    timeline_item_count = (counts["photo_count"] or 0) + (counts["text_entry_count"] or 0)
+    recent_item_count = (counts["photos_last_30_days"] or 0) + (counts["text_entries_last_30_days"] or 0)
+    return {
+        "user_count": counts["user_count"] or 0,
+        "unique_action_visitor_count": counts["unique_action_visitor_count"] or 0,
+        "timeline_item_count": timeline_item_count,
+        "photo_count": counts["photo_count"] or 0,
+        "text_entry_count": counts["text_entry_count"] or 0,
+        "message_count": message_count,
+        "reaction_count": counts["reaction_count"] or 0,
+        "chapter_count": counts["chapter_count"] or 0,
+        "people_count": counts["people_count"] or 0,
+        "collection_count": counts["collection_count"] or 0,
+        "import_item_count": counts["import_item_count"] or 0,
+        "accepted_connection_count": counts["accepted_connection_count"] or 0,
+        "pending_connection_count": counts["pending_connection_count"] or 0,
+        "job_count": counts["job_count"] or 0,
+        "actions_last_7_days": counts["actions_last_7_days"] or 0,
+        "users_last_30_days": counts["users_last_30_days"] or 0,
+        "recent_item_count": recent_item_count,
     }
 
 
@@ -5527,6 +5639,156 @@ def get_accepted_connections(db):
     ]
 
 
+def accepted_connection_for_user(db, other_user_id):
+    row = db.execute(
+        """
+        SELECT
+            cr.id AS request_id,
+            cr.relation,
+            u.id AS user_id,
+            u.username,
+            u.first_name,
+            u.last_name,
+            u.email
+        FROM connection_requests cr
+        JOIN users u
+          ON u.id = CASE
+              WHEN cr.requester_id = ? THEN cr.recipient_id
+              ELSE cr.requester_id
+          END
+        WHERE cr.status = 'accepted'
+          AND (
+            (cr.requester_id = ? AND cr.recipient_id = ?)
+            OR (cr.requester_id = ? AND cr.recipient_id = ?)
+          )
+        LIMIT 1
+        """,
+        (g.user["id"], g.user["id"], other_user_id, other_user_id, g.user["id"]),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "request_id": row["request_id"],
+        "id": row["user_id"],
+        "username": row["username"],
+        "full_name": user_full_name(row),
+        "email": row["email"] or "",
+        "relation": row["relation"],
+        "allowed_tags": CONNECTION_VISIBLE_TAGS.get(row["relation"], ("public",)),
+    }
+
+
+def get_unread_connection_message_count(db, connection_id=None):
+    params = [g.user["id"], g.user["id"]]
+    connection_clause = ""
+    if connection_id is not None:
+        connection_clause = "AND cm.sender_id = ?"
+        params.append(connection_id)
+    row = db.execute(
+        f"""
+        SELECT COUNT(*) AS unread_count
+        FROM connection_messages cm
+        LEFT JOIN connection_message_reads cmr
+          ON cmr.user_id = ?
+         AND cmr.message_id = cm.id
+        WHERE cm.recipient_id = ?
+          AND cmr.message_id IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM connection_requests cr
+            WHERE cr.status = 'accepted'
+              AND (
+                (cr.requester_id = cm.sender_id AND cr.recipient_id = cm.recipient_id)
+                OR (cr.requester_id = cm.recipient_id AND cr.recipient_id = cm.sender_id)
+              )
+          )
+          {connection_clause}
+        """,
+        tuple(params),
+    ).fetchone()
+    return row["unread_count"] if row else 0
+
+
+def load_connection_conversations(db):
+    conversations = []
+    for connection in get_accepted_connections(db):
+        latest = db.execute(
+            """
+            SELECT cm.*, u.username, u.first_name, u.last_name
+            FROM connection_messages cm
+            JOIN users u ON u.id = cm.sender_id
+            WHERE (
+                cm.sender_id = ? AND cm.recipient_id = ?
+            ) OR (
+                cm.sender_id = ? AND cm.recipient_id = ?
+            )
+            ORDER BY cm.created_at DESC, cm.id DESC
+            LIMIT 1
+            """,
+            (g.user["id"], connection["id"], connection["id"], g.user["id"]),
+        ).fetchone()
+        connection["unread_count"] = get_unread_connection_message_count(db, connection["id"])
+        connection["latest_message"] = (
+            {
+                "body": latest["body"],
+                "preview": short_preview(latest["body"]),
+                "created_at": latest["created_at"],
+                "sender_name": "You" if latest["sender_id"] == g.user["id"] else message_author_name(latest),
+            }
+            if latest
+            else None
+        )
+        conversations.append(connection)
+    conversations.sort(
+        key=lambda item: (
+            item["latest_message"]["created_at"] if item["latest_message"] else "",
+            item["username"].lower(),
+        ),
+        reverse=True,
+    )
+    return conversations
+
+
+def load_connection_message_thread(db, connection_id):
+    rows = db.execute(
+        """
+        SELECT cm.*, u.username, u.first_name, u.last_name
+        FROM connection_messages cm
+        JOIN users u ON u.id = cm.sender_id
+        WHERE (
+            cm.sender_id = ? AND cm.recipient_id = ?
+        ) OR (
+            cm.sender_id = ? AND cm.recipient_id = ?
+        )
+        ORDER BY cm.created_at ASC, cm.id ASC
+        """,
+        (g.user["id"], connection_id, connection_id, g.user["id"]),
+    ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "body": row["body"],
+            "created_at": row["created_at"],
+            "is_mine": row["sender_id"] == g.user["id"],
+            "sender_name": "You" if row["sender_id"] == g.user["id"] else message_author_name(row),
+        }
+        for row in rows
+    ]
+
+
+def mark_connection_messages_read(db, connection_id):
+    db.execute(
+        """
+        INSERT OR IGNORE INTO connection_message_reads (user_id, message_id, read_at)
+        SELECT ?, id, CURRENT_TIMESTAMP
+        FROM connection_messages
+        WHERE sender_id = ? AND recipient_id = ?
+        """,
+        (g.user["id"], connection_id, g.user["id"]),
+    )
+    db.commit()
+
+
 def actor_label(user_id, name):
     return "You" if user_id == g.user["id"] else name
 
@@ -9240,6 +9502,7 @@ def admin():
     return render_template(
         "admin.html",
         image_summary=admin_image_storage_summary(db),
+        site_stats=admin_site_statistics(db),
         action_summary=admin_action_summary(db),
         admin_jobs=recent_admin_jobs(db),
     )
@@ -11011,6 +11274,47 @@ def connections():
         "connections.html",
         incoming_requests=get_incoming_connection_requests(db),
         connections=get_accepted_connections(db),
+    )
+
+
+@app.route("/messages")
+@login_required
+def private_messages():
+    db = get_db()
+    return render_template(
+        "messages.html",
+        conversations=load_connection_conversations(db),
+    )
+
+
+@app.route("/messages/<int:connection_id>", methods=("GET", "POST"))
+@login_required
+def private_message_thread(connection_id):
+    db = get_db()
+    connection = accepted_connection_for_user(db, connection_id)
+    if connection is None:
+        abort(404)
+
+    if request.method == "POST":
+        body = (request.form.get("body") or "").strip()
+        if not body:
+            flash("Message cannot be empty.", "error")
+            return redirect(url_for("private_message_thread", connection_id=connection_id))
+        db.execute(
+            """
+            INSERT INTO connection_messages (sender_id, recipient_id, body)
+            VALUES (?, ?, ?)
+            """,
+            (g.user["id"], connection_id, body),
+        )
+        db.commit()
+        return redirect(url_for("private_message_thread", connection_id=connection_id))
+
+    mark_connection_messages_read(db, connection_id)
+    return render_template(
+        "message_thread.html",
+        connection=connection,
+        messages=load_connection_message_thread(db, connection_id),
     )
 
 

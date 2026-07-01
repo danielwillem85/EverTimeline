@@ -397,6 +397,11 @@ def test_actions_are_summarized_for_admin(client, helpers):
     helpers.create_user(client, "Daniel")
     admin_response = client.get("/admin")
     assert admin_response.status_code == 200
+    assert b"Site statistics" in admin_response.data
+    assert b"Unique visitors" in admin_response.data
+    assert b"Accounts" in admin_response.data
+    assert b"2 new in 30 days" in admin_response.data
+    assert b"3 actions in 7 days" in admin_response.data
     assert b"Action overview" in admin_response.data
     assert b"View all" in admin_response.data
     assert b"Timeline (/timeline)" in admin_response.data
@@ -413,6 +418,61 @@ def test_actions_are_summarized_for_admin(client, helpers):
     )
     assert summary_rows[0]["button_text"] == "View all"
     assert summary_rows[0]["frequency"] == 2
+
+
+def test_connections_can_send_private_messages(app, client, helpers):
+    alice_id = helpers.create_user(client, "alice")
+    bob = app.test_client()
+    bob_id = helpers.create_user(bob, "bob")
+
+    request_id = helpers.request_connection(client, bob_id)
+    helpers.accept_connection(bob, request_id)
+
+    bob_thread = f"/messages/{alice_id}"
+    send_response = bob.post(
+        bob_thread,
+        data={
+            **helpers.csrf_form_data(bob, bob_thread),
+            "body": "Hi Alice, this is private.",
+        },
+    )
+    assert send_response.status_code == 302
+    assert send_response.headers["Location"].endswith(bob_thread)
+
+    inbox = client.get("/messages")
+    assert inbox.status_code == 200
+    assert b"Messages" in inbox.data
+    assert b"Hi Alice, this is private." in inbox.data
+    assert b"notification-badge" in inbox.data
+
+    thread = client.get(f"/messages/{bob_id}")
+    assert thread.status_code == 200
+    assert b"Hi Alice, this is private." in thread.data
+    assert b"Private messages with your friend connection." in thread.data
+    assert helpers.row(
+        """
+        SELECT COUNT(*) AS count
+        FROM connection_message_reads cmr
+        JOIN connection_messages cm ON cm.id = cmr.message_id
+        WHERE cmr.user_id = ? AND cm.sender_id = ?
+        """,
+        (alice_id, bob_id),
+    )["count"] == 1
+
+    unread_inbox = client.get("/messages")
+    assert b"aria-label=\"0 unread private messages\"" in unread_inbox.data
+
+    charlie = app.test_client()
+    charlie_id = helpers.create_user(charlie, "charlie")
+    assert client.get(f"/messages/{charlie_id}").status_code == 404
+    blocked_send = client.post(
+        f"/messages/{charlie_id}",
+        data={
+            **helpers.csrf_form_data(client, "/messages"),
+            "body": "No connection yet.",
+        },
+    )
+    assert blocked_send.status_code == 404
 
 
 def test_login_posts_are_rate_limited_with_form_error(app, client, helpers):
@@ -1049,6 +1109,8 @@ def test_month_bulk_actions_removes_selected_photos(app, client, helpers):
     bulk_page = client.get("/year/2020/5/bulk-actions")
     assert bulk_page.status_code == 200
     assert b"data-month-bulk-actions" in bulk_page.data
+    assert b"data-month-bulk-select-all" in bulk_page.data
+    assert b"Select all photos" in bulk_page.data
     assert b"data-month-bulk-visibility-select" in bulk_page.data
     assert b"data-month-bulk-chapter-select" in bulk_page.data
     assert b"New chapter" in bulk_page.data

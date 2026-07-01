@@ -102,7 +102,7 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
         }
         const actionElement = event.target.closest(actionTargetSelector);
-        if (actionElement) {
+        if (actionElement && !actionElement.disabled) {
             trackActionClick(actionElement);
         }
     }, true);
@@ -1176,6 +1176,8 @@ document.addEventListener("DOMContentLoaded", () => {
         const splashPhotoImage = document.getElementById("splash-photo-modal-image");
         const splashPhotoTitle = document.getElementById("splash-photo-modal-title");
         const splashPhotoDate = document.getElementById("splash-photo-modal-date");
+        const splashPhotoPrevButton = splashPhotoModal ? splashPhotoModal.querySelector("[data-splash-photo-prev]") : null;
+        const splashPhotoNextButton = splashPhotoModal ? splashPhotoModal.querySelector("[data-splash-photo-next]") : null;
         const splashChapterPhotoInput = document.querySelector("[data-splash-chapter-photo-id]");
         const splashChapterForm = document.querySelector("[data-splash-chapter-form]");
         const splashChapterSelect = document.querySelector("[data-splash-chapter-select]");
@@ -1202,6 +1204,8 @@ document.addEventListener("DOMContentLoaded", () => {
         let splashPageSize = 0;
         let splashTotalPages = 0;
         let splashResizeTimer = null;
+        let splashOpenPhotos = [];
+        let splashOpenPhotoIndex = -1;
         const selectedSplashPhotoIds = new Set();
         const splashSuggestions = new Map();
 
@@ -1284,13 +1288,27 @@ document.addEventListener("DOMContentLoaded", () => {
             if (splashChapterForm) {
                 delete splashChapterForm.dataset.submitting;
             }
+            splashOpenPhotoIndex = -1;
             syncModalOpenState();
         };
 
-        const openSplashPhotoModal = (photo) => {
+        const updateSplashPhotoNavigation = () => {
+            const hasMultiplePhotos = splashOpenPhotos.length > 1 && splashOpenPhotoIndex >= 0;
+            if (splashPhotoPrevButton) {
+                splashPhotoPrevButton.hidden = !hasMultiplePhotos;
+                splashPhotoPrevButton.disabled = !hasMultiplePhotos;
+            }
+            if (splashPhotoNextButton) {
+                splashPhotoNextButton.hidden = !hasMultiplePhotos;
+                splashPhotoNextButton.disabled = !hasMultiplePhotos;
+            }
+        };
+
+        const showSplashPhotoInModal = (photo, index = -1) => {
             if (!splashPhotoModal || !splashPhotoImage) {
                 return;
             }
+            splashOpenPhotoIndex = index;
             if (splashPhotoTitle) {
                 splashPhotoTitle.textContent = photo.title || "Picture";
             }
@@ -1314,7 +1332,36 @@ document.addEventListener("DOMContentLoaded", () => {
                 delete splashChapterForm.dataset.submitting;
             }
             splashPhotoModal.hidden = false;
+            updateSplashPhotoNavigation();
             syncModalOpenState();
+        };
+
+        const openSplashPhotoModal = (photo) => {
+            if (!splashPhotoModal || !splashPhotoImage) {
+                return;
+            }
+            const requestedId = Number(photo.id);
+            const photoIndex = splashOpenPhotos.findIndex((entry) => Number(entry.id) === requestedId);
+            showSplashPhotoInModal(photo, photoIndex);
+        };
+
+        const moveSplashPhoto = (delta) => {
+            if (splashOpenPhotos.length < 2 || splashOpenPhotoIndex < 0) {
+                return;
+            }
+            const nextPhotoIndex = (splashOpenPhotoIndex + delta + splashOpenPhotos.length) % splashOpenPhotos.length;
+            const nextPhoto = splashOpenPhotos[nextPhotoIndex];
+            if (nextPhoto) {
+                showSplashPhotoInModal(nextPhoto, nextPhotoIndex);
+            }
+        };
+
+        const isKeyboardTextControl = (element) => {
+            if (!(element instanceof HTMLElement)) {
+                return false;
+            }
+            const tag = element.tagName.toUpperCase();
+            return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
         };
 
         const closeNoDateQuickEdit = () => {
@@ -1446,6 +1493,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 const payload = await response.json();
                 splashPageIndex = payload.page || 0;
                 splashTotalPages = payload.total_pages || 0;
+                splashOpenPhotos = payload.photos || [];
+                if (splashPhotoModal && !splashPhotoModal.hidden) {
+                    if (splashOpenPhotoIndex >= splashOpenPhotos.length) {
+                        splashOpenPhotoIndex = splashOpenPhotos.length > 0 ? 0 : -1;
+                    }
+                    updateSplashPhotoNavigation();
+                }
                 if (splashSelectable) {
                     selectedSplashPhotoIds.forEach((photoId) => {
                         const stillExists = (payload.photos || []).some((photo) => Number(photo.id) === photoId);
@@ -1460,6 +1514,11 @@ document.addEventListener("DOMContentLoaded", () => {
             } catch (error) {
                 renderSplashPhotos([]);
                 splashTotalPages = 0;
+                splashOpenPhotos = [];
+                if (splashPhotoModal && !splashPhotoModal.hidden) {
+                    splashOpenPhotoIndex = -1;
+                    updateSplashPhotoNavigation();
+                }
                 setSplashStatus("Photos could not be loaded.");
                 updateSplashControls();
             }
@@ -1477,6 +1536,12 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         if (splashNextButton) {
             splashNextButton.addEventListener("click", () => moveSplashPage(1));
+        }
+        if (splashPhotoPrevButton) {
+            splashPhotoPrevButton.addEventListener("click", () => moveSplashPhoto(-1));
+        }
+        if (splashPhotoNextButton) {
+            splashPhotoNextButton.addEventListener("click", () => moveSplashPhoto(1));
         }
 
         const updateSplashSizeButtons = (selectedScale) => {
@@ -1681,12 +1746,28 @@ document.addEventListener("DOMContentLoaded", () => {
             if (splashSelectable) {
                 return;
             }
-            if (splashPhotoModal && !splashPhotoModal.hidden && event.key === "Escape") {
-                closeSplashPhotoModal();
-                return;
-            }
             if (splashPhotoModal && !splashPhotoModal.hidden) {
-                return;
+                if (isKeyboardTextControl(event.target)) {
+                    return;
+                }
+                if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    closeSplashPhotoModal();
+                    return;
+                }
+                if (event.key === "ArrowLeft") {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    moveSplashPhoto(-1);
+                    return;
+                }
+                if (event.key === "ArrowRight") {
+                    event.preventDefault();
+                    event.stopImmediatePropagation();
+                    moveSplashPhoto(1);
+                    return;
+                }
             }
             if (event.key === "ArrowLeft") {
                 moveSplashPage(-1);
@@ -3261,16 +3342,18 @@ document.addEventListener("DOMContentLoaded", () => {
             document.body.classList.remove("modal-open");
         };
 
-        document.querySelectorAll(".connect-open-button").forEach((button) => {
-            button.addEventListener("click", () => {
-                connectionRecipientInput.value = button.dataset.recipientId || "";
-                connectionTarget.textContent = button.dataset.recipientName || "";
-                connectionRelationInputs.forEach((input) => {
-                    input.checked = input.value === "friend";
-                });
-                connectionModal.hidden = false;
-                document.body.classList.add("modal-open");
+        document.addEventListener("click", (event) => {
+            const button = event.target instanceof Element ? event.target.closest(".connect-open-button") : null;
+            if (!button) {
+                return;
+            }
+            connectionRecipientInput.value = button.dataset.recipientId || "";
+            connectionTarget.textContent = button.dataset.recipientName || "";
+            connectionRelationInputs.forEach((input) => {
+                input.checked = input.value === "friend";
             });
+            connectionModal.hidden = false;
+            document.body.classList.add("modal-open");
         });
 
         connectionModal.querySelectorAll("[data-close-connection-modal]").forEach((button) => {
@@ -3305,30 +3388,33 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     };
 
-    document.querySelectorAll("[data-reaction-button]").forEach((button) => {
-        button.addEventListener("click", async (event) => {
-            event.preventDefault();
-            event.stopPropagation();
+    document.addEventListener("click", async (event) => {
+        const button = event.target instanceof Element ? event.target.closest("[data-reaction-button]") : null;
+        if (!button) {
+            return;
+        }
 
-            const bar = button.closest("[data-reaction-bar]");
-            if (!bar || !bar.dataset.reactionUrl) {
-                return;
-            }
+        event.preventDefault();
+        event.stopPropagation();
 
-            const reactionValue = button.dataset.reactionValue;
-            const alreadySelected = bar.dataset.userReaction === reactionValue;
-            const response = await csrfFetch(bar.dataset.reactionUrl, {
-                method: alreadySelected ? "DELETE" : "PUT",
-                headers: {"Content-Type": "application/json"},
-                body: alreadySelected ? null : JSON.stringify({reaction: reactionValue}),
-            });
-            if (!response.ok) {
-                return;
-            }
+        const bar = button.closest("[data-reaction-bar]");
+        if (!bar || !bar.dataset.reactionUrl) {
+            return;
+        }
 
-            const payload = await response.json();
-            updateReactionBars(bar.dataset.reactionKind, bar.dataset.reactionId, payload);
+        const reactionValue = button.dataset.reactionValue;
+        const alreadySelected = bar.dataset.userReaction === reactionValue;
+        const response = await csrfFetch(bar.dataset.reactionUrl, {
+            method: alreadySelected ? "DELETE" : "PUT",
+            headers: {"Content-Type": "application/json"},
+            body: alreadySelected ? null : JSON.stringify({reaction: reactionValue}),
         });
+        if (!response.ok) {
+            return;
+        }
+
+        const payload = await response.json();
+        updateReactionBars(bar.dataset.reactionKind, bar.dataset.reactionId, payload);
     });
 
     document.querySelectorAll("[data-chapter-sequence]").forEach((sequence) => {
@@ -3436,9 +3522,108 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    const homePhotoWall = document.querySelector("[data-home-photo-wall]");
+    if (homePhotoWall) {
+        const grid = homePhotoWall.querySelector("[data-home-photo-grid]");
+        const status = homePhotoWall.querySelector("[data-home-photo-status]");
+        const photoUrl = homePhotoWall.dataset.photoUrl || "";
+        const fadeOutMs = 900;
+        let isRefreshingHomeWall = false;
+
+        const randomHomeFadeInMs = () => Math.round(1000 + Math.random() * 2000);
+
+        const fadeInHomePhotoTiles = () => {
+            if (!grid) {
+                return;
+            }
+            grid.querySelectorAll(".home-photo-tile:not(.home-photo-reserved)").forEach((tile) => {
+                tile.classList.remove("is-fading-in");
+                tile.style.setProperty("--home-fade-in", `${randomHomeFadeInMs()}ms`);
+                window.requestAnimationFrame(() => {
+                    tile.classList.add("is-fading-in");
+                });
+            });
+        };
+
+        const renderHomePhotoWall = (photos) => {
+            if (!grid) {
+                return;
+            }
+
+            grid.replaceChildren(...photos.map((photo) => {
+                const tile = document.createElement("div");
+                tile.className = "home-photo-tile";
+                if (photo.placeholder) {
+                    tile.classList.add("home-photo-placeholder");
+                    if (photo.reserved) {
+                        tile.classList.add("home-photo-reserved");
+                    }
+                    return tile;
+                }
+
+                tile.style.backgroundImage = `url("${photo.image_url}")`;
+                return tile;
+            }));
+
+            if (status) {
+                status.hidden = photos.length > 0;
+                status.textContent = photos.length > 0 ? "" : "No public photos yet.";
+            }
+
+            fadeInHomePhotoTiles();
+        };
+
+        const refreshHomePhotoWall = async () => {
+            if (!photoUrl || isRefreshingHomeWall || !grid) {
+                return;
+            }
+
+            isRefreshingHomeWall = true;
+            try {
+                const response = await csrfFetch(photoUrl, {
+                    cache: "no-store",
+                    headers: {"Accept": "application/json"},
+                });
+                if (!response.ok) {
+                    throw new Error("Photo refresh failed");
+                }
+                const payload = await response.json();
+                grid.style.setProperty("--home-fade-out", `${fadeOutMs}ms`);
+                grid.classList.add("is-fading-out");
+                await new Promise((resolve) => {
+                    window.setTimeout(resolve, fadeOutMs);
+                });
+                grid.classList.remove("is-fading-out");
+                renderHomePhotoWall(Array.isArray(payload.photos) ? payload.photos : []);
+            } catch (error) {
+                grid.classList.remove("is-fading-out");
+                if (status) {
+                    status.hidden = false;
+                    status.textContent = "Photos could not be refreshed.";
+                }
+            } finally {
+                isRefreshingHomeWall = false;
+            }
+        };
+
+        fadeInHomePhotoTiles();
+        window.setInterval(refreshHomePhotoWall, 5000);
+    }
+
     const homePhotoModal = document.getElementById("home-photo-modal");
     if (homePhotoModal) {
+        const homePhotoSection = document.querySelector("[data-home-refresh-url]");
+        const homePhotoGrid = homePhotoSection ? homePhotoSection.querySelector("[data-home-photo-grid]") : null;
+        const homeEmptyState = homePhotoSection ? homePhotoSection.querySelector("[data-home-empty-state]") : null;
         const homePhotoImage = document.getElementById("home-photo-modal-image");
+        const homePhotoZoomTrigger = homePhotoModal.querySelector(".home-photo-zoom-trigger");
+        const homePhotoZoomModal = document.getElementById("home-photo-zoom-modal");
+        const homePhotoZoomImage = document.getElementById("home-photo-zoom-image");
+        const homePhotoZoomTitle = document.getElementById("home-photo-zoom-title");
+        const homePhotoZoomMeta = document.getElementById("home-photo-zoom-meta");
+        const homePhotoZoomCaption = document.getElementById("home-photo-zoom-caption");
+        const homePhotoZoomPreviousButton = homePhotoZoomModal ? homePhotoZoomModal.querySelector("[data-home-photo-zoom-prev]") : null;
+        const homePhotoZoomNextButton = homePhotoZoomModal ? homePhotoZoomModal.querySelector("[data-home-photo-zoom-next]") : null;
         const homePhotoTitle = document.getElementById("home-photo-modal-title");
         const homePhotoOwner = document.getElementById("home-photo-modal-owner");
         const homePhotoDate = document.getElementById("home-photo-modal-date");
@@ -3448,6 +3633,223 @@ document.addEventListener("DOMContentLoaded", () => {
         const homePhotoMessageInput = homePhotoMessageForm ? homePhotoMessageForm.querySelector("textarea") : null;
         let activeHomePhotoId = null;
         let activeHomePhotoMessagesUrl = "";
+        let activeHomeZoomPhotoId = null;
+        let homeRefreshTimer = null;
+
+        const homeText = (value) => value == null ? "" : String(value);
+
+        const buildHomeReactionBar = (photo) => {
+            const reactions = photo.reactions || {};
+            const bar = document.createElement("div");
+            bar.className = "reaction-bar ";
+            bar.dataset.reactionBar = "true";
+            bar.dataset.reactionKind = photo.kind || "photo";
+            bar.dataset.reactionId = String(photo.id);
+            bar.dataset.reactionUrl = reactions.reaction_url || "";
+            bar.dataset.userReaction = reactions.user_reaction || "";
+
+            ["like", "love"].forEach((reaction) => {
+                const button = document.createElement("button");
+                const isActive = reactions.user_reaction === reaction;
+                button.className = `reaction-button${isActive ? " is-active" : ""}`;
+                button.type = "button";
+                button.dataset.reactionButton = "true";
+                button.dataset.reactionValue = reaction;
+                button.title = reaction === "like" ? "Like" : "Love";
+                button.setAttribute("aria-label", button.title);
+                button.setAttribute("aria-pressed", isActive ? "true" : "false");
+
+                const icon = document.createElement("span");
+                icon.className = "reaction-icon";
+                icon.setAttribute("aria-hidden", "true");
+                icon.textContent = reaction === "like" ? "\u{1F44D}" : "\u2665";
+
+                const count = document.createElement("span");
+                count.className = "reaction-count";
+                count.dataset.reactionCount = reaction;
+                count.textContent = String(reactions[`${reaction}_count`] || 0);
+
+                button.append(icon, count);
+                bar.appendChild(button);
+            });
+
+            return bar;
+        };
+
+        const buildHomePhotoCard = (photo) => {
+            const item = document.createElement("figure");
+            item.className = "public-photo-item";
+
+            const button = document.createElement("button");
+            button.className = "public-photo-card";
+            button.type = "button";
+            button.title = `${homeText(photo.owner_name)}${photo.display_date ? ` - ${photo.display_date}` : ""}`;
+            button.dataset.fullSrc = homeText(photo.image_url);
+            button.dataset.photoTitle = homeText(photo.title);
+            button.dataset.photoCaption = homeText(photo.caption);
+            button.dataset.photoOwner = homeText(photo.owner_name);
+            button.dataset.photoDate = homeText(photo.display_date);
+            button.dataset.messagesUrl = homeText(photo.messages_url);
+            button.dataset.photoId = homeText(photo.id);
+
+            const image = document.createElement("img");
+            image.src = homeText(photo.image_url);
+            image.alt = homeText(photo.title) || "Public photo";
+            image.loading = "lazy";
+            button.appendChild(image);
+
+            const caption = document.createElement("figcaption");
+            caption.className = "public-photo-meta";
+
+            const ownerRow = document.createElement("div");
+            ownerRow.className = "public-photo-owner-row";
+
+            const owner = document.createElement("strong");
+            owner.textContent = homeText(photo.owner_name);
+            ownerRow.appendChild(owner);
+
+            const connectionState = photo.connection_state || {};
+            if (connectionState.can_request) {
+                const connectButton = document.createElement("button");
+                connectButton.className = "button secondary small connect-open-button";
+                connectButton.type = "button";
+                connectButton.dataset.recipientId = homeText(photo.owner_id);
+                connectButton.dataset.recipientName = homeText(photo.owner_name);
+                connectButton.textContent = "Add connection";
+                ownerRow.appendChild(connectButton);
+            } else {
+                const badge = document.createElement("span");
+                badge.className = "status-badge";
+                badge.textContent = homeText(connectionState.label);
+                ownerRow.appendChild(badge);
+            }
+
+            const date = document.createElement("span");
+            date.textContent = homeText(photo.display_date) || "No date";
+            const title = document.createElement("span");
+            title.textContent = homeText(photo.title);
+            const comments = document.createElement("span");
+            const messageCount = Number(photo.message_count || 0);
+            comments.dataset.publicMessageCount = "true";
+            comments.dataset.photoId = homeText(photo.id);
+            comments.textContent = `${messageCount} ${messageCount === 1 ? "comment" : "comments"}`;
+
+            caption.append(ownerRow, date, title, comments);
+            item.append(button, buildHomeReactionBar(photo), caption);
+            return item;
+        };
+
+        const renderHomePhotoGrid = (photos) => {
+            if (!homePhotoGrid) {
+                return;
+            }
+            homePhotoGrid.innerHTML = "";
+            photos.forEach((photo) => {
+                homePhotoGrid.appendChild(buildHomePhotoCard(photo));
+            });
+            if (homeEmptyState) {
+                homeEmptyState.hidden = photos.length > 0;
+            }
+        };
+
+        const homePhotoCards = () => homePhotoGrid ? Array.from(homePhotoGrid.querySelectorAll(".public-photo-card")) : [];
+
+        const homeCardIndex = (photoId) => homePhotoCards().findIndex((card) => {
+            return card.dataset.photoId === String(photoId || "");
+        });
+
+        const setHomeZoomFromButton = (button) => {
+            if (!button || !homePhotoZoomModal || !homePhotoZoomImage || !homePhotoZoomTitle || !homePhotoZoomMeta || !homePhotoZoomCaption) {
+                return;
+            }
+
+            activeHomeZoomPhotoId = button.dataset.photoId || "";
+            homePhotoZoomImage.src = button.dataset.fullSrc || "";
+            homePhotoZoomImage.alt = button.dataset.photoTitle || "Selected public photo full size";
+            homePhotoZoomTitle.textContent = button.dataset.photoTitle || "Public photo";
+            homePhotoZoomMeta.textContent = [button.dataset.photoOwner, button.dataset.photoDate].filter(Boolean).join(" - ");
+            homePhotoZoomCaption.textContent = button.dataset.photoCaption || "";
+
+            const cards = homePhotoCards();
+            const hasMultipleCards = cards.length > 1;
+            if (homePhotoZoomPreviousButton) {
+                homePhotoZoomPreviousButton.disabled = !hasMultipleCards;
+            }
+            if (homePhotoZoomNextButton) {
+                homePhotoZoomNextButton.disabled = !hasMultipleCards;
+            }
+        };
+
+        const closeHomeZoomModal = () => {
+            if (!homePhotoZoomModal || !homePhotoZoomImage) {
+                return;
+            }
+            homePhotoZoomModal.hidden = true;
+            homePhotoZoomImage.removeAttribute("src");
+            activeHomeZoomPhotoId = null;
+            if (homePhotoModal.hidden) {
+                document.body.classList.remove("modal-open");
+            }
+        };
+
+        const openHomeZoomModal = () => {
+            if (!homePhotoZoomModal || !activeHomePhotoId) {
+                return;
+            }
+            const cards = homePhotoCards();
+            const button = cards.find((card) => card.dataset.photoId === String(activeHomePhotoId));
+            if (!button) {
+                return;
+            }
+            setHomeZoomFromButton(button);
+            homePhotoZoomModal.hidden = false;
+            document.body.classList.add("modal-open");
+        };
+
+        const stepHomeZoom = (delta) => {
+            if (!homePhotoZoomModal || homePhotoZoomModal.hidden) {
+                return;
+            }
+            const cards = homePhotoCards();
+            if (cards.length <= 1) {
+                return;
+            }
+            const currentIndex = homeCardIndex(activeHomeZoomPhotoId);
+            const nextIndex = currentIndex === -1
+                ? 0
+                : (currentIndex + delta + cards.length) % cards.length;
+            const nextButton = cards[nextIndex];
+            setHomeZoomFromButton(nextButton);
+            openHomePhotoModal(nextButton);
+        };
+
+        const refreshHomePhotoGrid = async () => {
+            if (!homePhotoSection || !homePhotoGrid || !homePhotoSection.dataset.homeRefreshUrl || !homePhotoModal.hidden || document.hidden) {
+                return;
+            }
+
+            homePhotoGrid.classList.add("is-refreshing");
+            window.setTimeout(async () => {
+                try {
+                    const response = await csrfFetch(homePhotoSection.dataset.homeRefreshUrl, {
+                        headers: {"Accept": "application/json"},
+                    });
+                    if (response.ok) {
+                        const payload = await response.json();
+                        renderHomePhotoGrid(Array.isArray(payload.photos) ? payload.photos : []);
+                    }
+                } finally {
+                    requestAnimationFrame(() => {
+                        homePhotoGrid.classList.remove("is-refreshing");
+                    });
+                }
+            }, 320);
+        };
+
+        if (homePhotoSection && homePhotoGrid) {
+            const interval = Math.max(Number(homePhotoSection.dataset.homeRefreshInterval || 12000), 3000);
+            homeRefreshTimer = window.setInterval(refreshHomePhotoGrid, interval);
+        }
 
         const renderHomePhotoMessages = (messages) => {
             homePhotoMessageList.innerHTML = "";
@@ -3491,6 +3893,7 @@ document.addEventListener("DOMContentLoaded", () => {
         };
 
         const closeHomePhotoModal = () => {
+            closeHomeZoomModal();
             homePhotoModal.hidden = true;
             homePhotoImage.removeAttribute("src");
             homePhotoMessageList.innerHTML = "";
@@ -3532,13 +3935,36 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         };
 
-        document.querySelectorAll(".public-photo-card").forEach((button) => {
-            button.addEventListener("click", () => openHomePhotoModal(button));
-        });
+        if (homePhotoGrid) {
+            homePhotoGrid.addEventListener("click", (event) => {
+                const button = event.target instanceof Element ? event.target.closest(".public-photo-card") : null;
+                if (button) {
+                    openHomePhotoModal(button);
+                }
+            });
+        }
 
         homePhotoModal.querySelectorAll("[data-close-home-photo-modal]").forEach((button) => {
             button.addEventListener("click", closeHomePhotoModal);
         });
+
+        if (homePhotoZoomTrigger) {
+            homePhotoZoomTrigger.addEventListener("click", openHomeZoomModal);
+        }
+
+        if (homePhotoZoomModal) {
+            homePhotoZoomModal.querySelectorAll("[data-close-home-photo-zoom]").forEach((button) => {
+                button.addEventListener("click", closeHomeZoomModal);
+            });
+        }
+
+        if (homePhotoZoomPreviousButton) {
+            homePhotoZoomPreviousButton.addEventListener("click", () => stepHomeZoom(-1));
+        }
+
+        if (homePhotoZoomNextButton) {
+            homePhotoZoomNextButton.addEventListener("click", () => stepHomeZoom(1));
+        }
 
         if (homePhotoMessageForm && homePhotoMessageInput) {
             homePhotoMessageForm.addEventListener("submit", async (event) => {
@@ -3582,6 +4008,23 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         document.addEventListener("keydown", (event) => {
+            if (homePhotoZoomModal && !homePhotoZoomModal.hidden) {
+                if (event.key === "Escape") {
+                    event.preventDefault();
+                    closeHomeZoomModal();
+                    return;
+                }
+                if (event.key === "ArrowLeft") {
+                    event.preventDefault();
+                    stepHomeZoom(-1);
+                    return;
+                }
+                if (event.key === "ArrowRight") {
+                    event.preventDefault();
+                    stepHomeZoom(1);
+                    return;
+                }
+            }
             if (event.key === "Escape" && !homePhotoModal.hidden) {
                 closeHomePhotoModal();
             }
@@ -4526,4 +4969,3 @@ document.addEventListener("DOMContentLoaded", () => {
 
     focusEntryFromUrl();
 });
-

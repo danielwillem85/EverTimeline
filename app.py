@@ -754,6 +754,7 @@ def init_db():
                 updated_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             );
+
             """
         )
         ensure_user_profile_columns(db)
@@ -1610,6 +1611,28 @@ def admin_image_storage_summary(db):
         "database_size_label": format_file_size(database_size),
         "reclaimable_size": reclaimable_size,
         "reclaimable_size_label": format_file_size(reclaimable_size),
+    }
+
+
+def admin_action_summary(db):
+    rows = db.execute(
+        """
+        SELECT
+            button_text AS button_name,
+            context,
+            COUNT(*) AS frequency,
+            MAX(created_at) AS last_used_at
+        FROM actions
+        GROUP BY button_text, context
+        ORDER BY frequency DESC, last_used_at DESC, button_text COLLATE NOCASE, context COLLATE NOCASE
+        """
+    ).fetchall()
+    total_count = db.execute(
+        "SELECT COUNT(*) AS total_count FROM actions"
+    ).fetchone()["total_count"]
+    return {
+        "rows": rows,
+        "total_count": total_count or 0,
     }
 
 
@@ -3857,6 +3880,65 @@ def random_public_photos(db, limit=48):
             }
         )
     return attach_reactions(db, photos)
+
+
+PHOTO_WALL_ITEM_LIMIT = 80
+PHOTO_WALL_RESERVED_INDEXES = {
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+}
+
+
+def photo_wall_placeholder(index, reserved=False):
+    return {
+        "id": f"{'reserved' if reserved else 'placeholder'}-{index + 1}",
+        "image_url": "",
+        "title": "Photo placeholder",
+        "placeholder": True,
+        "reserved": reserved,
+    }
+
+
+def public_photo_wall_items(db, limit=PHOTO_WALL_ITEM_LIMIT):
+    reserved_indexes = {index for index in PHOTO_WALL_RESERVED_INDEXES if index < limit}
+    public_photos = iter(random_public_photos(db, limit=limit - len(reserved_indexes)))
+    photos = []
+    for index in range(limit):
+        if index in reserved_indexes:
+            photos.append(photo_wall_placeholder(index, reserved=True))
+            continue
+
+        photo = next(public_photos, None)
+        if photo is None:
+            photos.append(photo_wall_placeholder(index))
+            continue
+
+        photos.append(
+            {
+                "id": photo["id"],
+                "image_url": photo["image_url"],
+                "title": photo["title"],
+                "placeholder": False,
+                "reserved": False,
+            }
+        )
+    return photos
 
 
 def no_date_photo_suggestion(photo):
@@ -8955,7 +9037,26 @@ def index():
 @app.route("/home")
 @birthday_required
 def home():
-    return render_template("home.html", photos=random_public_photos(get_db()))
+    db = get_db()
+    return render_template(
+        "home.html",
+        photos=public_photo_wall_items(db),
+        public_photos=random_public_photos(db),
+    )
+
+
+@app.route("/api/home/public-photos")
+@birthday_required
+def home_public_photos():
+    return jsonify({"photos": public_photo_wall_items(get_db())})
+
+
+@app.route("/api/home/photos")
+@birthday_required
+def home_photos():
+    response = jsonify({"photos": random_public_photos(get_db())})
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.route("/splash")
@@ -9141,6 +9242,7 @@ def admin():
     return render_template(
         "admin.html",
         image_summary=admin_image_storage_summary(db),
+        action_summary=admin_action_summary(db),
         admin_jobs=recent_admin_jobs(db),
     )
 
@@ -11127,7 +11229,9 @@ def photo_image(photo_id):
 @birthday_required
 def public_photo_image(photo_id):
     photo = get_public_photo(photo_id)
-    return Response(photo["image_data"], mimetype=photo["mime_type"])
+    response = Response(photo["image_data"], mimetype=photo["mime_type"])
+    response.headers["Cache-Control"] = "private, max-age=604800"
+    return response
 
 
 @app.route("/public/photo/<int:photo_id>/messages", methods=("GET", "POST"))

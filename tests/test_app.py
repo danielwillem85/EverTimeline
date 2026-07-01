@@ -41,6 +41,49 @@ def test_auth_registration_birthday_login_and_logout(client, helpers):
     assert good_login.status_code == 302
 
 
+def test_home_photo_wall_uses_placeholder_tiles_without_public_photos(client, helpers):
+    helpers.create_user(client, "alice")
+
+    response = client.get("/home")
+
+    assert response.status_code == 200
+    assert b"EverTimeline helps you preserve life&rsquo;s moments" in response.data
+    assert response.data.count(b"home-photo-placeholder") == 80
+    assert response.data.count(b"home-photo-reserved") == 18
+    assert response.data.count(b"home-photo-tile") == 80
+    assert b"data-photo-url=\"/api/home/public-photos\"" in response.data
+
+
+def test_home_public_photos_api_fills_missing_tiles_with_placeholders(client, helpers):
+    helpers.create_user(client, "alice")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="home-public.png",
+        title="Public home photo",
+        tag="public",
+    )
+
+    response = client.get("/api/home/public-photos")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert len(payload["photos"]) == 80
+    real_photos = [photo for photo in payload["photos"] if not photo["placeholder"]]
+    placeholders = [photo for photo in payload["photos"] if photo["placeholder"]]
+    reserved = [photo for photo in placeholders if photo["reserved"]]
+    assert real_photos == [
+        {
+            "id": photo_id,
+            "image_url": f"/public/photo/{photo_id}/image",
+            "placeholder": False,
+            "reserved": False,
+            "title": "Public home photo",
+        }
+    ]
+    assert len(placeholders) == 79
+    assert len(reserved) == 18
+
+
 def test_csrf_token_required_for_unsafe_requests(client, helpers):
     helpers.create_user(client, "alice")
 
@@ -286,6 +329,61 @@ def test_password_reset_token_changes_password_and_cannot_be_reused(app, client,
     assert b"invalid or expired" in reused.data
 
 
+def test_actions_are_summarized_for_admin(client, helpers):
+    helpers.create_user(client, "alice")
+
+    response = client.post(
+        "/api/actions",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={
+            "button_text": "View all",
+            "context": "Timeline (/timeline)",
+        },
+    )
+    assert response.status_code == 204
+    response = client.post(
+        "/api/actions",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={
+            "button_text": "View all",
+            "context": "Timeline (/timeline)",
+        },
+    )
+    assert response.status_code == 204
+    response = client.post(
+        "/api/actions",
+        headers=helpers.csrf_headers(client, "/timeline"),
+        json={
+            "button_text": "Upload",
+            "context": "March (/year/2020/3)",
+        },
+    )
+    assert response.status_code == 204
+
+    admin_response_for_user = client.get("/admin")
+    assert admin_response_for_user.status_code == 404
+
+    helpers.create_user(client, "Daniel")
+    admin_response = client.get("/admin")
+    assert admin_response.status_code == 200
+    assert b"Action overview" in admin_response.data
+    assert b"View all" in admin_response.data
+    assert b"Timeline (/timeline)" in admin_response.data
+    assert b"Upload" in admin_response.data
+    assert b"3 recorded actions across 2 unique button/context pairs." in admin_response.data
+
+    summary_rows = helpers.rows(
+        """
+        SELECT button_text, context, COUNT(*) AS frequency
+        FROM actions
+        GROUP BY button_text, context
+        ORDER BY frequency DESC
+        """
+    )
+    assert summary_rows[0]["button_text"] == "View all"
+    assert summary_rows[0]["frequency"] == 2
+
+
 def test_login_posts_are_rate_limited_with_form_error(app, client, helpers):
     helpers.create_user(client, "alice")
     assert client.post(
@@ -451,6 +549,35 @@ def test_uploads_text_entries_and_pdf_exports(client, helpers):
     assert month_pdf.status_code == 200
     assert month_pdf.mimetype == "application/pdf"
     assert month_pdf.data.startswith(b"%PDF")
+
+
+def test_home_photo_refresh_endpoint_and_public_image_cache(client, helpers):
+    helpers.create_user(client, "owner")
+    photo_id = helpers.upload_photo(
+        client,
+        filename="home-public.png",
+        title="Home public photo",
+        tag="public",
+    )
+
+    home = client.get("/home")
+    assert home.status_code == 200
+    assert b'data-home-refresh-url="/api/home/photos"' in home.data
+    assert b"data-home-photo-grid" in home.data
+    assert b"id=\"home-photo-zoom-modal\"" in home.data
+    assert b"data-home-photo-zoom-prev" in home.data
+    assert b"data-home-photo-zoom-next" in home.data
+
+    response = client.get("/api/home/photos")
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    payload = response.get_json()
+    assert payload["photos"][0]["id"] == photo_id
+    assert payload["photos"][0]["image_url"] == f"/public/photo/{photo_id}/image"
+
+    image = client.get(f"/public/photo/{photo_id}/image")
+    assert image.status_code == 200
+    assert image.headers["Cache-Control"] == "private, max-age=604800"
 
 
 def test_photo_date_detection_uses_exif_and_filename_fallbacks(client, helpers):
@@ -1075,6 +1202,8 @@ def test_splash_page_api_and_thumbnails_are_owned(app, client, helpers):
     assert b'data-splash-size="0.5"' in page.data
     assert b'data-splash-size="1"' in page.data
     assert b'data-splash-size="1.5"' in page.data
+    assert b"data-splash-photo-prev" in page.data
+    assert b"data-splash-photo-next" in page.data
 
     response = client.get("/api/splash-photos?seed=test-seed&page=0&page_size=1")
     assert response.status_code == 200
@@ -3670,4 +3799,3 @@ def test_activity_history_shows_uploads_chapters_connections_comments_and_reacti
     ]
     for expected in expectations:
         assert expected in activity.data
-

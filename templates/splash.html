@@ -58,6 +58,8 @@
                 {% else %}
                     <a class="button secondary small" href="{{ url_for('chapters') }}">Create chapter</a>
                 {% endif %}
+                <button class="button secondary small splash-photo-modal-nav-button" type="button" data-splash-photo-prev aria-label="Previous picture">&lsaquo;</button>
+                <button class="button secondary small splash-photo-modal-nav-button" type="button" data-splash-photo-next aria-label="Next picture">&rsaquo;</button>
                 <button class="icon-button" type="button" data-close-splash-photo-modal aria-label="Close popup">x</button>
             </div>
         </header>
@@ -67,3 +69,4 @@
     </section>
 </div>
 {% endblock %}
+

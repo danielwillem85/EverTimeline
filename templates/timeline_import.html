@@ -24,7 +24,7 @@
         enctype="multipart/form-data"
         class="import-upload-form"
         data-upload-progress
-        data-max-upload-bytes="{{ config['MAX_CONTENT_LENGTH'] }}"
+        data-max-upload-bytes="{{ upload_limit_bytes }}"
     >
         {{ csrf_field() }}
         <label class="file-field">

@@ -44,6 +44,7 @@ from PIL import Image, ImageDraw, ImageOps
 
 BASE_DIR = Path(__file__).resolve().parent
 DATABASE = Path(os.environ.get("EVERTIMELINE_DATABASE", BASE_DIR / "evertimeline.sqlite3"))
+IMAGE_STORAGE_DIR = Path(os.environ.get("EVERTIMELINE_IMAGE_STORAGE", BASE_DIR / "storage" / "images"))
 ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 JPEG_STORAGE_MIME = "image/jpeg"
 JPEG_STORAGE_QUALITY = 52
@@ -123,6 +124,7 @@ BACKUP_FORMAT = "evertimeline.account_backup"
 BACKUP_FORMAT_VERSION = 1
 BACKUP_MANIFEST_NAME = "evertimeline-backup.json"
 DEFAULT_MAX_UPLOAD_BYTES = 256 * 1024 * 1024
+PREMIUM_MAX_UPLOAD_BYTES = 500 * 1024 * 1024
 DEFAULT_MAX_IMAGE_UPLOAD_BYTES = 25 * 1024 * 1024
 DEFAULT_MAX_IMAGE_PIXELS = 50_000_000
 DEFAULT_MAX_BACKUP_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
@@ -148,6 +150,90 @@ def format_file_size(byte_count):
                 return f"{int(value)} bytes"
             return f"{value:.1f} {unit}"
         value /= 1024
+
+
+def image_storage_extension(mime_type):
+    return {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+    }.get(mime_type, ".bin")
+
+
+def image_storage_key(kind, owner_id, item_id, mime_type=JPEG_STORAGE_MIME):
+    safe_kind = re.sub(r"[^a-z0-9_-]+", "-", str(kind).strip().lower()).strip("-")
+    if safe_kind not in {"photos", "imports"}:
+        raise ValueError("Unknown image storage kind.")
+    return f"{safe_kind}/{int(owner_id)}/{int(item_id)}{image_storage_extension(mime_type)}"
+
+
+def image_storage_path(key):
+    normalized = PurePosixPath(key or "")
+    if normalized.is_absolute() or not normalized.parts or ".." in normalized.parts:
+        raise ValueError("Unsafe image storage key.")
+    return IMAGE_STORAGE_DIR.joinpath(*normalized.parts)
+
+
+def write_stored_image(key, image_data):
+    target = image_storage_path(key)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = target.with_name(f"{target.name}.{secrets.token_hex(8)}.tmp")
+    tmp_path.write_bytes(image_data)
+    os.replace(tmp_path, target)
+    return key
+
+
+def read_stored_image(key):
+    return image_storage_path(key).read_bytes()
+
+
+def delete_stored_image(key):
+    if not key:
+        return
+    try:
+        image_storage_path(key).unlink(missing_ok=True)
+    except ValueError:
+        return
+
+
+def row_value(row, field, default=None):
+    if row is None:
+        return default
+    if hasattr(row, "keys"):
+        return row[field] if field in row.keys() else default
+    return default
+
+
+def stored_image_data(row):
+    storage_key = row_value(row, "image_storage_key", "")
+    if storage_key:
+        try:
+            return read_stored_image(storage_key)
+        except FileNotFoundError:
+            fallback = row_value(row, "image_data", b"")
+            if fallback:
+                return fallback
+            raise
+    return row_value(row, "image_data", b"") or b""
+
+
+def stored_image_size(row):
+    storage_key = row_value(row, "image_storage_key", "")
+    if storage_key:
+        try:
+            return image_storage_path(storage_key).stat().st_size
+        except FileNotFoundError:
+            pass
+    return len(row_value(row, "image_data", b"") or b"")
+
+
+def image_response(row):
+    try:
+        image_data = stored_image_data(row)
+    except (FileNotFoundError, ValueError):
+        abort(404)
+    return Response(image_data, mimetype=row["mime_type"])
 
 
 def env_flag(name, default=False):
@@ -353,13 +439,33 @@ def add_security_headers(response):
 
 @app.errorhandler(RequestEntityTooLarge)
 def handle_request_too_large(error):
-    max_size = human_readable_bytes(app.config["MAX_CONTENT_LENGTH"])
+    max_size = human_readable_bytes(current_upload_limit_bytes())
     flash(
         f"That upload is too large. The current limit is {max_size} per request. Try fewer or smaller files.",
         "error",
     )
     target = request.path if request.path.startswith("/") else url_for("timeline")
     return redirect(target), 303
+
+
+def current_upload_limit_bytes(user=None):
+    user = user if user is not None else getattr(g, "user", None)
+    if user is not None and user["is_premium"]:
+        return PREMIUM_MAX_UPLOAD_BYTES
+    return app.config["MAX_CONTENT_LENGTH"]
+
+
+@app.before_request
+def apply_request_upload_limit():
+    user = getattr(g, "user", None)
+    user_id = session.get("user_id")
+    if user is None and user_id is not None:
+        user = get_db().execute(
+            "SELECT * FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        g.user = user
+    request.max_content_length = current_upload_limit_bytes(user)
 
 
 @app.before_request
@@ -444,6 +550,7 @@ def inject_tag_choices():
         "preview_mode_url": preview_mode_url,
         "notification_count": notification_count,
         "private_message_count": private_message_count,
+        "upload_limit_bytes": current_upload_limit_bytes(),
         "static_version": static_version,
         "is_admin_user": current_user_is_admin,
         "csrf_token": csrf_token,
@@ -491,6 +598,7 @@ def init_db():
                 image_hash TEXT,
                 mime_type TEXT NOT NULL,
                 image_data BLOB NOT NULL,
+                image_storage_key TEXT,
                 photo_date TEXT,
                 location_name TEXT,
                 latitude REAL,
@@ -675,6 +783,7 @@ def init_db():
                 original_filename TEXT,
                 mime_type TEXT NOT NULL,
                 image_data BLOB NOT NULL,
+                image_storage_key TEXT,
                 image_hash TEXT NOT NULL,
                 detected_date TEXT,
                 detected_source TEXT NOT NULL DEFAULT '',
@@ -978,6 +1087,7 @@ def ensure_photo_columns(db):
         "title": "ALTER TABLE photos ADD COLUMN title TEXT NOT NULL DEFAULT ''",
         "caption": "ALTER TABLE photos ADD COLUMN caption TEXT NOT NULL DEFAULT ''",
         "image_hash": "ALTER TABLE photos ADD COLUMN image_hash TEXT",
+        "image_storage_key": "ALTER TABLE photos ADD COLUMN image_storage_key TEXT",
     }
     for column_name, statement in migrations.items():
         if column_name not in columns:
@@ -1037,6 +1147,7 @@ def ensure_photo_import_columns(db):
             "review_date": "ALTER TABLE photo_import_items ADD COLUMN review_date TEXT",
             "review_tag": "ALTER TABLE photo_import_items ADD COLUMN review_tag TEXT",
             "review_skip": "ALTER TABLE photo_import_items ADD COLUMN review_skip INTEGER",
+            "image_storage_key": "ALTER TABLE photo_import_items ADD COLUMN image_storage_key TEXT",
         },
     )
 
@@ -1168,7 +1279,7 @@ def load_items_before_birthday(db, user_id, birthday_date):
     )
     photo_rows = db.execute(
         f"""
-        SELECT id, year, month, photo_date AS item_date, COALESCE(NULLIF(title, ''), original_filename, 'Photo') AS title
+        SELECT id, year, month, image_storage_key, photo_date AS item_date, COALESCE(NULLIF(title, ''), original_filename, 'Photo') AS title
         FROM photos
         WHERE {items_before_birthday_query("photo_date")}
         ORDER BY year ASC, month ASC, id ASC
@@ -1221,6 +1332,7 @@ def delete_rows_by_ids(db, statement, ids, prefix_params=(), suffix_params=()):
 def delete_items_before_birthday(db, user_id, birthday_date):
     photo_rows, text_rows = load_items_before_birthday(db, user_id, birthday_date)
     photo_ids = [row["id"] for row in photo_rows]
+    photo_storage_keys = [row["image_storage_key"] for row in photo_rows if row_value(row, "image_storage_key")]
     text_ids = [row["id"] for row in text_rows]
 
     delete_rows_by_ids(
@@ -1305,6 +1417,8 @@ def delete_items_before_birthday(db, user_id, birthday_date):
         photo_ids,
         prefix_params=(user_id,),
     )
+    for storage_key in photo_storage_keys:
+        delete_stored_image(storage_key)
     delete_rows_by_ids(
         db,
         "DELETE FROM text_entries WHERE user_id = ? AND id IN ({placeholders})",
@@ -1334,7 +1448,7 @@ def delete_owned_photos(db, photo_ids, user_id, year=None, month=None):
 
     rows = db.execute(
         f"""
-        SELECT id
+        SELECT id, image_storage_key
         FROM photos
         WHERE user_id = ?
           AND id IN ({placeholders})
@@ -1345,6 +1459,7 @@ def delete_owned_photos(db, photo_ids, user_id, year=None, month=None):
     owned_ids = [row["id"] for row in rows]
     if not owned_ids:
         return []
+    storage_keys = [row["image_storage_key"] for row in rows if row_value(row, "image_storage_key")]
 
     delete_rows_by_ids(
         db,
@@ -1402,6 +1517,8 @@ def delete_owned_photos(db, photo_ids, user_id, year=None, month=None):
         owned_ids,
         prefix_params=(user_id,),
     )
+    for storage_key in storage_keys:
+        delete_stored_image(storage_key)
     return owned_ids
 
 
@@ -1631,6 +1748,19 @@ def admin_image_storage_summary(db):
             COALESCE((SELECT SUM(LENGTH(image_data)) FROM photo_import_items), 0) AS total_bytes
         """
     ).fetchone()["total_bytes"]
+    for table_name in ("photos", "photo_import_items"):
+        for row in db.execute(
+            f"""
+            SELECT image_storage_key
+            FROM {table_name}
+            WHERE image_storage_key IS NOT NULL
+              AND image_storage_key != ''
+            """
+        ).fetchall():
+            try:
+                image_bytes += image_storage_path(row["image_storage_key"]).stat().st_size
+            except (FileNotFoundError, ValueError):
+                continue
     page_size = db.execute("PRAGMA page_size").fetchone()[0]
     page_count = db.execute("PRAGMA page_count").fetchone()[0]
     freelist_count = db.execute("PRAGMA freelist_count").fetchone()[0]
@@ -1760,6 +1890,7 @@ def convert_image_rows_to_jpeg(
     max_edge=JPEG_STORAGE_MAX_EDGE,
     progress_callback=None,
 ):
+    owner_column = "user_id" if table_name == "photos" else "batch_id"
     where_clause = "" if include_jpeg else "WHERE mime_type IS NULL OR mime_type != ?"
     params = () if include_jpeg else (JPEG_STORAGE_MIME,)
     rows = db.execute(
@@ -1778,7 +1909,7 @@ def convert_image_rows_to_jpeg(
     for row in rows:
         image_row = db.execute(
             f"""
-            SELECT image_data
+            SELECT image_data, image_storage_key, {owner_column} AS storage_owner_id
             FROM {table_name}
             WHERE {id_column} = ?
             """,
@@ -1791,14 +1922,15 @@ def convert_image_rows_to_jpeg(
                 progress_callback(processed_count)
             continue
 
-        original_size = len(image_row["image_data"])
+        original_size = stored_image_size(image_row)
         try:
+            original_image_data = stored_image_data(image_row)
             image_data = storage_jpeg_from_image(
-                image_row["image_data"],
+                original_image_data,
                 quality=quality,
                 max_edge=max_edge,
             )
-        except ValueError:
+        except (FileNotFoundError, ValueError):
             skipped_count += 1
             processed_count += 1
             if progress_callback:
@@ -1811,24 +1943,35 @@ def convert_image_rows_to_jpeg(
                 progress_callback(processed_count)
             continue
 
-        if hash_column:
-            db.execute(
-                f"""
-                UPDATE {table_name}
-                SET image_data = ?, mime_type = ?, image_hash = ?
-                WHERE {id_column} = ?
-                """,
-                (image_data, JPEG_STORAGE_MIME, photo_image_hash(image_data), row["row_id"]),
+        storage_key = row_value(image_row, "image_storage_key")
+        if not storage_key:
+            storage_kind = "photos" if table_name == "photos" else "imports"
+            storage_key = image_storage_key(
+                storage_kind,
+                image_row["storage_owner_id"],
+                row["row_id"],
+                JPEG_STORAGE_MIME,
             )
-        else:
-            db.execute(
-                f"""
-                UPDATE {table_name}
-                SET image_data = ?, mime_type = ?
-                WHERE {id_column} = ?
-                """,
-                (image_data, JPEG_STORAGE_MIME, row["row_id"]),
-            )
+        if storage_key:
+            write_stored_image(storage_key, image_data)
+            if hash_column:
+                db.execute(
+                    f"""
+                    UPDATE {table_name}
+                    SET image_data = ?, image_storage_key = ?, mime_type = ?, image_hash = ?
+                    WHERE {id_column} = ?
+                    """,
+                    (b"", storage_key, JPEG_STORAGE_MIME, photo_image_hash(image_data), row["row_id"]),
+                )
+            else:
+                db.execute(
+                    f"""
+                    UPDATE {table_name}
+                    SET image_data = ?, image_storage_key = ?, mime_type = ?
+                    WHERE {id_column} = ?
+                    """,
+                    (b"", storage_key, JPEG_STORAGE_MIME, row["row_id"]),
+                )
         converted_count += 1
         saved_bytes += max(original_size - len(image_data), 0)
         processed_count += 1
@@ -2270,14 +2413,16 @@ def detect_import_photo_date(image_data, filename):
 def backfill_photo_hashes(db):
     rows = db.execute(
         """
-        SELECT id, image_data
+        SELECT id, image_data, image_storage_key
         FROM photos
         WHERE image_hash IS NULL OR image_hash = ''
         """
     ).fetchall()
     for row in rows:
         photo_id = row["id"] if hasattr(row, "keys") else row[0]
-        image_data = row["image_data"] if hasattr(row, "keys") else row[1]
+        image_data = stored_image_data(row)
+        if not image_data:
+            continue
         db.execute(
             "UPDATE photos SET image_hash = ? WHERE id = ?",
             (photo_image_hash(image_data), photo_id),
@@ -2530,16 +2675,23 @@ def insert_photo_record(db, filename, mime_type, image_data, image_hash, year, m
             caption,
             image_hash,
             mime_type,
-            image_data,
+            b"",
             photo_date,
             location["location_name"],
             location["latitude"],
             location["longitude"],
         ),
     )
-    set_tags_for_item(db, "photo", cursor.lastrowid, tags)
-    set_people_for_item(db, "photo", cursor.lastrowid, people or [])
-    return cursor.lastrowid
+    photo_id = cursor.lastrowid
+    storage_key = image_storage_key("photos", g.user["id"], photo_id, mime_type)
+    write_stored_image(storage_key, image_data)
+    db.execute(
+        "UPDATE photos SET image_storage_key = ? WHERE id = ?",
+        (storage_key, photo_id),
+    )
+    set_tags_for_item(db, "photo", photo_id, tags)
+    set_people_for_item(db, "photo", photo_id, people or [])
+    return photo_id
 
 
 def insert_uploaded_photo(db, image, image_data, image_hash, year, month, photo_date, title, caption, tags, location, people=None):
@@ -2681,6 +2833,21 @@ def get_import_item(db, batch_id, item_id):
     if item is None:
         abort(404)
     return item
+
+
+def delete_import_batch_storage(db, batch_id):
+    rows = db.execute(
+        """
+        SELECT image_storage_key
+        FROM photo_import_items
+        WHERE batch_id = ?
+          AND image_storage_key IS NOT NULL
+          AND image_storage_key != ''
+        """,
+        (batch_id,),
+    ).fetchall()
+    for row in rows:
+        delete_stored_image(row["image_storage_key"])
 
 
 def import_duplicate_payload(db, token, batch_id, item):
@@ -8225,7 +8392,7 @@ def build_anniversary_mode(db, today=None, window_days=7, sample_limit=48):
 
 def build_pdf_export_items(db, owner_id, year, month=None):
     photo_query = """
-        SELECT id, year, month, original_filename, title, caption, mime_type, image_data, photo_date, created_at
+        SELECT id, year, month, original_filename, title, caption, mime_type, image_data, image_storage_key, photo_date, created_at
         FROM photos
         WHERE user_id = ? AND year = ?
     """
@@ -8263,7 +8430,7 @@ def build_pdf_export_items(db, owner_id, year, month=None):
                 "date_label": format_timeline_date_label(photo["year"], photo["month"], photo["photo_date"]),
                 "created_at": photo["created_at"],
                 "mime_type": photo["mime_type"],
-                "image_data": photo["image_data"],
+                "image_data": stored_image_data(photo),
                 "messages": load_messages_for_timeline_item(db, "photo", photo["id"]),
                 "tags": tags,
                 "tags_text": tags_to_text(tags),
@@ -8321,7 +8488,7 @@ def build_chapter_pdf_export_items(db, chapter_id, owner_id):
         placeholders = ",".join(["?"] * len(photo_ids))
         photo_rows = db.execute(
             f"""
-            SELECT id, year, month, original_filename, title, caption, mime_type, image_data, photo_date, created_at
+            SELECT id, year, month, original_filename, title, caption, mime_type, image_data, image_storage_key, photo_date, created_at
             FROM photos
             WHERE user_id = ? AND id IN ({placeholders})
             """,
@@ -8367,7 +8534,7 @@ def build_chapter_pdf_export_items(db, chapter_id, owner_id):
                     "date_label": format_timeline_date_label(photo["year"], photo["month"], photo["photo_date"]),
                     "created_at": photo["created_at"],
                     "mime_type": photo["mime_type"],
-                    "image_data": photo["image_data"],
+                    "image_data": stored_image_data(photo),
                     "messages": load_messages_for_timeline_item(db, "photo", photo["id"]),
                     "tags": tags,
                     "tags_text": tags_to_text(tags),
@@ -8847,11 +9014,11 @@ def account_backup_response(db):
         )
         for photo in manifest["photos"]:
             row = db.execute(
-                "SELECT image_data FROM photos WHERE id = ? AND user_id = ?",
+                "SELECT image_data, image_storage_key FROM photos WHERE id = ? AND user_id = ?",
                 (photo["id"], g.user["id"]),
             ).fetchone()
             if row is not None:
-                archive.writestr(photo["image_path"], row["image_data"])
+                archive.writestr(photo["image_path"], stored_image_data(row))
 
     backup_bytes = buffer.getvalue()
     username = secure_filename(g.user["username"]) or "account"
@@ -9042,15 +9209,22 @@ def import_photo_from_backup(db, archive, photo):
             normalize_photo_caption(photo.get("caption", "")),
             image_hash,
             JPEG_STORAGE_MIME,
-            storage_image_data,
+            b"",
             photo.get("photo_date") or None,
             backup_created_at(photo.get("created_at")),
         ),
     )
-    set_tags_for_item(db, "photo", cursor.lastrowid, photo.get("tags", [DEFAULT_TAG]))
-    set_people_for_item(db, "photo", cursor.lastrowid, photo.get("people", []))
+    photo_id = cursor.lastrowid
+    storage_key = image_storage_key("photos", g.user["id"], photo_id, JPEG_STORAGE_MIME)
+    write_stored_image(storage_key, storage_image_data)
+    db.execute(
+        "UPDATE photos SET image_storage_key = ? WHERE id = ?",
+        (storage_key, photo_id),
+    )
+    set_tags_for_item(db, "photo", photo_id, photo.get("tags", [DEFAULT_TAG]))
+    set_people_for_item(db, "photo", photo_id, photo.get("people", []))
     return {
-        "id": cursor.lastrowid,
+        "id": photo_id,
         "created": True,
         "duplicate": False,
     }
@@ -9363,7 +9537,7 @@ def splash_photo_thumbnail(photo_id):
     photo = get_owned_photo(photo_id)
     try:
         thumbnail_data = storage_jpeg_from_image(
-            photo["image_data"],
+            stored_image_data(photo),
             quality=46,
             max_edge=260,
         )
@@ -9649,7 +9823,7 @@ def api_admin_bulk_delete_photos(connection_id):
 @admin_required
 def admin_full_splash_photo_image(connection_id, photo_id):
     photo = get_admin_full_splash_photo(connection_id, photo_id)
-    return Response(photo["image_data"], mimetype=photo["mime_type"])
+    return image_response(photo)
 
 
 @app.route("/admin/connections/<int:connection_id>/photo/<int:photo_id>/thumbnail")
@@ -9658,7 +9832,7 @@ def admin_full_splash_photo_thumbnail(connection_id, photo_id):
     photo = get_admin_full_splash_photo(connection_id, photo_id)
     try:
         thumbnail_data = storage_jpeg_from_image(
-            photo["image_data"],
+            stored_image_data(photo),
             quality=46,
             max_edge=260,
         )
@@ -10023,13 +10197,19 @@ def timeline_import():
                     batch.lastrowid,
                     secure_filename(image.filename) or "photo",
                     JPEG_STORAGE_MIME,
-                    storage_image_data,
+                    b"",
                     image_hash,
                     detected_date,
                     detected_source,
                     duplicate_photo_id,
                     duplicate_import_item_id,
                 ),
+            )
+            storage_key = image_storage_key("imports", batch.lastrowid, cursor.lastrowid, JPEG_STORAGE_MIME)
+            write_stored_image(storage_key, storage_image_data)
+            db.execute(
+                "UPDATE photo_import_items SET image_storage_key = ? WHERE id = ?",
+                (storage_key, cursor.lastrowid),
             )
             if image_hash not in seen_hashes:
                 seen_hashes[image_hash] = cursor.lastrowid
@@ -10072,6 +10252,7 @@ def timeline_import_review(token):
     )
 
     if request.method == "POST" and request.form.get("action") == "discard":
+        delete_import_batch_storage(db, batch["id"])
         db.execute("DELETE FROM photo_import_batches WHERE id = ?", (batch["id"],))
         db.commit()
         flash("Import batch discarded.", "success")
@@ -10150,7 +10331,7 @@ def timeline_import_review(token):
                 db,
                 item["original_filename"],
                 item["mime_type"],
-                full_item["image_data"],
+                stored_image_data(full_item),
                 item["image_hash"],
                 parsed_date.year,
                 parsed_date.month,
@@ -10163,6 +10344,7 @@ def timeline_import_review(token):
             imported_count += 1
             imported_months.add((parsed_date.year, parsed_date.month))
 
+        delete_import_batch_storage(db, batch["id"])
         db.execute("DELETE FROM photo_import_batches WHERE id = ?", (batch["id"],))
         db.commit()
 
@@ -10196,7 +10378,7 @@ def timeline_import_item_image(token, item_id):
     db = get_db()
     batch = get_import_batch(db, token)
     item = get_import_item(db, batch["id"], item_id)
-    return Response(item["image_data"], mimetype=item["mime_type"])
+    return image_response(item)
 
 
 @app.route("/timeline/import/<token>/items/<int:item_id>/thumbnail")
@@ -10207,7 +10389,7 @@ def timeline_import_item_thumbnail(token, item_id):
     item = get_import_item(db, batch["id"], item_id)
     try:
         thumbnail_data = storage_jpeg_from_image(
-            item["image_data"],
+            stored_image_data(item),
             quality=IMPORT_REVIEW_THUMBNAIL_QUALITY,
             max_edge=IMPORT_REVIEW_THUMBNAIL_MAX_EDGE,
             optimize=False,
@@ -11263,7 +11445,7 @@ def connection_timeline_items(connection_id):
 @login_required
 def connection_photo_image(connection_id, photo_id):
     photo = get_connection_photo(connection_id, photo_id)
-    return Response(photo["image_data"], mimetype=photo["mime_type"])
+    return image_response(photo)
 
 
 @app.route("/connections/<int:connection_id>/api/photo/<int:photo_id>/messages")
@@ -11563,14 +11745,14 @@ def remove_connection(request_id):
 @birthday_required
 def photo_image(photo_id):
     photo = get_owned_photo(photo_id)
-    return Response(photo["image_data"], mimetype=photo["mime_type"])
+    return image_response(photo)
 
 
 @app.route("/public/photo/<int:photo_id>/image")
 @birthday_required
 def public_photo_image(photo_id):
     photo = get_public_photo(photo_id)
-    response = Response(photo["image_data"], mimetype=photo["mime_type"])
+    response = image_response(photo)
     response.headers["Cache-Control"] = "private, max-age=604800"
     return response
 

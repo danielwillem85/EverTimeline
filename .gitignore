@@ -6,3 +6,4 @@ evertimeline.sqlite3
 .env
 .coverage
 tmp/
+storage/

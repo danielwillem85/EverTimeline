@@ -57,9 +57,11 @@
                 <a
                     class="topbar-link notification-link{% if request.endpoint in ('private_messages', 'private_message_thread') %} is-active{% endif %}"
                     href="{{ url_for('private_messages') }}"
+                    aria-label="Messages"
                     {% if request.endpoint in ('private_messages', 'private_message_thread') %}aria-current="page"{% endif %}
                 >
-                    <span>Messages</span>
+                    <span class="topbar-icon" aria-hidden="true">&#9993;</span>
+                    <span class="sr-only">Messages</span>
                     <span
                         class="notification-badge{% if private_message_count == 0 %} is-empty{% endif %}"
                         aria-label="{{ private_message_count }} unread private messages"

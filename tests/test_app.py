@@ -99,7 +99,7 @@ def test_csrf_token_required_for_unsafe_requests(client, helpers):
     assert response.status_code == 400
 
 
-def test_premium_page_can_activate_account(client, helpers):
+def test_premium_page_can_activate_account(app, client, helpers):
     helpers.create_user(client, "owner")
 
     columns = {row["name"] for row in helpers.rows("PRAGMA table_info(users)")}
@@ -113,6 +113,7 @@ def test_premium_page_can_activate_account(client, helpers):
     assert page.status_code == 200
     assert b"EverTimeline Premium" in page.data
     assert b"Larger batch uploads" in page.data
+    assert b"500 MB upload limit" in page.data
     assert b"Original image quality" in page.data
     assert b"Family collaboration" in page.data
     assert b"Advanced privacy and sharing" in page.data
@@ -132,6 +133,34 @@ def test_premium_page_can_activate_account(client, helpers):
     assert active_page.status_code == 200
     assert b"Premium is active for your account." in active_page.data
     assert b"Go premium" not in active_page.data
+
+    import_page = client.get("/timeline/import")
+    assert import_page.status_code == 200
+    assert b'data-max-upload-bytes="524288000"' in import_page.data
+
+    month_page = client.get("/year/2020/5")
+    assert month_page.status_code == 200
+    assert b'data-max-upload-bytes="524288000"' in month_page.data
+
+    previous_limit = app.config["MAX_CONTENT_LENGTH"]
+    app.config["MAX_CONTENT_LENGTH"] = 128
+    try:
+        upload_response = client.post(
+            "/timeline/import",
+            data={
+                **helpers.csrf_form_data(client, "/timeline/import"),
+                "photo": (
+                    io.BytesIO(b"not an image" * 30),
+                    "large-enough-to-exceed-free-limit.png",
+                    "image/png",
+                ),
+            },
+            content_type="multipart/form-data",
+        )
+    finally:
+        app.config["MAX_CONTENT_LENGTH"] = previous_limit
+    assert upload_response.status_code == 302
+    assert upload_response.headers["Location"].endswith("/timeline/import")
 
 
 def test_button_actions_are_recorded_with_user_context_and_ip(client, helpers):
@@ -618,9 +647,15 @@ def test_uploads_text_entries_and_pdf_exports(client, helpers):
     assert image_response.status_code == 200
     assert image_response.mimetype == "image/jpeg"
     assert image_response.data.startswith(b"\xff\xd8")
-    stored_photo = helpers.row("SELECT mime_type, image_data FROM photos WHERE id = ?", (photo_id,))
+    stored_photo = helpers.row(
+        "SELECT mime_type, image_data, image_storage_key FROM photos WHERE id = ?",
+        (photo_id,),
+    )
     assert stored_photo["mime_type"] == "image/jpeg"
-    assert stored_photo["image_data"].startswith(b"\xff\xd8")
+    assert stored_photo["image_data"] == b""
+    assert stored_photo["image_storage_key"]
+    assert helpers.app_module.image_storage_path(stored_photo["image_storage_key"]).exists()
+    assert helpers.app_module.stored_image_data(stored_photo).startswith(b"\xff\xd8")
     oversized_png = io.BytesIO()
     Image.new("RGB", (2200, 1200), color=(31, 126, 116)).save(oversized_png, format="PNG")
     oversized_response = client.post(
@@ -634,8 +669,11 @@ def test_uploads_text_entries_and_pdf_exports(client, helpers):
         content_type="multipart/form-data",
     )
     assert oversized_response.status_code == 302
-    oversized_photo = helpers.row("SELECT image_data FROM photos WHERE original_filename = ?", ("oversized.png",))
-    with Image.open(io.BytesIO(oversized_photo["image_data"])) as stored_image:
+    oversized_photo = helpers.row(
+        "SELECT image_data, image_storage_key FROM photos WHERE original_filename = ?",
+        ("oversized.png",),
+    )
+    with Image.open(io.BytesIO(helpers.app_module.stored_image_data(oversized_photo))) as stored_image:
         assert stored_image.format == "JPEG"
         assert max(stored_image.size) == 1200
 
@@ -1485,11 +1523,15 @@ def test_admin_page_is_daniel_only_and_converts_existing_images(app, client, hel
     assert job_response.status_code == 200
     assert job_response.get_json()["result_summary"].startswith("Converted 1 image rows")
 
-    converted = helpers.row("SELECT mime_type, image_data, image_hash FROM photos WHERE original_filename = ?", ("legacy.png",))
+    converted = helpers.row(
+        "SELECT mime_type, image_data, image_storage_key, image_hash FROM photos WHERE original_filename = ?",
+        ("legacy.png",),
+    )
     assert converted["mime_type"] == "image/jpeg"
-    assert converted["image_data"].startswith(b"\xff\xd8")
+    assert converted["image_data"] == b""
+    assert converted["image_storage_key"]
     assert converted["image_hash"] != "legacy-hash"
-    with Image.open(io.BytesIO(converted["image_data"])) as stored_image:
+    with Image.open(io.BytesIO(helpers.app_module.stored_image_data(converted))) as stored_image:
         assert stored_image.format == "JPEG"
         assert max(stored_image.size) == 1200
 
@@ -1543,12 +1585,14 @@ def test_admin_maintenance_compacts_existing_jpegs_and_vacuums_database(app, cli
     assert compact_job["progress_current"] == compact_job["progress_total"]
 
     compacted = helpers.row(
-        "SELECT image_data, image_hash FROM photos WHERE original_filename = ?",
+        "SELECT image_data, image_storage_key, image_hash FROM photos WHERE original_filename = ?",
         ("large-existing.jpg",),
     )
-    assert len(compacted["image_data"]) < len(original_bytes)
+    assert compacted["image_data"] == b""
+    assert compacted["image_storage_key"]
+    assert len(helpers.app_module.stored_image_data(compacted)) < len(original_bytes)
     assert compacted["image_hash"] != helpers.app_module.photo_image_hash(original_bytes)
-    with Image.open(io.BytesIO(compacted["image_data"])) as stored_image:
+    with Image.open(io.BytesIO(helpers.app_module.stored_image_data(compacted))) as stored_image:
         assert stored_image.format == "JPEG"
         assert max(stored_image.size) == 1200
 
@@ -1886,6 +1930,10 @@ def test_timeline_import_assistant_reviews_detected_dates_before_saving(client, 
     )
     assert item["detected_date"] == "2020-05-04"
     assert item["detected_source"] == "filename"
+    assert item["image_data"] == b""
+    assert item["image_storage_key"]
+    import_storage_path = helpers.app_module.image_storage_path(item["image_storage_key"])
+    assert import_storage_path.exists()
 
     review_response = client.get(review_path)
     assert review_response.status_code == 200
@@ -1912,6 +1960,10 @@ def test_timeline_import_assistant_reviews_detected_dates_before_saving(client, 
     assert photo["year"] == 2020
     assert photo["month"] == 6
     assert photo["photo_date"] == "2020-06-07"
+    assert photo["image_data"] == b""
+    assert photo["image_storage_key"]
+    assert helpers.app_module.image_storage_path(photo["image_storage_key"]).exists()
+    assert not import_storage_path.exists()
     assert helpers.row(
         """
         SELECT t.name
@@ -1957,6 +2009,8 @@ def test_timeline_import_accepts_multiple_selected_files(client, helpers):
     ]
     assert [item["detected_date"] for item in items] == ["2020-05-04", "2020-06-07"]
     assert items[1]["duplicate_import_item_id"] == items[0]["id"]
+    assert all(item["image_data"] == b"" for item in items)
+    assert all(item["image_storage_key"] for item in items)
 
 
 def test_timeline_import_review_is_paginated_and_saves_page_edits(client, helpers):

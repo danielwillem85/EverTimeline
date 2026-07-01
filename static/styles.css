@@ -140,6 +140,15 @@ body.nav-open {
     gap: 6px;
 }
 
+.topbar-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    font-size: 1rem;
+    line-height: 1;
+}
+
 .notification-badge {
     display: inline-flex;
     align-items: center;

@@ -14,7 +14,9 @@ import app as app_module
 @pytest.fixture
 def app(tmp_path):
     previous_database = app_module.DATABASE
+    previous_image_storage = app_module.IMAGE_STORAGE_DIR
     app_module.DATABASE = tmp_path / "evertimeline-test.sqlite3"
+    app_module.IMAGE_STORAGE_DIR = tmp_path / "images"
     app_module.app.config.update(
         TESTING=True,
         SECRET_KEY="test-secret",
@@ -33,6 +35,7 @@ def app(tmp_path):
     app_module.limiter.enabled = False
     app_module.limiter.reset()
     app_module.DATABASE = previous_database
+    app_module.IMAGE_STORAGE_DIR = previous_image_storage
 
 
 @pytest.fixture

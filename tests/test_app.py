@@ -1608,6 +1608,80 @@ def test_admin_maintenance_compacts_existing_jpegs_and_vacuums_database(app, cli
     assert client.get(f"/admin/jobs/{vacuum_job['id']}").get_json()["progress_percent"] == 100
 
 
+def test_admin_google_image_import_uses_exif_dates_and_rejects_undated_images(app, client, helpers, monkeypatch):
+    helpers.create_user(client, "Daniel")
+    monkeypatch.setitem(app.config, "GOOGLE_CUSTOM_SEARCH_API_KEY", "test-key")
+    monkeypatch.setitem(app.config, "GOOGLE_CUSTOM_SEARCH_ENGINE_ID", "test-engine")
+    monkeypatch.setitem(app.config, "GOOGLE_IMAGE_IMPORT_TARGET", 2)
+    monkeypatch.setitem(app.config, "GOOGLE_IMAGE_IMPORT_MAX_CANDIDATES", 5)
+
+    def jpeg_bytes_with_exif(color, exif_date=None):
+        buffer = io.BytesIO()
+        image = Image.new("RGB", (24, 24), color=color)
+        if exif_date:
+            exif = image.getexif()
+            exif[36867] = exif_date
+            image.save(buffer, format="JPEG", exif=exif)
+        else:
+            image.save(buffer, format="JPEG")
+        return buffer.getvalue()
+
+    image_bytes = {
+        "https://example.com/no-date.jpg": jpeg_bytes_with_exif((120, 40, 30)),
+        "https://example.com/may-memory.jpg": jpeg_bytes_with_exif((20, 140, 80), "2020:05:04 10:30:00"),
+        "https://example.com/june-memory.jpg": jpeg_bytes_with_exif((30, 80, 160), "2021:06:09 08:15:00"),
+    }
+
+    def fake_search(keyword, start_index, api_key=None, engine_id=None):
+        assert keyword == "family archive"
+        return list(image_bytes)
+
+    def fake_download(url):
+        return image_bytes[url]
+
+    monkeypatch.setattr(helpers.app_module, "google_image_search_image_urls", fake_search)
+    monkeypatch.setattr(helpers.app_module, "download_external_image_data", fake_download)
+    monkeypatch.setattr(helpers.app_module.random, "shuffle", lambda sequence: None)
+
+    admin_page = client.get("/admin")
+    assert admin_page.status_code == 200
+    assert b"Google image import" in admin_page.data
+    assert b"Fetch Google images" in admin_page.data
+
+    response = client.post(
+        "/admin/images/google-import",
+        data={
+            **helpers.csrf_form_data(client, "/admin"),
+            "keyword": "family archive",
+        },
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert b"Imported 2 Google images" in response.data
+
+    job = helpers.row("SELECT * FROM jobs WHERE kind = ?", ("google_image_import",))
+    assert job["status"] == "succeeded"
+    assert job["progress_current"] == 3
+    job_payload = client.get(f"/admin/jobs/{job['id']}").get_json()
+    assert job_payload["result_summary"] == 'Imported 2 Google images for "family archive" (3 candidates checked, 1 without EXIF dates).'
+
+    rows = helpers.rows(
+        """
+        SELECT original_filename, title, year, month, photo_date, image_storage_key
+        FROM photos
+        ORDER BY photo_date ASC
+        """
+    )
+    assert [
+        (row["original_filename"], row["title"], row["year"], row["month"], row["photo_date"])
+        for row in rows
+    ] == [
+        ("may-memory.jpg", "family archive", 2020, 5, "2020-05-04"),
+        ("june-memory.jpg", "family archive", 2021, 6, "2021-06-09"),
+    ]
+    assert all(row["image_storage_key"] for row in rows)
+
+
 def test_admin_connection_visit_full_shows_all_photos_regardless_visibility(app, client, helpers):
     helpers.create_user(client, "Daniel")
     other = app.test_client()

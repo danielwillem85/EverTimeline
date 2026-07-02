@@ -15,13 +15,11 @@ import sqlite3
 import sys
 import threading
 import traceback
-from urllib.error import HTTPError, URLError
-from urllib.parse import unquote, urlencode, urlparse
-from urllib.request import Request, urlopen
 import zipfile
 from xml.sax.saxutils import escape
 
 import resend
+from dotenv import load_dotenv
 from flask import (
     Flask,
     Response,
@@ -46,6 +44,8 @@ from PIL import Image, ImageDraw, ImageOps
 
 
 BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
+
 DATABASE = Path(os.environ.get("EVERTIMELINE_DATABASE", BASE_DIR / "evertimeline.sqlite3"))
 IMAGE_STORAGE_DIR = Path(os.environ.get("EVERTIMELINE_IMAGE_STORAGE", BASE_DIR / "storage" / "images"))
 ALLOWED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
@@ -142,10 +142,7 @@ ADMIN_USERNAME = "Daniel"
 SQLITE_BUSY_TIMEOUT_MS = 30000
 IMAGE_CONVERSION_COMMIT_INTERVAL = 5
 JOB_STATUSES = ("queued", "running", "succeeded", "failed")
-JOB_KINDS = ("convert_images", "compact_images", "vacuum_database", "google_image_import")
-GOOGLE_IMAGE_IMPORT_TARGET = 50
-GOOGLE_IMAGE_IMPORT_MAX_CANDIDATES = 250
-GOOGLE_IMAGE_SEARCH_PAGE_SIZE = 10
+JOB_KINDS = ("convert_images", "compact_images", "vacuum_database")
 
 
 def format_file_size(byte_count):
@@ -345,14 +342,6 @@ def configured_resend_from_email():
     return os.environ.get("RESEND_FROM_EMAIL", "").strip()
 
 
-def configured_google_custom_search_api_key():
-    return os.environ.get("GOOGLE_CUSTOM_SEARCH_API_KEY", "").strip()
-
-
-def configured_google_custom_search_engine_id():
-    return os.environ.get("GOOGLE_CUSTOM_SEARCH_ENGINE_ID", "").strip()
-
-
 def human_readable_bytes(byte_count):
     if byte_count >= 1024 * 1024 * 1024:
         return f"{byte_count / (1024 * 1024 * 1024):g} GB"
@@ -378,10 +367,6 @@ app.config.update(
     PASSWORD_RESET_EMAIL_ENABLED=bool(configured_resend_api_key() and configured_resend_from_email()),
     RESEND_API_KEY=configured_resend_api_key(),
     RESEND_FROM_EMAIL=configured_resend_from_email(),
-    GOOGLE_CUSTOM_SEARCH_API_KEY=configured_google_custom_search_api_key(),
-    GOOGLE_CUSTOM_SEARCH_ENGINE_ID=configured_google_custom_search_engine_id(),
-    GOOGLE_IMAGE_IMPORT_TARGET=GOOGLE_IMAGE_IMPORT_TARGET,
-    GOOGLE_IMAGE_IMPORT_MAX_CANDIDATES=GOOGLE_IMAGE_IMPORT_MAX_CANDIDATES,
     PRODUCTION_SECURITY_HEADERS=PRODUCTION_SECURITY_ENABLED,
     RUN_JOBS_INLINE=False,
     SESSION_COOKIE_HTTPONLY=True,
@@ -891,7 +876,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
-                kind TEXT NOT NULL CHECK (kind IN ('convert_images', 'compact_images', 'vacuum_database', 'google_image_import')),
+                kind TEXT NOT NULL CHECK (kind IN ('convert_images', 'compact_images', 'vacuum_database')),
                 title TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
                 progress_current INTEGER NOT NULL DEFAULT 0,
@@ -1179,7 +1164,7 @@ def ensure_job_kind_constraint(db):
         WHERE type = 'table' AND name = 'jobs'
         """
     ).fetchone()
-    if row is None or "google_image_import" in (row["sql"] or ""):
+    if row is None or "google_image_import" not in (row["sql"] or ""):
         return
 
     db.execute("ALTER TABLE jobs RENAME TO jobs_old_kind_constraint")
@@ -1188,7 +1173,7 @@ def ensure_job_kind_constraint(db):
         CREATE TABLE jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
-            kind TEXT NOT NULL CHECK (kind IN ('convert_images', 'compact_images', 'vacuum_database', 'google_image_import')),
+            kind TEXT NOT NULL CHECK (kind IN ('convert_images', 'compact_images', 'vacuum_database')),
             title TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'succeeded', 'failed')),
             progress_current INTEGER NOT NULL DEFAULT 0,
@@ -1217,6 +1202,7 @@ def ensure_job_kind_constraint(db):
             message, payload_json, result_json, error, created_at, started_at,
             finished_at, updated_at
         FROM jobs_old_kind_constraint
+        WHERE kind IN ('convert_images', 'compact_images', 'vacuum_database')
         """
     )
     db.execute("DROP TABLE jobs_old_kind_constraint")
@@ -2203,14 +2189,6 @@ def job_result_summary(kind, result):
             f"Reclaimed {format_file_size(result.get('saved_bytes', 0))}. "
             f"Database is now {format_file_size(result.get('after_size', 0))}."
         )
-    if kind == "google_image_import":
-        return (
-            f"Imported {result.get('imported', 0)} Google image"
-            f"{'' if result.get('imported', 0) == 1 else 's'} for "
-            f"\"{result.get('keyword', '')}\" "
-            f"({result.get('processed', 0)} candidates checked, "
-            f"{result.get('missing_exif', 0)} without EXIF dates)."
-        )
     return ""
 
 
@@ -2341,8 +2319,6 @@ def run_job_payload(db, job_id, kind, payload):
         )
     if kind == "vacuum_database":
         return run_vacuum_job(db, job_id)
-    if kind == "google_image_import":
-        return run_google_image_import_job(db, job_id, payload)
     raise ValueError("Unknown job kind.")
 
 
@@ -2416,217 +2392,6 @@ def run_vacuum_job(db, job_id):
         "progress_current": 1,
         "progress_total": 1,
         "message": job_result_summary("vacuum_database", result),
-        "result": result,
-    }
-
-
-def google_image_search_configured():
-    return bool(
-        app.config.get("GOOGLE_CUSTOM_SEARCH_API_KEY")
-        and app.config.get("GOOGLE_CUSTOM_SEARCH_ENGINE_ID")
-    )
-
-
-def normalize_google_image_keyword(value):
-    return " ".join((value or "").strip().split())[:120]
-
-
-def google_image_search_image_urls(keyword, start_index, api_key=None, engine_id=None):
-    api_key = api_key if api_key is not None else app.config.get("GOOGLE_CUSTOM_SEARCH_API_KEY", "")
-    engine_id = engine_id if engine_id is not None else app.config.get("GOOGLE_CUSTOM_SEARCH_ENGINE_ID", "")
-    query = urlencode(
-        {
-            "key": api_key,
-            "cx": engine_id,
-            "q": keyword,
-            "searchType": "image",
-            "num": GOOGLE_IMAGE_SEARCH_PAGE_SIZE,
-            "start": start_index,
-            "safe": "active",
-            "imgType": "photo",
-        }
-    )
-    request_url = f"https://www.googleapis.com/customsearch/v1?{query}"
-    request_obj = Request(
-        request_url,
-        headers={"User-Agent": "EverTimeline/1.0 GoogleImageImport"},
-    )
-    try:
-        with urlopen(request_obj, timeout=12) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        raise ValueError(f"Google image search failed with HTTP {exc.code}.") from exc
-    except (URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise ValueError("Google image search could not be reached.") from exc
-    return [
-        item.get("link", "")
-        for item in payload.get("items", [])
-        if item.get("link")
-    ]
-
-
-def download_external_image_data(url):
-    request_obj = Request(
-        url,
-        headers={"User-Agent": "EverTimeline/1.0 ImageFetcher"},
-    )
-    try:
-        with urlopen(request_obj, timeout=12) as response:
-            content_type = (response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
-            if content_type and content_type not in ALLOWED_IMAGE_MIMES:
-                raise ValueError("Downloaded file is not a supported image.")
-            image_data = response.read(app.config["MAX_IMAGE_UPLOAD_BYTES"] + 1)
-    except HTTPError as exc:
-        raise ValueError(f"Image download failed with HTTP {exc.code}.") from exc
-    except (URLError, TimeoutError) as exc:
-        raise ValueError("Image download failed.") from exc
-
-    validate_image_upload_bytes(image_data)
-    return image_data
-
-
-def filename_from_image_url(url, fallback_index):
-    path_name = unquote(Path(urlparse(url).path).name or "")
-    safe_name = secure_filename(path_name)
-    if safe_name:
-        return safe_name[:180]
-    return f"google-image-{fallback_index}.jpg"
-
-
-def run_google_image_import_job(db, job_id, payload):
-    keyword = normalize_google_image_keyword(payload.get("keyword"))
-    if not keyword:
-        raise ValueError("Keyword is required.")
-    if not google_image_search_configured():
-        raise ValueError(
-            "Google image import needs GOOGLE_CUSTOM_SEARCH_API_KEY and GOOGLE_CUSTOM_SEARCH_ENGINE_ID."
-        )
-
-    owner_id = int(payload.get("user_id") or 0)
-    owner = db.execute("SELECT * FROM users WHERE id = ?", (owner_id,)).fetchone()
-    if owner is None:
-        raise ValueError("Import owner was not found.")
-    owner_years = set(timeline_years_for_user(owner))
-    target_count = int(payload.get("target_count") or app.config.get("GOOGLE_IMAGE_IMPORT_TARGET", GOOGLE_IMAGE_IMPORT_TARGET))
-    max_candidates = int(
-        payload.get("max_candidates")
-        or app.config.get("GOOGLE_IMAGE_IMPORT_MAX_CANDIDATES", GOOGLE_IMAGE_IMPORT_MAX_CANDIDATES)
-    )
-    target_count = max(1, min(target_count, GOOGLE_IMAGE_IMPORT_TARGET))
-    max_candidates = max(target_count, min(max_candidates, GOOGLE_IMAGE_IMPORT_MAX_CANDIDATES))
-
-    effective_max_candidates = min(max_candidates, 100)
-    start_indices = list(range(1, effective_max_candidates + 1, GOOGLE_IMAGE_SEARCH_PAGE_SIZE))
-    random.shuffle(start_indices)
-
-    update_job(
-        db,
-        job_id,
-        progress_current=0,
-        progress_total=effective_max_candidates,
-        message=f"Searching Google images for \"{keyword}\"...",
-    )
-
-    seen_urls = set()
-    imported = 0
-    processed = 0
-    rejected = {
-        "missing_exif": 0,
-        "outside_timeline": 0,
-        "duplicates": 0,
-        "download_errors": 0,
-        "invalid_images": 0,
-    }
-    imported_months = set()
-
-    for start_index in start_indices:
-        if imported >= target_count or processed >= effective_max_candidates:
-            break
-        urls = google_image_search_image_urls(keyword, start_index)
-        if not urls:
-            continue
-        random.shuffle(urls)
-        for image_url in urls:
-            if imported >= target_count or processed >= effective_max_candidates:
-                break
-            if image_url in seen_urls:
-                continue
-            seen_urls.add(image_url)
-            processed += 1
-            update_job(
-                db,
-                job_id,
-                progress_current=processed,
-                progress_total=effective_max_candidates,
-                message=f"Checking Google image {processed}; imported {imported} of {target_count}.",
-            )
-
-            try:
-                original_image_data = download_external_image_data(image_url)
-            except ValueError:
-                rejected["download_errors"] += 1
-                continue
-
-            detected_date = detect_photo_taken_date(original_image_data)
-            if detected_date is None:
-                rejected["missing_exif"] += 1
-                continue
-            if detected_date.year not in owner_years:
-                rejected["outside_timeline"] += 1
-                continue
-
-            try:
-                image_data = storage_jpeg_from_image(original_image_data)
-            except ValueError:
-                rejected["invalid_images"] += 1
-                continue
-
-            image_hash = photo_image_hash(image_data)
-            if find_duplicate_photo(db, owner_id, image_hash):
-                rejected["duplicates"] += 1
-                continue
-
-            insert_photo_record(
-                db,
-                filename_from_image_url(image_url, processed),
-                JPEG_STORAGE_MIME,
-                image_data,
-                image_hash,
-                detected_date.year,
-                detected_date.month,
-                detected_date.isoformat(),
-                keyword,
-                "",
-                [DEFAULT_TAG],
-                empty_location_payload(),
-                owner_id=owner_id,
-            )
-            imported += 1
-            imported_months.add((detected_date.year, detected_date.month))
-            db.commit()
-
-    result = {
-        "keyword": keyword,
-        "imported": imported,
-        "target": target_count,
-        "processed": processed,
-        "missing_exif": rejected["missing_exif"],
-        "outside_timeline": rejected["outside_timeline"],
-        "duplicates": rejected["duplicates"],
-        "download_errors": rejected["download_errors"],
-        "invalid_images": rejected["invalid_images"],
-        "months": [
-            {"year": year, "month": month}
-            for year, month in sorted(imported_months)
-        ],
-    }
-    message = job_result_summary("google_image_import", result)
-    if imported < target_count:
-        message += f" Stopped after {processed} candidate{'s' if processed != 1 else ''}; target was {target_count}."
-    return {
-        "progress_current": processed,
-        "progress_total": effective_max_candidates,
-        "message": message,
         "result": result,
     }
 
@@ -10031,8 +9796,6 @@ def admin():
         site_stats=admin_site_statistics(db),
         action_summary=admin_action_summary(db),
         admin_jobs=recent_admin_jobs(db),
-        google_image_search_configured=google_image_search_configured(),
-        google_image_import_target=app.config.get("GOOGLE_IMAGE_IMPORT_TARGET", GOOGLE_IMAGE_IMPORT_TARGET),
     )
 
 
@@ -10069,36 +9832,6 @@ def admin_vacuum_database():
         "Reclaim database space",
     )
     flash(f"Database cleanup job #{job_id} started.", "success")
-    return redirect(url_for("admin"))
-
-
-@app.route("/admin/images/google-import", methods=("POST",))
-@admin_required
-def admin_google_image_import():
-    keyword = normalize_google_image_keyword(request.form.get("keyword"))
-    if not keyword:
-        flash("Enter a keyword for Google image import.", "error")
-        return redirect(url_for("admin"))
-    if not google_image_search_configured():
-        flash(
-            "Set GOOGLE_CUSTOM_SEARCH_API_KEY and GOOGLE_CUSTOM_SEARCH_ENGINE_ID before importing Google images.",
-            "error",
-        )
-        return redirect(url_for("admin"))
-
-    target_count = app.config.get("GOOGLE_IMAGE_IMPORT_TARGET", GOOGLE_IMAGE_IMPORT_TARGET)
-    job_id = enqueue_job(
-        g.user["id"],
-        "google_image_import",
-        f"Import Google images: {keyword}",
-        {
-            "keyword": keyword,
-            "user_id": g.user["id"],
-            "target_count": target_count,
-            "max_candidates": app.config.get("GOOGLE_IMAGE_IMPORT_MAX_CANDIDATES", GOOGLE_IMAGE_IMPORT_MAX_CANDIDATES),
-        },
-    )
-    flash(f"Google image import job #{job_id} started.", "success")
     return redirect(url_for("admin"))
 
 

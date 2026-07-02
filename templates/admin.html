@@ -74,33 +74,6 @@
     </form>
 </section>
 
-<section class="auth-panel admin-panel">
-    <h2>Google image import</h2>
-    <p class="muted">
-        Fetch {{ google_image_import_target }} Google image results for a keyword and import only images with EXIF dates.
-        Images without EXIF dates are rejected while the job looks for more candidates.
-    </p>
-    <form
-        method="post"
-        action="{{ url_for('admin_google_image_import') }}"
-        class="admin-google-import-form"
-        data-confirm
-        data-confirm-title="Import Google images?"
-        data-confirm-message="This will fetch external images and add dated photos to your timeline when EXIF dates are available."
-        data-confirm-action="Start import"
-    >
-        {{ csrf_field() }}
-        <label>
-            <span>Keyword</span>
-            <input name="keyword" placeholder="family reunion, Amsterdam canals, 1990s holiday" maxlength="120" {% if not google_image_search_configured %}disabled{% endif %} required>
-        </label>
-        <button class="button primary" type="submit" {% if not google_image_search_configured %}disabled{% endif %}>Fetch Google images</button>
-    </form>
-    {% if not google_image_search_configured %}
-        <p class="form-error">Set GOOGLE_CUSTOM_SEARCH_API_KEY and GOOGLE_CUSTOM_SEARCH_ENGINE_ID to enable this importer.</p>
-    {% endif %}
-</section>
-
 <section class="auth-panel admin-panel admin-stats-panel">
     <div class="section-title-row">
         <div>

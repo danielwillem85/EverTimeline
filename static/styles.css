@@ -408,6 +408,13 @@ body.nav-open {
     width: 100%;
 }
 
+.admin-google-import-form {
+    display: grid;
+    grid-template-columns: minmax(260px, 420px) auto;
+    align-items: end;
+    gap: 12px;
+}
+
 .admin-stat-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -6114,6 +6121,7 @@ details.privacy-toggle-panel {
     .tags-form,
     .location-form,
     .privacy-bulk-form,
+    .admin-google-import-form,
     .chapter-form,
     .chapter-draft-filter-form,
     .chapter-bulk-review-form,

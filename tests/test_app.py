@@ -524,10 +524,37 @@ def test_connections_can_send_private_messages(app, client, helpers):
     )["count"] == 1
 
     unread_inbox = client.get("/messages")
-    assert b"aria-label=\"0 unread private messages\"" in unread_inbox.data
+    assert b"aria-label=\"0 unread messages and notifications\"" in unread_inbox.data
+    assert b">Notifications</a>" not in unread_inbox.data
+    assert b"Find people" not in unread_inbox.data
 
     charlie = app.test_client()
     charlie_id = helpers.create_user(charlie, "charlie")
+    people_search = client.get("/connections?q=charlie")
+    assert people_search.status_code == 200
+    assert b"Find people" in people_search.data
+    assert b"charlie" in people_search.data
+    assert b"Add connection" in people_search.data
+    assert b">People</a>" not in people_search.data
+    search_redirect = client.get("/search?q=charlie")
+    assert search_redirect.status_code == 302
+    assert search_redirect.headers["Location"].endswith("/connections?q=charlie")
+
+    connect_response = client.post(
+        "/connections/request",
+        data={
+            **helpers.csrf_form_data(client, "/connections?q=charlie"),
+            "recipient_id": charlie_id,
+            "relation": "friend",
+            "q": "charlie",
+            "next": "/connections?q=charlie",
+        },
+    )
+    assert connect_response.status_code == 302
+    assert connect_response.headers["Location"].endswith("/connections?q=charlie")
+    pending_search = client.get("/connections?q=charlie")
+    assert b"Request sent" in pending_search.data
+
     assert client.get(f"/messages/{charlie_id}").status_code == 404
     blocked_send = client.post(
         f"/messages/{charlie_id}",
@@ -2616,7 +2643,7 @@ def test_chapter_pdf_export_preserves_chapter_access_and_sequence(app, client, h
     )
     accept_response = friend.post(
         f"/chapter-invites/{invite['id']}/accept",
-        data=helpers.csrf_form_data(friend, "/notifications"),
+        data=helpers.csrf_form_data(friend, "/messages"),
     )
     assert accept_response.status_code == 302
 
@@ -3903,7 +3930,7 @@ def test_shared_chapter_invite_allows_album_comments_without_timeline_access(app
 
     accept_response = friend.post(
         f"/chapter-invites/{invite['id']}/accept",
-        data=helpers.csrf_form_data(friend, "/notifications"),
+        data=helpers.csrf_form_data(friend, "/messages"),
     )
     assert accept_response.status_code == 302
 
@@ -3942,9 +3969,9 @@ def test_shared_chapter_invite_allows_album_comments_without_timeline_access(app
     assert reaction_response.get_json()["love_count"] == 1
 
     assert client.get("/api/notifications/count").get_json()["count"] == 2
-    notifications = client.get("/notifications")
-    assert b"I can see just this album." in notifications.data
-    assert b"loved your text entry" in notifications.data
+    messages_page = client.get("/messages")
+    assert b"I can see just this album." in messages_page.data
+    assert b"loved your text entry" in messages_page.data
 
 
 def test_private_chapter_share_link_is_expiring_read_only_access(app, client, helpers):
@@ -4081,10 +4108,10 @@ def test_reactions_messages_and_notifications_for_connection(app, client, helper
     notification_count = client.get("/api/notifications/count").get_json()["count"]
     assert notification_count == 2
 
-    notifications = client.get("/notifications")
-    assert notifications.status_code == 200
-    assert b"This made me smile." in notifications.data
-    assert b"loved your text entry" in notifications.data
+    messages_page = client.get("/messages")
+    assert messages_page.status_code == 200
+    assert b"This made me smile." in messages_page.data
+    assert b"loved your text entry" in messages_page.data
 
     assert client.get("/api/notifications/count").get_json()["count"] == 0
 

@@ -64,7 +64,8 @@
                     <span class="sr-only">Messages</span>
                     <span
                         class="notification-badge{% if private_message_count == 0 %} is-empty{% endif %}"
-                        aria-label="{{ private_message_count }} unread private messages"
+                        data-notification-count
+                        aria-label="{{ private_message_count }} unread messages and notifications"
                     >{{ private_message_count }}</span>
                 </a>
                 <a
@@ -72,23 +73,6 @@
                     href="{{ url_for('activity') }}"
                     {% if request.endpoint == 'activity' %}aria-current="page"{% endif %}
                 >Activity</a>
-                <a
-                    class="topbar-link notification-link{% if request.endpoint == 'notifications' %} is-active{% endif %}"
-                    href="{{ url_for('notifications') }}"
-                    {% if request.endpoint == 'notifications' %}aria-current="page"{% endif %}
-                >
-                    <span>Notifications</span>
-                    <span
-                        class="notification-badge{% if notification_count == 0 %} is-empty{% endif %}"
-                        data-notification-count
-                        aria-label="{{ notification_count }} unread notifications"
-                    >{{ notification_count }}</span>
-                </a>
-                <a
-                    class="topbar-link{% if request.endpoint == 'search' %} is-active{% endif %}"
-                    href="{{ url_for('search') }}"
-                    {% if request.endpoint == 'search' %}aria-current="page"{% endif %}
-                >People</a>
                 <a
                     class="topbar-link{% if request.endpoint == 'premium' %} is-active{% endif %}"
                     href="{{ url_for('premium') }}"

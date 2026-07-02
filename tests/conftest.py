@@ -206,7 +206,7 @@ class TestHelpers:
         response = client.post(
             "/connections/request",
             data={
-                **self.csrf_form_data(client, "/search"),
+                **self.csrf_form_data(client, "/connections"),
                 "recipient_id": recipient_id,
                 "relation": relation,
                 "q": "",

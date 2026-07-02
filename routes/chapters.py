@@ -629,7 +629,7 @@ def register_chapter_routes(app, core):
         )
         db.commit()
         flash("Chapter invite declined.", "success")
-        return redirect(url_for("notifications"))
+        return redirect(url_for("private_messages"))
     
     
     @app.route("/chapters/<int:chapter_id>/delete", methods=("POST",))

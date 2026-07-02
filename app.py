@@ -515,7 +515,7 @@ def inject_tag_choices():
     if getattr(g, "user", None) is not None:
         db = get_db()
         notification_count = get_notification_count(db)
-        private_message_count = get_unread_connection_message_count(db)
+        private_message_count = get_messages_badge_count(db)
 
     def static_version(filename):
         try:
@@ -6340,7 +6340,7 @@ def get_activity_feed(db, limit=60):
             url = (
                 url_for("shared_chapter_detail", chapter_id=row["chapter_id"])
                 if row["status"] == "accepted"
-                else url_for("notifications")
+                else url_for("private_messages")
             )
         add_activity_event(
             feed_items,
@@ -6451,6 +6451,10 @@ def get_notification_count(db):
         + get_unread_message_notification_count(db)
         + get_unread_reaction_notification_count(db)
     )
+
+
+def get_messages_badge_count(db):
+    return get_notification_count(db) + get_unread_connection_message_count(db)
 
 
 def get_incoming_connection_requests(db):
@@ -11477,14 +11481,19 @@ def connection_timeline_item_messages(connection_id, item_kind, item_id):
 @app.route("/search")
 @login_required
 def search():
-    db = get_db()
     query = request.args.get("q", "").strip()
-    return render_template(
-        "search.html",
-        query=query,
-        results=search_people(db, query),
-        has_query=bool(query),
-    )
+    if query:
+        return redirect(url_for("connections", q=query))
+    return redirect(url_for("connections"))
+
+
+def connections_people_search_context(db):
+    query = request.args.get("q", "").strip()
+    return {
+        "people_query": query,
+        "people_results": search_people(db, query),
+        "people_has_query": bool(query),
+    }
 
 
 @app.route("/connections")
@@ -11495,6 +11504,7 @@ def connections():
         "connections.html",
         incoming_requests=get_incoming_connection_requests(db),
         connections=get_accepted_connections(db),
+        **connections_people_search_context(db),
     )
 
 
@@ -11502,9 +11512,18 @@ def connections():
 @login_required
 def private_messages():
     db = get_db()
+    message_notifications = get_unread_message_notifications(db)
+    reaction_notifications = get_unread_reaction_notifications(db)
+    mark_message_notifications_read(db, message_notifications)
+    mark_reaction_notifications_read(db, reaction_notifications)
     return render_template(
         "messages.html",
         conversations=load_connection_conversations(db),
+        incoming_requests=get_incoming_connection_requests(db),
+        chapter_invites=get_incoming_chapter_invites(db),
+        message_notifications=message_notifications,
+        reaction_notifications=reaction_notifications,
+        feed_items=get_activity_feed(db),
     )
 
 
@@ -11542,25 +11561,13 @@ def private_message_thread(connection_id):
 @app.route("/notifications")
 @login_required
 def notifications():
-    db = get_db()
-    message_notifications = get_unread_message_notifications(db)
-    reaction_notifications = get_unread_reaction_notifications(db)
-    mark_message_notifications_read(db, message_notifications)
-    mark_reaction_notifications_read(db, reaction_notifications)
-    return render_template(
-        "notifications.html",
-        incoming_requests=get_incoming_connection_requests(db),
-        chapter_invites=get_incoming_chapter_invites(db),
-        message_notifications=message_notifications,
-        reaction_notifications=reaction_notifications,
-        feed_items=get_activity_feed(db),
-    )
+    return redirect(url_for("private_messages"))
 
 
 @app.route("/api/notifications/count")
 @login_required
 def notification_count():
-    return jsonify({"count": get_notification_count(get_db())})
+    return jsonify({"count": get_messages_badge_count(get_db())})
 
 
 @app.route("/activity")
@@ -11581,7 +11588,7 @@ def create_connection_request():
         target = request.form.get("next", "")
         if target and target.startswith("/") and not target.startswith("//"):
             return redirect(target)
-        return redirect(url_for("search", q=query))
+        return redirect(url_for("connections", q=query))
 
     recipient = None
     if recipient_id is not None:
@@ -11629,7 +11636,7 @@ def create_connection_request():
 @login_required
 def accept_connection_request(request_id):
     db = get_db()
-    redirect_target = "notifications" if request.form.get("next") == "notifications" else "connections"
+    redirect_target = "private_messages" if request.form.get("next") in {"messages", "notifications"} else "connections"
     request_row = db.execute(
         """
         SELECT *
@@ -11658,7 +11665,7 @@ def accept_connection_request(request_id):
 @login_required
 def decline_connection_request(request_id):
     db = get_db()
-    redirect_target = "notifications" if request.form.get("next") == "notifications" else "connections"
+    redirect_target = "private_messages" if request.form.get("next") in {"messages", "notifications"} else "connections"
     request_row = db.execute(
         """
         SELECT *

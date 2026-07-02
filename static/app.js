@@ -1134,7 +1134,7 @@ document.addEventListener("DOMContentLoaded", () => {
             notificationBadge.classList.toggle("is-empty", normalizedCount === 0);
             notificationBadge.setAttribute(
                 "aria-label",
-                `${normalizedCount} unread notifications`
+                `${normalizedCount} unread messages and notifications`
             );
         };
 
